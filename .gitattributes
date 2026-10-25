@@ -1,0 +1,25 @@
+# Normalize line endings in the repository so a diff compares content rather
+# than the platform it was written on. Without this, a Windows checkout with
+# `core.autocrlf=true` turns any one-line edit into a whole-file diff.
+* text=auto eol=lf
+
+# Batch files are read by cmd.exe, which needs CRLF. PowerShell reads either
+# ending, so *.ps1 stays under the rule above.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary content: never convert, never try to diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.pptx binary
+*.woff binary
+*.woff2 binary
+
+# Generated files, kept out of language statistics.
+package-lock.json linguist-generated=true

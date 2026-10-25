@@ -1,0 +1,22 @@
+# Editor settings for this repository, limited to the two things an editor has
+# to get right: line endings and indentation. Formatting is not machine-
+# enforced, so nothing here is a rule a change is measured against.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Python is written to fit 100 columns. The frontend is not: wrapped JSX and
+# component markup read worse, and no check enforces a width there.
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# Two trailing spaces are a hard line break in Markdown.
+[*.md]
+trim_trailing_whitespace = false

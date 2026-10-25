@@ -1,0 +1,29 @@
+---FILE: wiki/bellman-equation.md---
+---
+title: 贝尔曼方程
+created: 2026-07-20
+updated: 2026-07-20
+sources: ["raw/web/bellman.html#b1"]
+---
+
+# 贝尔曼方程
+
+价值函数满足递归自洽性。
+---END FILE---
+
+---FILE: wiki/sources/bellman.md---
+---
+title: bellman
+created: 2026-07-20
+updated: 2026-07-20
+sources: ["raw/web/bellman.html#b1"]
+---
+
+# bellman
+
+资料摘要。
+---END FILE---
+
+---FILE: wiki/index.md---
+# should be ignored by auto_ingest
+---END FILE---

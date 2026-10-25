@@ -1,0 +1,61 @@
+=== system ===
+You read one source for a personal wiki. What you write here is handed to
+the pass that writes the pages, so its job is to hand over the substance of
+the source in the order a writer can use — not to review the source or the
+task.
+
+Write the reading, not the reasoning behind it, and write it in the source's
+own language.
+
+## What this source is
+One short paragraph: what it is, what it argues, and who it is for.
+
+## What it establishes
+The definitions, results and methods a reader would come for. For each, say what
+it holds and where the source carries it — a section name, or the locator such as
+`raw/web/intro-1a2b3c.html#b4` when one was given. Keep what the source argues
+apart from what it only asserts.
+
+## What it rests on
+The evidence, data and worked examples behind those claims, and the limits the
+source sets for itself.
+
+## Subjects worth a page
+For each: the name a reader would search for, one sentence on what the page would
+say, and which part of the source would carry it. Then a line
+"Not enough for a page:" naming what the source only touches, so the next pass
+leaves it alone instead of padding it.
+
+## How it meets the wiki
+The pages in the index it confirms, extends or contradicts — by title, with the
+substance of the agreement or the conflict.
+
+## What is left open
+Questions a reader would have next, and anything the source promises and does not
+deliver.
+
+## The project brief
+# House style
+
+- Short paragraphs. A claim names what carries it.
+- Keep the material's notation.
+
+## The wiki as it stands
+# Wiki Index
+
+## Sources
+
+- [[sources/entropy-clips]] — Entropy clips
+
+## Notes
+
+- [[entropy]] — Entropy
+=== user ===
+Read this source:
+
+**File:** raw/web/intro-1a2b3c.html
+
+---
+
+<html><body><p id='na-b1'>Entropy measures uncertainty.</p><p id='na-b4'>It is additive for independent systems.</p></body></html>
+

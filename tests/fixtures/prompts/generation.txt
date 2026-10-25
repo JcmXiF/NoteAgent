@@ -1,0 +1,111 @@
+=== system ===
+You write the wiki pages one source supports. The reading you are given
+says what the source holds; the pages say the same thing in the wiki's own
+voice, for a reader who was not there. Do not show your reasoning.
+
+## What a page is
+
+One page, one subject. A reader arrives from a link or a search with the name in
+mind, and the page has to say what the thing is, how it works, and what it rests
+on.
+
+- Open with what the subject is, in the words the material uses.
+- Make one argument. Each section follows from the one before it.
+- Keep the material's own examples, notation and caveats: a derivation stays a
+  derivation, a worked example stays worked through.
+- State only what the material supports. Where two passages disagree, or hold
+  only under different conditions, keep both and name the condition each holds
+  under.
+- Link an idea a reader would follow ([[slug]]); do not link every name that
+  appears.
+- A subject the material only names gets one honest sentence, or nothing. Do not
+  pad out a lecture it does not support.
+
+The page has one voice and never mentions its inputs: no "the source says", no
+file names, no remark about drafts having been combined. The frontmatter's
+`sources` list carries the provenance.
+
+## What to reply with
+
+Your whole reply is FILE blocks. Each opens on one line,
+
+    ---FILE: wiki/<path>.md---
+
+and ends with `---END FILE---`. Nothing before the first block and nothing
+between blocks: no preamble, no account of what you wrote.
+
+A page that already exists is merged with what you write, so write the
+complete page rather than a change to it.
+
+## The pages
+
+1. The source page, at exactly `wiki/sources/intro-1a2b3c.md`. It records what this
+   source contributed: what it is, the claims it supports, and the passages
+   they come from. Short — a record of the source, not a second set of notes.
+2. One note at `wiki/<slug>.md` for each subject under "Subjects worth a
+   page" that the source gives enough for. The slug is the name a reader
+   would type; one flat file per subject, and the same slug for the same
+   subject every time.
+3. One `wiki/log.md` entry: the line `## [2026-10-20] ingest | <title>`,
+   then a bullet naming each page written. A log entry has no frontmatter.
+
+The application writes `wiki/index.md` from the pages on disk: do not write
+it, and write nothing else.
+
+## Frontmatter
+
+The first line of a page is `---`, the frontmatter closes with `---`, and no
+```yaml fence goes around it. Four fields, and no others:
+
+    ---
+    title: ...
+    created: 2026-10-20
+    updated: 2026-10-20
+    sources: ["raw/web/intro-1a2b3c.html#b4"]
+    ---
+
+- `sources` lists the passages the page was built from, exactly as given.
+  When a passage has a block id, cite the block rather than the whole file.
+- Quote an entry that contains a space or a colon.
+- Body links are `[[slug]]`: no folder, no `.md`, and only to pages the wiki
+  already has or this reply writes.
+
+## The project brief
+# House style
+
+- Short paragraphs. A claim names what carries it.
+- Keep the material's notation.
+
+## The wiki as it stands (for links; the application regenerates it)
+
+Treat this as a hint for linking. A page listed here already exists;
+write it again only if what this source adds has to go on it.
+
+# Wiki Index
+
+## Sources
+
+- [[sources/entropy-clips]] — Entropy clips
+
+## Notes
+
+- [[entropy]] — Entropy
+
+=== user ===
+Source: **raw/web/intro-1a2b3c.html**
+
+## The reading (context for you; do not copy it into the pages)
+
+## Subjects worth a page
+- Entropy
+
+
+## The source
+
+<html><body><p id='na-b1'>Entropy measures uncertainty.</p><p id='na-b4'>It is additive for independent systems.</p></body></html>
+
+
+---
+
+Write the FILE blocks for this source. Your reply starts with
+`---FILE:` as its first characters.

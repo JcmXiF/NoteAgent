@@ -1,0 +1,19 @@
+# Conda environment for NOTEAGENT development.
+#
+# This file only provides the interpreter. The dependencies are declared in
+# `pyproject.toml` — the single place they live — and arrive with the editable
+# install below. They are deliberately not repeated here: a second copy drifts
+# from the first, and an environment that disagrees with the source is one that
+# cannot fetch or serve.
+#
+# Create:  conda env create -f environment.yml
+#          then: conda activate noteagent && pip install -e ".[api]"
+# Update:  conda env update -f environment.yml --prune
+#          then re-run the editable install — `--prune` may drop pip packages that
+#          this file does not list.
+name: noteagent
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip

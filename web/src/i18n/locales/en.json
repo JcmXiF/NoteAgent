@@ -1,0 +1,1361 @@
+{
+  "app": {
+    "brand": "NA",
+    "brandTitle": "NOTEAGENT"
+  },
+  "language": {
+    "switch": "Language",
+    "switchTo": "Language: {{current}}. Switch to {{next}}."
+  },
+  "module": {
+    "chat": {
+      "label": "Chat",
+      "hint": "Ask questions about this project's wiki",
+      "sidebar": "Conversations"
+    },
+    "sources": {
+      "label": "Sources",
+      "hint": "Saved sources and passage selection",
+      "sidebar": "Saved"
+    },
+    "docs": {
+      "label": "Notes",
+      "hint": "Browse the wiki and the raw sources",
+      "sidebar": "Files"
+    },
+    "notes": {
+      "label": "Remarks",
+      "hint": "Write remarks beside a page and read them again",
+      "sidebar": "Remarks"
+    },
+    "graph": {
+      "label": "Graph",
+      "hint": "Links between pages, and deep search",
+      "sidebar": "Graph"
+    },
+    "browse": {
+      "label": "Browse",
+      "hint": "Search the web and open pages in the built-in browser",
+      "sidebar": "Search"
+    }
+  },
+  "nav": {
+    "toggleLeft": "Show the sidebar",
+    "toggleRight": "Show the details panel",
+    "hideRight": "Hide the details panel",
+    "split": "Split the workspace",
+    "splitHint": "Open another view side by side",
+    "swapPanes": "Swap the two views",
+    "closeSplit": "Close the split",
+    "resizeLeft": "Resize the sidebar",
+    "resizeRight": "Resize the details panel",
+    "resizeSplit": "Resize the two views",
+    "alreadyOpenInSplit": "already in the split",
+    "backTo": "Back to {{module}}",
+    "back": "Back a step",
+    "forward": "Forward a step",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "resizeSection": "Resize the {{section}} area"
+  },
+  "theme": {
+    "label": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "Match system",
+    "switchTo": "Theme: {{current}}. Switch to {{next}}."
+  },
+  "palette": {
+    "open": "Search",
+    "title": "Search this project",
+    "placeholder": "A page, a remark, a source…",
+    "hint": "Find pages, remarks and sources.",
+    "empty": "Nothing matches.",
+    "failed": "The search did not go through",
+    "noProject": "Choose a project first.",
+    "more": "{{count}} more",
+    "keys": "↑↓ to choose, Enter to open",
+    "esc": "Esc closes",
+    "group": {
+      "pages": "Notes",
+      "notes": "Remarks",
+      "sources": "Sources",
+      "actions": "Actions"
+    },
+    "action": {
+      "source": "Add a source",
+      "sourceHint": "Paste a link, choose files, or keep a page as a source.",
+      "import": "Import a project",
+      "importHint": "Add an existing folder to the project list.",
+      "export": "Export the project",
+      "exportHint": "Save the whole project as an archive.",
+      "settings": "Open settings",
+      "settingsHint": "Appearance, language and workspace settings.",
+      "needsProject": "Choose a project first"
+    }
+  },
+  "project": {
+    "label": "Project",
+    "none": "No project yet",
+    "new": "New project",
+    "delete": "Delete this project",
+    "dismissError": "Dismiss this message",
+    "createTitle": "New project",
+    "createDescription": "Creates a notes project and switches to it.",
+    "createNameLabel": "Project name",
+    "createNamePlaceholder": "e.g. my-wiki",
+    "createSubmit": "Create and switch",
+    "deleteTitle": "Delete project",
+    "deleteDescription": "The whole project folder moves to Recently deleted, including its sources, its notes pages and its remarks. Type the project name to confirm.",
+    "deleteContents": "This project has {{pages}} notes pages, {{sources}} sources and {{notes}} remarks.",
+    "deleteRecoverable": "It is kept for 30 days and can be restored from Recently deleted.",
+    "deleteConfirmLabel": "Type {{name}} to confirm",
+    "deleteSubmit": "Delete",
+    "nameMismatch": "The name does not match, so nothing was deleted.",
+    "needed": "Create or choose a project first — this needs somewhere to put things.",
+    "export": "Export as zip",
+    "unlink": "Remove from the list",
+    "unlinkTitle": "Remove from the list",
+    "unlinkDescription": "This folder is somewhere else and was not made by this app. Removing it only takes it off the list; no file is deleted.",
+    "unlinkContents": "The folder still holds {{pages}} pages, {{sources}} sources and {{notes}} remarks. All of it stays where it is.",
+    "unlinkSubmit": "Remove from the list",
+    "open": {
+      "action": "Open a folder",
+      "title": "Open a folder",
+      "description": "Choose a folder already on this computer. An existing wiki is used in place; a set of Markdown notes is copied into a new project.",
+      "pathLabel": "Folder path",
+      "pathPlaceholder": "e.g. D:\\notes\\my-wiki",
+      "browse": "Browse…",
+      "browseHint": "Fill in the path to see what the folder contains first.",
+      "inspecting": "Checking the contents of this folder…",
+      "inspectFailed": "Could not read that folder",
+      "summary": "{{pages}} Markdown files and {{others}} other files, {{size}} in all.",
+      "truncated": "There are more files than were counted.",
+      "linkOption": "Use it where it is",
+      "linkHint": "No files are copied; the folder is read and written in place.",
+      "copyOption": "Copy it into the default folder",
+      "copyHint": "The folder stays; a new project is copied from it.",
+      "importOption": "Import it as a new project",
+      "importHint": "These are Markdown notes; they are copied into a new wiki and the folder stays as it is.",
+      "nameLabel": "New project name",
+      "alreadyManaged": "This folder is already one of the projects — pick it from the list above.",
+      "alreadyLinked": "This folder was opened before, and will be switched to.",
+      "submitLink": "Open",
+      "submitCopy": "Copy and open",
+      "failed": "Could not open that folder",
+      "opened": "Opened {{name}}",
+      "openedCounts": "{{pages}} Markdown files and {{others}} other files came in.",
+      "openedSkipped": "Skipped because the project index uses the same name: {{files}}."
+    }
+  },
+  "welcome": {
+    "title": "Turn the sources you picked into a notes library you can trace",
+    "body": "Sources come in, you choose the passages, and the model writes the pages you approved. Every page points back to where it came from.",
+    "footnote": "Everything lives in your own folders and can be exported whenever you like.",
+    "pickProject": "Choose a project",
+    "pickProjectHint": "Choose or create a project in the project bar at the top left.",
+    "startTitle": "From one source to the first page",
+    "startBody": "This project has no pages of its own yet. Only the current step of the three is needed.",
+    "step": {
+      "sources": "Add a source",
+      "sourcesHint": "Web pages, PDF, Word and local Markdown are supported.",
+      "sourcesAction": "Add the first source",
+      "selection": "Choose passages",
+      "selectionHint": "Only the selected passages are given to the model.",
+      "selectionAction": "Choose a passage",
+      "compile": "Compile the first page",
+      "compileHint": "After the plan is confirmed, pages are written and can be traced back to the originals.",
+      "compileAction": "Go and compile"
+    }
+  },
+  "trash": {
+    "open": "Recently deleted",
+    "title": "Recently deleted",
+    "body": "Deleted projects, whole notes libraries and sources are kept for 30 days, then cleared. If something already sits where a restore would go, it moves to the trash as well.",
+    "loading": "Reading…",
+    "empty": "Nothing in the trash can be restored.",
+    "kind": {
+      "project": "Project",
+      "wiki": "Notes library",
+      "file": "Source"
+    },
+    "wikiOf": "The notes library of “{{name}}”",
+    "fileCount": "{{count}} files",
+    "restore": "Restore",
+    "loadFailed": "Could not read what was deleted",
+    "restoreFailed": "That could not be restored"
+  },
+  "activity": {
+    "title": "Jobs",
+    "empty": "Nothing has run yet. Searches, fetches, plans and compiles are recorded here.",
+    "noDetail": "No further detail.",
+    "clearFinished": "Clear finished",
+    "moreFiles": "{{count}} more files",
+    "interrupt": "Stop",
+    "retry": "Try again",
+    "openModule": "Go to the related view",
+    "remove": "Remove",
+    "cancelled": "Stopped",
+    "failed": "Job failed",
+    "failedCount": "{{count}} jobs failed",
+    "idleDone": "Finished",
+    "idle": "No jobs running",
+    "kind": {
+      "search": "Search",
+      "fetch": "Fetch",
+      "import": "Add",
+      "save": "Save",
+      "plan": "Plan",
+      "compose": "Compile",
+      "chat": "Chat",
+      "deep-search": "Deep search",
+      "project": "Project",
+      "misc": "Job"
+    }
+  },
+  "details": {
+    "title": "Workbench"
+  },
+  "selections": {
+    "count": "{{count}} selected",
+    "empty": {
+      "title": "Nothing selected yet",
+      "body": "Open a source and select the passages to write from; they collect here, grouped by source."
+    },
+    "storedHint": "Not stored yet. The page's text must be saved before pages can be written from it.",
+    "fromRound": "from a deep search",
+    "scope": {
+      "label": "Which selections to show",
+      "mine": "This search",
+      "leftover": "Left by a search",
+      "everyday": "Everyday",
+      "everydayHint": "Passages selected normally can be planned together with other sources.",
+      "empty": "Nothing has been selected here."
+    },
+    "leftover": {
+      "title": "A previous search left {{count}} selections behind",
+      "body": "That search is over and never decided what to do with them. Keeping them adds them to everyday planning; dropping them cannot be undone.",
+      "keep": "Keep as everyday",
+      "drop": "Drop"
+    },
+    "target": {
+      "label": "Which page this goes on",
+      "short": "Set page",
+      "hint": "When set, the plan is organised around that page; left empty, the plan decides.",
+      "placeholder": "Page name",
+      "set": "Use this page",
+      "clear": "No page",
+      "round": "this search",
+      "wiki": "existing note"
+    },
+    "remove": "Remove this selection",
+    "saveShort": "Save",
+    "saveOriginals": "Save the originals for {{count}} selections",
+    "allStored": "Everything selected has been saved",
+    "saveTitle": "Save {{count}} originals",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "missingSources": "These pages cannot be saved because their text is no longer in this session: {{labels}}. Fetch them again, then save.",
+    "storeFailed": "The originals could not be saved",
+    "attention": "Needs you",
+    "selection": "Chosen passages",
+    "plan": "Pages to write",
+    "compile": "Written",
+    "readFailed": "Could not read what has been selected",
+    "saveFailed": "Could not save what has been selected"
+  },
+  "plan": {
+    "title": "Pages to write",
+    "intentLabel": "What are you working on?",
+    "intentPlaceholder": "(optional) a word or two about the goal",
+    "empty": {
+      "title": "No pages worked out yet",
+      "body": "Select passages first, then see which pages to write."
+    },
+    "start": "Work out the pages",
+    "again": "Work them out again",
+    "working": "Working out which pages to write…",
+    "storing": "Saving the selected passages first…",
+    "needSelection": "No passages have been selected; select them in Sources first.",
+    "roundOnly": "Only what an earlier deep search left is here; it belongs to that search and cannot be planned here.",
+    "roundHint": "Each page below can be written from what this deep search selected. Tick the pages to write; nothing is written until you compile.",
+    "roundIntent": "This search was after: {{intent}}",
+    "roundNoIntent": "This search did not say what it was after.",
+    "unlisted": "New this round",
+    "hint": "Each page below can be written from the selected passages. Tick the pages to write; nothing is written until you compile.",
+    "suggestion": {
+      "label": "Suggestion",
+      "write": "Looks like a page of its own",
+      "mention": "Looks like a mention in another page",
+      "skip": "Looks like it can wait"
+    },
+    "action": {
+      "legend": "What to do with this page",
+      "write": "Write it",
+      "mention": "Mention it",
+      "skip": "Leave it out"
+    },
+    "relation": {
+      "prerequisite": "comes before",
+      "used_by": "used by",
+      "contrast": "contrasts with",
+      "cooccurs": "related to",
+      "primary": "main page"
+    },
+    "fromPages": "from {{count}} selected passages",
+    "sections": "What to cover",
+    "summary": {
+      "write": "{{count}} to write",
+      "mention": "{{count}} to mention",
+      "skip": "{{count}} left out"
+    },
+    "planProgress": "Working out the pages…"
+  },
+  "compile": {
+    "title": "Write the pages",
+    "track": {
+      "plan": "Plan",
+      "compile": "Write"
+    },
+    "counts": "{{write}} to write · {{mention}} to mention",
+    "start": "Write {{count}} pages",
+    "none": "No pages are ticked yet",
+    "working": "Writing the pages…",
+    "composing": "Writing the pages…",
+    "done": "Wrote {{count}} pages",
+    "files": "{{count}} files written",
+    "failed": "{{count}} could not be written",
+    "runFailed": "This compile did not finish.",
+    "someFailed": "{{count}} pages could not be written.",
+    "roundUnavailable": "Could not read the last compile.",
+    "retry": "Try again",
+    "findings": "Checks ({{count}})",
+    "severity": {
+      "error": "Error",
+      "warning": "Warning"
+    },
+    "finding": {
+      "more": " and {{count}} more",
+      "unknown": "Something on this page is worth a look",
+      "slug.duplicate": "\"{{slug}}\" is the name of two files: {{paths}}",
+      "fm.missing": "This page is missing the information every page starts with",
+      "fm.repairable": "The information at the top of this page is not in the expected shape",
+      "body.short": "This page's text is only {{chars}} characters long",
+      "source.missing": "The original this page names is not there any more: {{locator}}",
+      "source.missing.many": "{{count}} of the originals this page names are not there any more: {{items}}",
+      "mark.clip_bad": "A section of this page has a source mark that cannot be read",
+      "mark.clip_bad.many": "{{count}} sections of this page have a source mark that cannot be read",
+      "link.broken": "This page links to a page that is not there yet: {{target}}",
+      "link.broken.many": "This page links to {{count}} pages that are not there yet: {{items}}",
+      "title.duplicate": "Two pages are both called \"{{title}}\": {{paths}}",
+      "index.ghost": "The list of pages names \"{{slug}}\", but there is no such page",
+      "index.ghost.many": "The list of pages names {{count}} pages that are not there: {{items}}",
+      "index.missing": "This page is not in the list of pages yet",
+      "layout.emptyKindFolder": "The source folder \"{{folder}}\" holds no files; it can be removed",
+      "layout.legacyRaw": "The originals are still in the older layout and must be migrated before they can be used."
+    },
+    "checksSummary": "checks: {{errors}} errors, {{warnings}} warnings",
+    "clean": "No problems found.",
+    "lastRound": "Written earlier",
+    "lastRoundIntent": "Written earlier · {{intent}}",
+    "truncated": "Further check results were cut off."
+  },
+  "graph": {
+    "view": {
+      "loading": "Reading the graph…",
+      "failed": "Could not read the graph",
+      "failedHint": "The local service may not be running. The other views still work.",
+      "empty": "No links to show yet",
+      "emptyHint": "Once a few notes are written, the links between them appear here."
+    },
+    "sidebar": {
+      "loading": "Reading…",
+      "pages": "notes",
+      "links": "links",
+      "waiting": "mentioned but not written"
+    },
+    "type": {
+      "note": "Notes",
+      "ghost": "Not written yet"
+    },
+    "legend": {
+      "label": "Page kinds",
+      "showAll": "Show everything"
+    },
+    "overlay": {
+      "add": "Pages this search would add",
+      "revise": "Pages this search would change",
+      "link": "Links this search would add",
+      "dropped": "Struck off; this search will leave it alone"
+    },
+    "resetView": "Back to the middle",
+    "selected": {
+      "degree": "linked to {{count}}",
+      "ghost": "This page has not been written yet and cannot be opened."
+    }
+  },
+  "deepSearch": {
+    "title": {
+      "chew": "Chew · pick up what was left",
+      "explore": "Explore · widen the map"
+    },
+    "steps": "Steps of this deep search",
+    "expand": "Show the deep search panel",
+    "collapse": "Hide the deep search panel",
+    "intent": {
+      "label": "What to look for",
+      "placeholder": "(optional) a word or two about what to look for"
+    },
+    "start": {
+      "chew": "Chew what was left",
+      "explore": "Explore outward"
+    },
+    "seed": {
+      "node": "Starting from the selected “{{title}}”.",
+      "none": "A page on the graph can also be chosen as the starting point."
+    },
+    "potential": {
+      "none": "Every source has been selected from; nothing is left to gather.",
+      "some": "{{files}} of {{total}} sources still have passages nobody took (about {{blocks}})."
+    },
+    "step": {
+      "range": "Scope",
+      "pages": "Pages",
+      "material": "Material",
+      "plan": "Plan",
+      "wrapUp": "Finish"
+    },
+    "hint": {
+      "pages": "These are the pages this search wants to touch; confirm them and it goes looking for material.",
+      "gather": "Bring in the addresses you ticked, pick what to use in Sources, then come back to work out the pages.",
+      "plan": "There is enough material to work out which pages to write.",
+      "write": "Choose what to write on the right; once that is done the search can be finished.",
+      "none": "Continue with the steps above."
+    },
+    "cards": {
+      "empty": "No sources have been found in this search yet.",
+      "loose": "Not tied to a page",
+      "include": "Bring this in",
+      "taken": "{{picked}}/{{total}}",
+      "fetch": "Bring in the ticked ones",
+      "jobTitle": "Bringing in material ({{count}})",
+      "fetching": "Bringing material in… {{done}}/{{total}}",
+      "fetched": "Brought in {{count}}"
+    },
+    "pages": {
+      "find": "See which pages this would touch",
+      "again": "Plan again",
+      "take": "Go with these pages",
+      "add": "New",
+      "revise": "Change",
+      "include": "This search should touch this page"
+    },
+    "blocks": {
+      "find": "Find passages not yet taken",
+      "again": "Look again",
+      "all": "Take all of them",
+      "none": "Untake all of them",
+      "take": "Take the ticked ones",
+      "empty": "Nothing is available yet. Use “Find passages not yet taken” to see what remains.",
+      "noFile": "No source file",
+      "noText": "No text in this passage (a figure or a table)",
+      "include": "Take this passage",
+      "taken": "{{taken}}/{{total}}"
+    },
+    "gather": {
+      "go": "Go and pick material"
+    },
+    "plan": {
+      "start": "Work out the pages",
+      "open": "Open the pages to write"
+    },
+    "end": {
+      "now": "Finish this deep search",
+      "drop": "Finish and drop what was not written",
+      "keep": "Finish and keep what was not written"
+    },
+    "startOver": "Start over",
+    "startOver.hint": "Start again from the first step; what this search has gathered is cleared.",
+    "startOver.written": "Pages have been written, so this cannot be started over",
+    "summary": {
+      "pages": "pages {{taken}}/{{total}}",
+      "blocks": "passages {{taken}}/{{total}}",
+      "cards": "material {{taken}}/{{total}}"
+    },
+    "progress": {
+      "start": "Starting a deep search…",
+      "proposePages": "Working out which pages this search should write…",
+      "acceptPages": "Setting the pages to write…",
+      "proposeBlocks": "Looking for passages not yet taken…",
+      "acceptBlocks": "Taking those passages in…",
+      "plan": "Working out what to write…",
+      "ingest": "Recording the pages that were written…",
+      "end": "Finishing the deep search…",
+      "restart": "Starting over…",
+      "redo": "Going back to that step…"
+    },
+    "omitted": {
+      "pages": "{{count}} pages were not listed; this many are shown at a time.",
+      "cards": "{{count}} items were not listed.",
+      "truncated": "Some things were not listed in full: each source and each kind has a limit."
+    },
+    "atStep": "Now at “{{step}}”",
+    "rewindHint": "Back to “{{step}}”; what came after it is cleared.",
+    "ended": "The deep search is finished",
+    "cannotNow": "That step cannot be taken now; the search may have moved on",
+    "loadFailed": "Could not read the state of this deep search",
+    "reason": {
+      "seed": "This search's own starting page",
+      "unclipped-survey": "A survey page for what this source has that was not picked yet",
+      "dangling-link": "{{from}} links to {{to}}, which has no page yet",
+      "thin-page": "{{page}} has only {{chars}} characters, below {{floor}}"
+    }
+  },
+  "chat": {
+    "new": "New conversation",
+    "loading": "Reading conversations…",
+    "empty": "No conversations yet.",
+    "untitled": "New conversation",
+    "turns": "{{count}} messages",
+    "remove": "Delete this conversation",
+    "search": "Search conversations",
+    "searchEmpty": "No conversation matches.",
+    "rename": "Rename this conversation",
+    "renameHint": "Double-click the title to rename it.",
+    "renameFailed": "Could not rename the conversation",
+    "delete": {
+      "title": "Delete “{{title}}”?",
+      "body": "The questions and answers in this conversation go with it, and cannot be brought back.",
+      "submit": "Delete conversation"
+    },
+    "listFailed": "Could not read the conversations",
+    "openFailed": "Could not open that conversation",
+    "createFailed": "Could not start a conversation",
+    "deleteFailed": "Could not delete the conversation",
+    "askFailed": "That question was not answered",
+    "askPlaceholder": "Ask, or have the assistant look something up or write",
+    "askHint": "Enter sends; Shift + Enter starts a new line.",
+    "tooLong": "Too long — keep it under {{max}} characters",
+    "send": "Ask",
+    "stop": "Stop",
+    "stopped": "Stopped waiting. The model call in progress may still finish, and then it stops.",
+    "answered": "Answered",
+    "remark": {
+      "save": "Save as a remark",
+      "saving": "Saving…",
+      "saved": "Saved as a remark",
+      "open": "Open it",
+      "hint": "Keep this answer as a remark on “{{page}}”",
+      "needPage": "Open a page first — a remark belongs to a page",
+      "saveFailed": "Could not save this answer as a remark"
+    },
+    "step": {
+      "think": "Thinking",
+      "tool": "Looking things up",
+      "answer": "Answering"
+    },
+    "limits": {
+      "title": "Conversation limits",
+      "unsaved": "Unsaved",
+      "intro": "These values set how much is included with each question and how much the assistant may read. Changes take effect once saved.",
+      "loading": "Reading…",
+      "save": "Save",
+      "saving": "Saving…",
+      "discard": "Discard",
+      "ready": "Ready to save",
+      "range": "Between {{min}} and {{max}}",
+      "loadFailed": "Could not read these limits",
+      "saveFailed": "Could not save them",
+      "group": {
+        "conversation": "This conversation",
+        "context": "What the assistant is told",
+        "reading": "What it may read"
+      },
+      "unit": {
+        "messages": "messages",
+        "chars": "chars",
+        "conversations": "conversations",
+        "pages": "pages",
+        "rounds": "rounds"
+      },
+      "historyLimit": "Recent messages carried",
+      "historyLimitHint": "Only the most recent messages are included; older ones are left out.",
+      "maxMessages": "Messages kept per conversation",
+      "maxContentChars": "Longest question",
+      "maxTitleChars": "Longest conversation title",
+      "maxConversations": "Conversations kept",
+      "maxBriefChars": "Project brief, first",
+      "maxBriefCharsHint": "Zero leaves the project description out.",
+      "maxIndexChars": "Note index, first",
+      "contextHint": "Characters taken from the start of the project's file and given with every question.",
+      "maxOpenPages": "Pages opened at once",
+      "maxPageChars": "Read from one page",
+      "maxPagesChars": "Read in total",
+      "maxPagesCharsHint": "The most body text one answer may read in total.",
+      "maxToolRounds": "Look-up rounds",
+      "maxToolRoundsHint": "How many rounds of lookup the assistant may take."
+    },
+    "activity": {
+      "think": "Thinking",
+      "tool": "Looking things up",
+      "answer": "Writing the answer"
+    },
+    "view": {
+      "empty": "No conversation open",
+      "emptyHint": "Start a conversation on the left to begin asking.",
+      "firstAsk": "Ask below; the answer appears here."
+    },
+    "looked": {
+      "toSources": "Add to what to fetch",
+      "missing": "not found",
+      "notSource": "a result, not a source yet",
+      "failed": "did not work",
+      "title": "What the answer looked at",
+      "reading": "reading now"
+    },
+    "gate": {
+      "title": "Writing pages",
+      "waitingTitle": "Nothing is written yet",
+      "waitingBody": "Writing goes by what you tick in the plan board. The assistant can suggest; only you can decide.",
+      "nothingBody": "The assistant wanted to plan pages, but nothing has been selected to plan from yet.",
+      "wroteTitle": "Written from what you ticked",
+      "wroteBody": "The pages you confirmed are in the notes now. The written files are listed in the panel.",
+      "openSources": "Go and select passages",
+      "goCompile": "Go and compile",
+      "seeWritten": "See what was written"
+    }
+  },
+  "browse": {
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "newTab": "New tab",
+    "newTabTitle": "New tab",
+    "closeTab": "Close this tab",
+    "address": "Address",
+    "addressPlaceholder": "Enter an address",
+    "notAnAddress": "That does not look like an address. Only http and https are supported.",
+    "actionFailed": "The built-in browser did not answer",
+    "unavailable": "The built-in browser is only available in the desktop app",
+    "unavailableHint": "This is the browser version: pages open in a new tab and a sign-in is not carried over. In the desktop app, the Browse module can sign in and keep pages as sources.",
+    "otherPane": "The built-in browser is showing in the other pane",
+    "otherPaneHint": "One page area is shown at a time; switch to the other pane and back to return.",
+    "connecting": "Connecting to the built-in browser…",
+    "noPage": "No page open yet",
+    "noPageHint": "Enter an address above, or open a source's original page.",
+    "tabs": {
+      "empty": "No tabs yet"
+    },
+    "search": {
+      "label": "Search for",
+      "placeholder": "Search words",
+      "run": "Search",
+      "running": "Searching the web…",
+      "done": "Found {{count}} results",
+      "failed": "That search did not come back",
+      "empty": "Search above; results appear here. Tick the ones to fetch.",
+      "none": "Nothing came back. Try different words.",
+      "hint": "Up to {{max}} may be selected; fetching adds them to Sources.",
+      "atLimit": "That is the most that can be selected ({{max}}). Unselect one first."
+    },
+    "fetch": {
+      "title": "Fetch {{count}} pages",
+      "running": "Reading the pages you ticked…",
+      "run": "Fetch the {{count}} ticked",
+      "failed": "Those pages could not be fetched",
+      "nothing": "None of them could be read.",
+      "landed": "{{count}} sources added.",
+      "goSelect": "Go choose passages"
+    },
+    "signal": {
+      "signIn": "This page needs a sign-in before it can be kept",
+      "forbidden": "The site refused access (403)",
+      "rateLimited": "The site is rate-limiting (429); keep it later",
+      "signedIn": "Signed in to this site ({{count}} cookies)",
+      "anonymous": "No sign-in for this site yet"
+    },
+    "keep": {
+      "run": "Keep this page",
+      "hint": "Keep this page as a source, as it appears now.",
+      "running": "Keeping this page…",
+      "blocked": "Sign in and get to the page body before keeping it",
+      "failed": "This page could not be kept",
+      "nothing": "This page had nothing to keep."
+    }
+  },
+  "attention": {
+    "hint": "These wait on your decision; nothing changes on its own.",
+    "readFailed": "Could not read what needs doing",
+    "updateFailed": "Could not update this item",
+    "revisions": "Sources that changed",
+    "recovery": "Compiles left unfinished",
+    "check": "Found by the check",
+    "recheck": "Check again",
+    "more": "{{count}} more",
+    "kind": {
+      "raw_modified": "this source was edited",
+      "raw_created": "new source, no pages yet",
+      "raw_deleted": "this source was deleted",
+      "clips_changed": "the selected passages changed",
+      "locator_broken": "the passages can no longer be found",
+      "output_missing": "the page it produced is gone"
+    },
+    "planAgain": "Work it out again",
+    "pickAgain": "Pick passages",
+    "ignore": "Leave it",
+    "acknowledge": "Got it",
+    "pages": "· {{count}} pages",
+    "resume": "Finish it",
+    "discard": "Discard"
+  },
+  "docs": {
+    "group": {
+      "wiki": "Notes",
+      "sources": "Original material"
+    },
+    "page": {
+      "edit": {
+        "open": "Edit the text",
+        "title": "Edit “{{name}}”",
+        "body": "Only the body can be changed; what the page was written from and where its citations point stay as they are.",
+        "frontmatter": "What the app keeps (not editable)",
+        "placeholder": "Page body",
+        "loadFailed": "Could not read this page",
+        "failed": "This page could not be saved",
+        "diffTitle": "What would change: {{added}} added, {{removed}} removed",
+        "unchanged": "Nothing has changed",
+        "saved": "Nothing has changed, so there is nothing to save.",
+        "check": "Review the change",
+        "confirm": "Save it",
+        "save": "Save"
+      },
+      "rename": {
+        "open": "Rename or move",
+        "title": "Rename this page",
+        "body": "Every link that points at this page changes with it, and the remarks about it move too.",
+        "label": "The page's name",
+        "placeholder": "May include a folder, e.g. concepts/entropy",
+        "failed": "This page could not be renamed",
+        "submit": "Rename"
+      },
+      "history": {
+        "open": "Earlier versions",
+        "title": "Versions of “{{name}}”",
+        "body": "Every write keeps the text it replaced. Putting one back also keeps what is there now.",
+        "loading": "Reading the versions…",
+        "empty": "No earlier version yet",
+        "unknownTime": "Time not recorded",
+        "current": "Now",
+        "byPerson": "Changed by you",
+        "byApp": "Written by the app",
+        "restore": "Put this one back",
+        "readFailed": "Could not read the versions",
+        "failed": "This version could not be put back"
+      }
+    },
+    "maintenance": {
+      "fill": "Fill in the structure",
+      "fillTitle": "Fill in the project's structure",
+      "fillBody": "Adds the folders and blank pages this project is missing. Nothing that is already there is overwritten, and nothing is deleted.",
+      "fillSubmit": "Fill in",
+      "reset": "Reset the notes",
+      "resetTitle": "Reset the notes",
+      "resetBody": "Clears every note written in this project and leaves it blank. The sources you have saved are kept.",
+      "resetCounting": "Looking at what would go…",
+      "resetCount": "{{count}} notes will be deleted.",
+      "resetKept": "The pages cleared are kept for 30 days and can be restored from Recently deleted.",
+      "resetConfirmLabel": "Type the project's name, {{name}}, to confirm",
+      "resetSubmit": "Clear the notes",
+      "failed": "This step did not finish"
+    },
+    "delete": {
+      "row": "Delete “{{name}}”",
+      "title": "Delete “{{name}}”?",
+      "body": "This file moves to Recently deleted and can be restored within 30 days.",
+      "cited": "{{count}} notes were written from it; their citations will stop working.",
+      "backlinks": "{{count}} pages link here; those links will point nowhere after it goes.",
+      "notes": "{{count}} remarks are written on this page; they go with it.",
+      "dropped": "{{count}} selections were removed with it.",
+      "submit": "Delete",
+      "failed": "This file could not be deleted"
+    },
+    "citations": {
+      "summary": "This page was written from {{count}} sources",
+      "missing": "{{count}} of them are no longer in the project",
+      "hintBeside": "Ctrl/⌘ + click opens it beside",
+      "passages": "{{count}} passages",
+      "gone": "no longer in the project",
+      "openBeside": "Open “{{title}}” beside",
+      "openSectionSource": "Open what this section came from, beside",
+      "noteCount": "{{count}} notes were written from this source",
+      "noteList": "Notes written from this source",
+      "rail": "Notes written from this source",
+      "markLabel": "Citation {{index}}: {{title}}",
+      "tookPassages": "{{count}} passages taken",
+      "openNote": "Open the note"
+    },
+    "tree": {
+      "view": {
+        "label": "List",
+        "files": "Files",
+        "knowledge": "Notes"
+      },
+      "loading": "Reading the file list…",
+      "failed": "Could not read the file list",
+      "failedHint": "The local service may not be running. The other views still work.",
+      "empty": "No files yet",
+      "emptyHint": "Add a source and compile it; the pages it produces appear here."
+    },
+    "knowledge": {
+      "notes": "Notes",
+      "summaries": "Source summaries",
+      "empty": "No notes yet",
+      "emptyHint": "Select what to keep and compile it; the pages written appear here."
+    },
+    "view": {
+      "empty": "Nothing open",
+      "emptyHint": "Pick a file on the left to read it.",
+      "pageEmpty": "This page has no text yet.",
+      "opening": "Opening…",
+      "loadFailed": "Could not read the project",
+      "loadFailedHint": "The local service may not be running.",
+      "fileFailed": "This file could not be opened",
+      "missingPage": "This page has not been written yet",
+      "missingPageNamed": "“{{page}}” has not been written yet, so it cannot be opened."
+    },
+    "original": {
+      "unreadable": "This original could not be read.",
+      "imageAlt": "The original image",
+      "openSource": "Open the source page",
+      "markedCount": "{{count}} selected passages are marked here",
+      "markedPage": "This page is part of your selection"
+    },
+    "kind": {
+      "web": "Web pages",
+      "pdf": "PDFs",
+      "office": "Documents",
+      "media": "Images",
+      "other": "Other"
+    },
+    "nav": {
+      "closeBeside": "Close the page beside"
+    }
+  },
+  "remark": {
+    "badge": "Remark",
+    "unplaced": "{{count}} remarks have no place on the page yet",
+    "loadFailed": "Could not read this page's remarks",
+    "open": "Open this remark",
+    "openPage": "Remarks about this page",
+    "page": {
+      "label": "Page",
+      "placeholder": "Choose a page"
+    },
+    "loading": "Reading remarks",
+    "new": "New remark",
+    "writing": "Writing a remark",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteTitle": "Delete this remark?",
+    "deleteBody": "It cannot be brought back.",
+    "deleteSubmit": "Delete",
+    "deleteFailed": "Could not delete the remark",
+    "cancel": "Cancel",
+    "done": "Done",
+    "saving": "Saving",
+    "saveFailed": "Could not keep the remark",
+    "noProject": "Choose a project first, so the remark has somewhere to go.",
+    "autosave": "What you write is saved automatically. If it is empty when you leave, the remark is deleted.",
+    "bodyLabel": "The remark",
+    "bodyPlaceholder": "What this passage made you think",
+    "emptyDraft": "Nothing written yet",
+    "pick": {
+      "title": "Choose a remark",
+      "body": "Pick a remark on the left, or write a new one."
+    },
+    "pickPage": {
+      "title": "Choose a page first",
+      "body": "Pick a page to see its remarks. Selecting a remark while reading a page also brings you here."
+    },
+    "empty": {
+      "title": "No remarks about this page yet",
+      "body": "Write one about what this passage made you think."
+    },
+    "place": {
+      "label": "Where it goes",
+      "preamble": "The opening",
+      "end": "The end",
+      "none": "Nowhere in the page",
+      "unplaced": "No place in the page",
+      "unknown": "Place unknown",
+      "stale": "Where this was is no longer on the page.",
+      "unreadable": "This page could not be read, so only the opening or the end can be chosen."
+    },
+    "orphans": {
+      "title": "Page gone ({{count}})",
+      "body": "The page these remarks belong to is no longer in the project; they are kept here.",
+      "loadFailed": "Could not read the project's remarks"
+    }
+  },
+  "clips": {
+    "untitled": "Untitled selection",
+    "range": {
+      "empty": "Nothing selected",
+      "single": "{{id}}",
+      "span": "{{from}}–{{to}} · {{count}} passages"
+    }
+  },
+  "fidelity": {
+    "ok": "Usable",
+    "low": "Partial",
+    "failed": "Could not read"
+  },
+  "reason": {
+    "too_short": "The text is too short",
+    "http_unauthorized": "A sign-in is required (HTTP 401)",
+    "http_forbidden": "The site refused the request (HTTP 403)",
+    "http_rate_limited": "Too many requests (HTTP 429)",
+    "http_error": "The request failed",
+    "skipped_video": "Video is not read at this step",
+    "empty": "No text was extracted",
+    "truncated": "The page was too large and got cut off",
+    "unsupported_url": "Not an http(s) link",
+    "unsupported_media": "Not an HTML page",
+    "missing_images": "Some images could not be localized",
+    "invalid_pdf": "This PDF could not be opened",
+    "no_text_layer": "This PDF has no text layer (scanned pages need OCR)",
+    "pdf_not_html": "A PDF has to be fetched, not rendered as a page",
+    "office_not_html": "An Office file has to be fetched or imported, not rendered as a page",
+    "image_not_html": "An image has to be fetched or imported, not rendered as a page",
+    "adapter_not_ready": "This kind of file cannot be derived yet",
+    "unsupported_kind": "This kind of file is not recognized yet",
+    "invalid_payload": "The file could not be read",
+    "invalid_office": "This Office file could not be opened",
+    "invalid_image": "This image could not be opened",
+    "empty_text": "No compilable text was extracted"
+  },
+  "intake": {
+    "local": "Local file",
+    "guest": "Browser",
+    "search": "Search result",
+    "url": "Link",
+    "other": "Source"
+  },
+  "captureHint": {
+    "needsSignIn": {
+      "guest": "This page needs a sign-in. Open it in Browse, sign in, then keep the page from there.",
+      "plain": "This page needs a sign-in, which only the desktop app can do. Open it there, sign in, then keep the page."
+    },
+    "blocked": {
+      "guest": "The site refused an automated request — anti-bot protection or a security check, not a broken reader. Open it in Browse and keep the page from there.",
+      "plain": "The site refused an automated request — anti-bot protection or a security check. The desktop app can open it in Browse so you can keep the page."
+    },
+    "rateLimited": {
+      "guest": "Too many requests. Try again in a moment, or open the page in Browse.",
+      "plain": "Too many requests. Try again in a moment, or open the original page."
+    },
+    "invalidPdf": "This PDF could not be opened. Try another file, or open the original page.",
+    "pdfNotHtml": "A PDF cannot be captured from the browser. Use Fetch instead.",
+    "officeNotHtml": "A Word or PowerPoint file cannot be captured from the browser. Use Fetch or import the file instead.",
+    "invalidOffice": "This document could not be opened. Use .docx or .pptx rather than the older .doc format.",
+    "invalidImage": "This image could not be opened. PNG, JPEG, GIF, WebP and SVG are supported.",
+    "imageNotHtml": "An image cannot be captured from the browser. Use Fetch or import the file instead.",
+    "notSupportedYet": "Audio and video are not supported yet. The card stays here so its link can be kept.",
+    "unknownFormat": "This kind of file is not supported yet. HTML, PDF, Word, PowerPoint and images work today.",
+    "unreadable": "The file could not be read. Try a different one.",
+    "generic": {
+      "guest": "This page was not kept. Open the original, or sign in from Browse and try again.",
+      "plain": "This page was not kept. Open the original, or use the desktop app to sign in and try again."
+    },
+    "tooShort": {
+      "guest": "There was too little text on this page. It may still be loading, or a prompt may be covering it — wait for it to open fully and keep it again.",
+      "plain": "There was too little text: the page may have no body, or need a sign-in first."
+    }
+  },
+  "placeholder": {
+    "title": "Not available yet",
+    "body": "This part is still being finished; the other views can be used in the meantime."
+  },
+  "sources": {
+    "empty": {
+      "title": "No sources yet",
+      "body": "Paste a link above or drop files in. Sources you add stay here so you can pick passages from them."
+    },
+    "notInList": "This source is not in the current list, so it cannot be shown. It may come from an earlier session, or may never have been added; fetching it again brings it back.",
+    "dismissNotice": "Dismiss",
+    "paste": {
+      "label": "Add by link",
+      "placeholder": "https://…",
+      "submit": "Fetch",
+      "notHttp": "Only http or https links are supported here; files can be dropped in instead."
+    },
+    "local": {
+      "choose": "Choose files",
+      "dropHere": "Drop files to add them",
+      "hint": "HTML, PDF, Word, PowerPoint, or an image",
+      "tooMany": "Up to {{count}} files at a time.",
+      "tooLarge": "“{{name}}” is larger than 20 MB.",
+      "unreadable": "“{{name}}” could not be read."
+    },
+    "remove": {
+      "one": "Remove",
+      "selected": "Remove selected ({{count}})",
+      "title": "Remove {{count}} sources?",
+      "body": "They leave the workbench. Originals already saved stay in the project.",
+      "passages": "{{count}} passages chosen from them are removed too.",
+      "submit": "Remove"
+    },
+    "fetchFailed": "That link could not be fetched",
+    "localFailed": "Those files could not be added",
+    "job": {
+      "fetching": "Fetching the page…",
+      "reading": "Reading it…",
+      "added": "Added {{count}}",
+      "filesCount": "{{count}} files"
+    },
+    "saved": "Saved",
+    "restored": {
+      "opening": "Reading the original…"
+    },
+    "fallback": {
+      "readd": {
+        "title": "This file needs adding again",
+        "body": "This file was added from this computer, so there is no address to fetch it from. Add the same file again to bring it back."
+      }
+    },
+    "refetch": "Fetch again",
+    "openInBrowse": "Open the original",
+    "preview": {
+      "noText": "No readable text came back.",
+      "needFetch": {
+        "title": "This source needs fetching again",
+        "body": "The page was kept but its text was not, so it cannot be shown yet. Fetch it again to read it and select passages.",
+        "inBrowser": "The browser still has this page open, so it can be taken from there — no sign-in needed again."
+      }
+    },
+    "picker": {
+      "selectedCount": "{{count}} selected",
+      "dragHint": "Drag over the passages to use.",
+      "selectAll": "Select all",
+      "addSelected": "Add to selection",
+      "noBlocks": "Nothing could be read out of this source, so there is nothing to choose from.",
+      "noOriginal": "The original is not available here.",
+      "openingPdf": "Opening the PDF…",
+      "pdfFailed": "This PDF could not be displayed.",
+      "pageOf": "Page {{page}} of {{count}}",
+      "previousPage": "Previous page",
+      "nextPage": "Next page"
+    },
+    "takeFromBrowser": "Take it from the browser"
+  },
+  "common": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "retry": "Try again",
+    "listSeparator": ", "
+  },
+  "settings": {
+    "title": "Settings",
+    "hint": "Model, search and the project description",
+    "close": "Close settings",
+    "version": "Version {{version}}",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveFailed": "Could not save",
+    "test": "Test connection",
+    "testing": "Testing…",
+    "show": "Show",
+    "hide": "Hide",
+    "clearKey": "Clear key",
+    "keepKey": "Keep key",
+    "locked": "This was set when the app started and cannot be changed here.",
+    "unreadable": "This value cannot be read, so a usual one is shown; saving writes a valid value.",
+    "loading": "Loading…",
+    "loadFailed": "Settings could not be read.",
+    "scope": {
+      "install": "This computer",
+      "project": "Current project",
+      "window": "This window"
+    },
+    "nav": {
+      "model": "Model",
+      "search": "Search",
+      "project": "Project",
+      "diagnostics": "Diagnostics",
+      "appearance": "Appearance"
+    },
+    "model": {
+      "title": "Model",
+      "intro": "Chat, planning and writing all use this one connection. Saving takes effect immediately, for every project.",
+      "baseUrl": "Service address",
+      "baseUrlHint": "Must start with http:// or https://.",
+      "apiKey": "Key",
+      "apiKeyKeep": "Saved. Leave it blank to keep it.",
+      "apiKeyMissing": "No key yet. A local service that does not check keys can be given any placeholder.",
+      "apiKeyClearing": "Saving removes the stored key.",
+      "model": "Model name",
+      "modelHint": "The model identifier the service expects, e.g. gpt-4o-mini.",
+      "temperature": "Temperature",
+      "temperatureHint": "Lower is steadier, higher is more varied; 0.1 is usual.",
+      "maxTokens": "Reply limit",
+      "maxTokensHint": "The longest a single reply may be.",
+      "timeout": "Wait limit (seconds)",
+      "timeoutHint": "Waiting for this reply stops after this long.",
+      "testOk": "Connection succeeded.",
+      "testFailed": "The connection test did not succeed.",
+      "groupConnection": "Connection",
+      "groupGeneration": "Generation"
+    },
+    "search": {
+      "title": "Web search",
+      "intro": "Searches the web and keeps the results as sources. Without it everything else still works; only searching here does not.",
+      "provider": "Search service",
+      "provider_none": "Off",
+      "provider_brave": "Brave",
+      "provider_serper": "Serper",
+      "groupDetails": "Connection",
+      "apiKey": "Key",
+      "apiKeyKeep": "Saved. Leave it blank to keep it.",
+      "apiKeyMissing": "No key yet.",
+      "apiKeyClearing": "Saving removes the stored key.",
+      "country": "Region",
+      "countryHint": "Two-letter region code, e.g. CN; blank uses the service default.",
+      "lang": "Search language",
+      "langHint": "Search language code, e.g. zh-hans or en; blank uses the service default.",
+      "uiLang": "Result language",
+      "uiLangHint": "Result language code, e.g. zh-CN; blank uses the service default.",
+      "timeout": "Wait limit (seconds)",
+      "extractMedia": "Keep images from sources",
+      "extractMediaHint": "Save images from a page or PDF along with it.",
+      "test": "Try one search",
+      "testOk": "Found {{count}}.",
+      "testNone": "The connection works. This search had no results.",
+      "testFailed": "The trial search did not succeed."
+    },
+    "project": {
+      "title": "What this project is for",
+      "intro": "The model reads this when planning and writing; each project has its own.",
+      "placeholder": "What this wiki should answer, which language to use, and what to leave out.",
+      "usingDefault": "The built-in description is in use. Write and save one to use yours instead.",
+      "legacy": "An older description is still here; saving replaces it with what you write now.",
+      "startFromDefault": "Start from the built-in description",
+      "clear": "Use the built-in description again",
+      "noProject": "Create a project before writing a description.",
+      "loadFailed": "The description could not be read.",
+      "manage": "To create or delete a project, close settings and use the sidebar.",
+      "switchBlocked": "Save or discard this description before switching projects.",
+      "chatLimits": "How much one chat may read is adjusted at the bottom of the chat sidebar.",
+      "openChat": "Go to chat",
+      "tooLong": "Keep the description within {{limit}} characters."
+    },
+    "appearance": {
+      "title": "Appearance",
+      "intro": "Affects this window only, and does not follow the project.",
+      "theme": "Theme",
+      "language": "Interface language",
+      "fontSize": "Text size",
+      "fontSizeHint": "The text of the whole window changes with it.",
+      "smaller": "Smaller text",
+      "larger": "Larger text"
+    },
+    "diagnostics": {
+      "title": "Diagnostics",
+      "intro": "How this copy of the app is running. When something is wrong, check here before restarting anything.",
+      "loading": "Reading…",
+      "loadFailed": "These details could not be read.",
+      "versionLabel": "Version",
+      "uptimeLabel": "Running for",
+      "addressLabel": "Service address",
+      "addressNone": "No address was recorded; starting from a terminal does not record one.",
+      "restartsLabel": "Automatic restart",
+      "supervised": "On: the service is started again if it stops.",
+      "unsupervised": "Off: it must be started again by hand.",
+      "restartsCount": "started again {{count}} times",
+      "lastExit": "last stopped unexpectedly {{when}}, code {{code}}",
+      "projectsLabel": "Projects",
+      "projectsActive": "{{count}}, currently {{name}}",
+      "projectsNone": "{{count}}",
+      "dataLabel": "Notes are in",
+      "logLabel": "Log",
+      "logNone": "This installation does not keep a separate log.",
+      "logOpen": "Show the recent log",
+      "logClose": "Hide the log",
+      "logEmpty": "The log is empty.",
+      "logFailed": "The log could not be read.",
+      "copyPath": "Copy location",
+      "copied": "Copied",
+      "copyFailed": "Could not copy. Select it and copy by hand.",
+      "refresh": "Read again",
+      "warnTitle": "Worth fixing first",
+      "warn": {
+        "noProject": "No project yet. Create one from the sidebar, or bring in an existing folder.",
+        "noModel": "No model service is configured, so chat and planning cannot run.",
+        "noLog": "Automatic restart is on, but the service log was not found.",
+        "goModel": "Set up the model"
+      },
+      "check": {
+        "button": "Check for updates",
+        "checking": "Checking…",
+        "unconfigured": "This installation has no update source configured. It is {{version}}.",
+        "available": "Version {{latest}} is available; this is {{current}}.",
+        "upToDate": "This is the newest version ({{version}}).",
+        "download": "Open the download page",
+        "failed": "The update check did not finish."
+      },
+      "uptime": {
+        "seconds": "{{count}} seconds",
+        "minutes": "{{count}} minutes",
+        "hours": "{{count}} hours {{minutes}} minutes",
+        "days": "{{count}} days {{hours}} hours"
+      }
+    },
+    "leave": {
+      "title": "Unsaved changes",
+      "body": "Leaving settings discards these changes.",
+      "stay": "Keep editing",
+      "discard": "Discard"
+    },
+    "invalid": {
+      "baseUrl": "The service address must start with http:// or https://.",
+      "model": "Enter a model name.",
+      "temperature": "Temperature must be between 0 and 2.",
+      "maxTokens": "The reply limit must be a whole number from 1 to 128000.",
+      "timeout": "The wait limit is outside the allowed range.",
+      "country": "Region must be two letters, or blank.",
+      "lang": "The search language is not in the expected form.",
+      "uiLang": "The result language is not in the expected form.",
+      "secret": "A key cannot contain a line break."
+    }
+  },
+  "error": {
+    "noResult": "The job finished without returning a result.",
+    "noStream": "The server did not return a progress stream",
+    "offline": "Could not reach the local service. It may not be running.",
+    "streamStalled": "Lost contact with the service; it may have restarted. Please try again.",
+    "streamStopped": "Stopped waiting. The current model call may still finish, then it will stop.",
+    "loadProjects": "Could not read the project list",
+    "switchProject": "Could not switch to that project",
+    "createProject": "Could not create the project",
+    "openFolder": "Could not open that folder",
+    "deleteProject": "Could not delete the project",
+    "code": {
+      "plan": {
+        "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
+      },
+      "compile": {
+        "nothingSelected": "Nothing is ticked to write, so it cannot compile. Tick the pages to write first.",
+        "needPlan": "There is no plan for this run yet. Make the plan first, then compile.",
+        "notInPlan": "These pages are not in this round's plan, so they cannot be written: {{pages}}",
+        "nothingTicked": "Tick at least one page to write."
+      },
+      "search": {
+        "none": "No deep search is in progress.",
+        "running": "A deep search is already running; end it first.",
+        "noMode": "This deep search has no mode yet. Choose “Chew” or “Explore” first.",
+        "otherMode": "That step belongs to the other mode, which this deep search is not using.",
+        "wrongStep": "It is not time for this step yet; complete the earlier steps in order.",
+        "pastStepsOnly": "Only the current or an earlier step can be returned to.",
+        "cannotUndo": "This step is already in the notes, so going back does not undo it.",
+        "alreadyWritten": "This deep search has already written into the notes, so it cannot start over.",
+        "noCollections": "This deep search has nothing selected to work pages out from yet.",
+        "nothingLeft": "No unselected passages are left to gather.",
+        "chewFirst": "This is a gathering search: it reads what has not been selected yet before listing pages.",
+        "needPage": "At least one page must be kept to continue.",
+        "nothingToPick": "There is nothing to tick yet.",
+        "nothingPicked": "Tick at least one passage first.",
+        "cannotCollect": "The selected passages do not belong together, so they cannot be collected yet.",
+        "noAcceptedBlocks": "This deep search has not taken anything in yet.",
+        "unsettled": "{{count}} selections are not in the notes yet. Before ending, merge them into your usual selections or discard them.",
+        "hasCollections": "This deep search already has selections. To finish, use “End this deep search”.",
+        "planStarted": "This round is already working its pages out. To finish, use “End this deep search”."
+      },
+      "source": {
+        "missingOriginal": "These selections have no saved original yet, so they cannot be used: {{collections}}"
+      },
+      "file": {
+        "missing": "That file is not there any more; it may have been deleted.",
+        "protected": "The app keeps this file up to date, so it cannot be changed here.",
+        "notOriginal": "Only originals (a PDF or an image) open here."
+      },
+      "page": {
+        "missing": "That page is no longer in the project; it may have been deleted.",
+        "notAPage": "That is not a note in this project.",
+        "changed": "This page was written again after you opened it. Open it afresh and make your change there.",
+        "exists": "A page already has that name. Choose another.",
+        "nameEmpty": "A page needs a name.",
+        "nameNotAllowed": "That page name cannot be used. Choose another.",
+        "bodyStartsFence": "The body cannot start with a line of dashes, which would be read as this page's settings.",
+        "versionMissing": "That version is no longer there."
+      },
+      "trash": {
+        "unknown": "That item is no longer in the trash.",
+        "missing": "What was to be deleted is no longer there.",
+        "damaged": "The files for this item are incomplete, so it cannot be restored.",
+        "outside": "This item points outside the project and cannot be restored.",
+        "projectMissing": "That project has been deleted. Restore the project before restoring its notes library.",
+        "unknownKind": "This kind of item is not recognised and cannot be restored."
+      },
+      "note": {
+        "missing": "That remark is no longer there.",
+        "empty": "A remark cannot be empty.",
+        "notOnPage": "A note can only be written on a page.",
+        "duplicateName": "A remark with that name already exists.",
+        "pageMissing": "That page is gone, so a note cannot be written on it."
+      },
+      "project": {
+        "confirm": "Type the project name to confirm.",
+        "exists": "A project named “{{name}}” already exists.",
+        "collidesWithFile": "That name is already a file. Choose another.",
+        "unknown": "No project called “{{name}}”.",
+        "notADirectory": "This is not a project.",
+        "notValid": "“{{name}}” is not a complete project yet and cannot be opened.",
+        "snapshotFailed": "A copy of the notes library could not be kept before clearing, so nothing was cleared. Check disk space and permissions, then try again.",
+        "migrateCollisions": "This project cannot be migrated yet: {{count}} names would land on the same file ({{items}}). Rename or merge them first.",
+        "name": {
+          "empty": "A project name cannot be empty.",
+          "tooLong": "A project name can be at most 64 characters.",
+          "notAllowed": "That project name cannot be used. Choose another.",
+          "badChars": "A project name cannot contain slashes, colons, asterisks and the like, or end with a space or a dot.",
+          "device": "The system reserves that name. Choose another.",
+          "taken": "The name “{{name}}” is taken. Choose another.",
+          "linked": "The name “{{name}}” is already used by another folder. Choose another."
+        },
+        "folder": {
+          "empty": "No folder was chosen.",
+          "missing": "That folder is not there — it may have been moved or deleted.",
+          "notAFolder": "That is a file, not a folder.",
+          "notProject": "That folder is not a wiki yet. Use “Import as a new project” instead.",
+          "badMode": "That is not a way of opening a folder this program knows.",
+          "alreadyManaged": "That folder is already one of the projects — pick it from the list.",
+          "needsName": "That folder's name cannot be a project name. Choose one."
+        }
+      },
+      "llm": {
+        "notConfigured": "No model service is configured yet. Open Settings and enter the connection details."
+      },
+      "provider": {
+        "notConfigured": "No web search is set up yet. Open Settings, choose a search service and add its key.",
+        "misconfigured": "The web search settings are incomplete. Check them.",
+        "failed": "The web search did not go through. Try again later."
+      },
+      "settings": {
+        "invalid": "One of the values cannot be saved as written: {{field}}.",
+        "locked": "{{field}} comes from the environment the app was started with, so the settings screen cannot change it.",
+        "briefTooLong": "The description is longer than {{limit}} characters.",
+        "searchOff": "Web search is off, so it cannot be tested. Choose a search service first.",
+        "probeRejected": "The model service refused the key. Check the key and the service address.",
+        "probeUnreachable": "Could not reach the model service. Check the address and the network.",
+        "probeFailed": "The model service answered, but not with a usable reply.",
+        "searchRejected": "The search service refused the key. Check it and try again.",
+        "searchUnreachable": "Could not reach the search service. Check the network.",
+        "searchFailed": "The search service answered, but the trial search did not come back."
+      },
+      "update": {
+        "unreachable": "Could not reach the update source. Check the network and try again.",
+        "badManifest": "The update source answered with something that could not be read; it may not be ready yet.",
+        "badSource": "The update source address is invalid; it must start with http:// or https://."
+      }
+    }
+  }
+}

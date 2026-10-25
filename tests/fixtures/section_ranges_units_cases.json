@@ -1,0 +1,33 @@
+[
+  {
+    "name": "non_bmp_in_body",
+    "text": "# 页名\n\n🙂\n\n## 甲\n\n正文🙂更多。\n\n## 乙\n\n尾🌍\n",
+    "headings": [
+      "甲",
+      "乙"
+    ],
+    "levels": [
+      2,
+      2
+    ],
+    "slices": [
+      "# 页名\n\n🙂\n\n",
+      "## 甲\n\n正文🙂更多。\n\n",
+      "## 乙\n\n尾🌍\n"
+    ]
+  },
+  {
+    "name": "non_bmp_in_heading_and_marker",
+    "text": "<!-- na-clip:c-1 b1 -->\n## 定义🙂\n\n正文\n",
+    "headings": [
+      "定义🙂"
+    ],
+    "levels": [
+      2
+    ],
+    "slices": [
+      "",
+      "<!-- na-clip:c-1 b1 -->\n## 定义🙂\n\n正文\n"
+    ]
+  }
+]

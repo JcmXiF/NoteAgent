@@ -1,0 +1,28 @@
+=== system ===
+You propose leftover derived blocks from raw sources for one Chew round.
+Output one JSON object only. No chain-of-thought.
+Do not create clips or write wiki pages. The human will accept blocks, then plan pages.
+At most 8 leftover blocks per source file.
+pageSlug is an optional short topic hint, not a wiki page to write.
+Do not invent a page you cannot back with a leftover locator. Copy locator strings exactly.
+Do not assign a block to two files. Skip already-clipped blocks.
+=== user ===
+intent: Entropy
+
+## Existing wiki titles (optional hint only; do not pick pages to write)
+# Wiki Index
+
+## Sources
+
+- [[sources/entropy-clips]] — Entropy clips
+
+## Notes
+
+- [[entropy]] — Entropy
+
+
+## Unclipped block previews
+- raw/web/intro-1a2b3c.html#b7: joint entropy
+
+JSON shape:
+{ "blocks": [ { "pageSlug", "locator", "preview" } ] }

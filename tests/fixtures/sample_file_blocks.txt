@@ -1,0 +1,41 @@
+---FILE: wiki/concepts/bellman-equation.md---
+---
+type: concept
+title: 贝尔曼方程
+tags: [rl, mdp]
+related: [value-function]
+sources: ["raw/reinforcement-learning/贝尔曼方程 Bellman Equation.md"]
+---
+
+# 贝尔曼方程
+
+价值函数满足递归自洽性。笔记中混用了期望形式与最优形式，应分开说明。
+
+```markdown
+示例：正文里可以出现字面量而不截断外层块
+---END FILE---
+```
+
+详见 [[value-function]]。
+---END FILE---
+
+---FILE: wiki/concepts/value-function.md---
+---
+type: concept
+title: 价值函数
+tags: [rl]
+related: [bellman-equation]
+sources: ["raw/reinforcement-learning/贝尔曼方程 Bellman Equation.md"]
+---
+
+# 价值函数
+
+状态价值与动作价值是贝尔曼方程的基础对象。
+---END FILE---
+
+---FILE: ../../../etc/passwd---
+should be rejected
+---END FILE---
+
+---FILE: wiki/concepts/truncated.md---
+this block has no closer

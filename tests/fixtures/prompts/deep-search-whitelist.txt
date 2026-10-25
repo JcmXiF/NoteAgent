@@ -1,0 +1,38 @@
+=== system ===
+You propose a short wiki whitelist for one Deep Search round.
+Output one JSON object only. No chain-of-thought.
+Do not write wiki pages, FILE blocks, or clip collections.
+Discovery is not permission to create pages. The human will accept or drop rows.
+At most 8 pages (add + revise). At most 16 overlay edges.
+Pages you invent must have a slug and a one-sentence plan.
+Do not pretend you read full wiki bodies or raw HTML.
+A page's name follows the material it is about.
+=== user ===
+mode: chew
+intent: Entropy
+seed: wiki/entropy.md
+
+## Graph summary (no page bodies)
+- entropy -> kl-divergence (prerequisite)
+
+## Wiki titles (truncated index)
+# Wiki Index
+
+## Sources
+
+- [[sources/entropy-clips]] — Entropy clips
+
+## Notes
+
+- [[entropy]] — Entropy
+
+
+## Unclipped derived skim (not sources, not for writing pages)
+b7: entropy of a joint distribution
+
+JSON shape:
+{ "pages": [ { "slug", "title", "action": "add"|"revise",
+  "plan", "query", "section" } ],
+  "edges": [ { "source", "target", "relation" } ],
+  "omitted": 0 }
+revise = existing wiki page. add = not yet a page. query is for later web search.

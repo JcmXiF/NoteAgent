@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A push that is replaced by a newer one has nothing left to check.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Windows is the platform releases are built for, so the core is tested
+      # there too rather than on Linux alone.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[api]"
+      - name: Tests
+        run: python -m unittest discover -s tests
+
+  docs:
+    name: Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Checks
+        run: python tests/check-docs.py
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Types
+        run: npm run typecheck
+      - name: Tests
+        run: npm test
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        # Also runs the catalog checks: translation keys, and the wording rules.
+        run: npm run build
+
+  shell:
+    name: Electron shell
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install
+        # The shell's tests stand in for the `electron` module, so the runtime is
+        # not needed here — and downloading it is the slowest, flakiest part of CI.
+        run: npm ci --ignore-scripts
+      - name: Tests
+        run: npm test

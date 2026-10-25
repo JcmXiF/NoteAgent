@@ -1,0 +1,558 @@
+[
+  {
+    "name": "plain",
+    "text": "# 页名\n\nintro\n\n## 甲\n\nalpha\n\n## 乙\n\nbeta\n",
+    "preamble": [
+      0,
+      13
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 13,
+        "markerStart": null,
+        "headingStart": 13,
+        "headingEnd": 17,
+        "bodyStart": 18,
+        "end": 26,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 2,
+        "heading": "乙",
+        "start": 26,
+        "markerStart": null,
+        "headingStart": 26,
+        "headingEnd": 30,
+        "bodyStart": 31,
+        "end": 37,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "marker_owns_heading",
+    "text": "<!-- na-clip:c-1 b1 -->\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 0,
+        "markerStart": 0,
+        "headingStart": 24,
+        "headingEnd": 29,
+        "bodyStart": 30,
+        "end": 34,
+        "collectionId": "c-1",
+        "blockIds": [
+          "b1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "blank_between_marker_and_heading",
+    "text": "<!-- na-clip:c-2 -->\n\n\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 0,
+        "markerStart": 0,
+        "headingStart": 23,
+        "headingEnd": 28,
+        "bodyStart": 29,
+        "end": 33,
+        "collectionId": "c-2",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "prose_under_marker_unowned",
+    "text": "<!-- na-clip:c-3 -->\n\n一句正文。\n\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      29
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 29,
+        "markerStart": null,
+        "headingStart": 29,
+        "headingEnd": 34,
+        "bodyStart": 35,
+        "end": 39,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "stacked_markers",
+    "text": "<!-- na-clip:c-a -->\n<!-- na-clip:c-b b1,b2 -->\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      21
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 21,
+        "markerStart": 21,
+        "headingStart": 48,
+        "headingEnd": 53,
+        "bodyStart": 54,
+        "end": 58,
+        "collectionId": "c-b",
+        "blockIds": [
+          "b1",
+          "b2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "marker_at_eof",
+    "text": "## 甲\n\n正文\n\n<!-- na-clip:c-4 -->\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 31,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "no_headings",
+    "text": "# 只有页名\n\n一句正文。\n",
+    "preamble": [
+      0,
+      14
+    ],
+    "sections": []
+  },
+  {
+    "name": "empty",
+    "text": "",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": []
+  },
+  {
+    "name": "crlf",
+    "text": "# 页名\r\n\r\n<!-- na-clip:c-5 b1 -->\r\n## 定义\r\n\r\n正文\r\n",
+    "preamble": [
+      0,
+      8
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 8,
+        "markerStart": 8,
+        "headingStart": 33,
+        "headingEnd": 38,
+        "bodyStart": 40,
+        "end": 46,
+        "collectionId": "c-5",
+        "blockIds": [
+          "b1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "heading_no_trailing_newline",
+    "text": "## 甲\n\n正文\n\n## 乙",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 10,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 2,
+        "heading": "乙",
+        "start": 10,
+        "markerStart": null,
+        "headingStart": 10,
+        "headingEnd": 14,
+        "bodyStart": 14,
+        "end": 14,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "levels",
+    "text": "## 二\n\na\n\n### 三\n\nb\n\n###### 六\n\nc\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "二",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 9,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 3,
+        "heading": "三",
+        "start": 9,
+        "markerStart": null,
+        "headingStart": 9,
+        "headingEnd": 14,
+        "bodyStart": 15,
+        "end": 19,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 6,
+        "heading": "六",
+        "start": 19,
+        "markerStart": null,
+        "headingStart": 19,
+        "headingEnd": 27,
+        "bodyStart": 28,
+        "end": 31,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "h1_is_not_a_section",
+    "text": "# 页名\n\n引言\n\n## 真节\n\nx\n",
+    "preamble": [
+      0,
+      10
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "真节",
+        "start": 10,
+        "markerStart": null,
+        "headingStart": 10,
+        "headingEnd": 15,
+        "bodyStart": 16,
+        "end": 19,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "second_marker_owns",
+    "text": "<!-- na-clip:c-6 -->\n一句正文。\n<!-- na-clip:c-7 b1 -->\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      27
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 27,
+        "markerStart": 27,
+        "headingStart": 51,
+        "headingEnd": 56,
+        "bodyStart": 57,
+        "end": 61,
+        "collectionId": "c-7",
+        "blockIds": [
+          "b1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "trailing_blanks",
+    "text": "## 甲\n\n正文\n\n\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 11,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "marker_spaced_ids",
+    "text": "<!--na-clip:c-9  b1, b2   -->\n## 定义\n\n正文\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "定义",
+        "start": 0,
+        "markerStart": 0,
+        "headingStart": 30,
+        "headingEnd": 35,
+        "bodyStart": 36,
+        "end": 40,
+        "collectionId": "c-9",
+        "blockIds": [
+          "b1",
+          "b2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "indented_heading_is_not_one",
+    "text": "  ## 缩进\n\n正文\n\n## 真节\n\nx\n",
+    "preamble": [
+      0,
+      13
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "真节",
+        "start": 13,
+        "markerStart": null,
+        "headingStart": 13,
+        "headingEnd": 18,
+        "bodyStart": 19,
+        "end": 22,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "marker_mid_section",
+    "text": "## 甲\n\n正文\n<!-- na-clip:c-8 -->\n更多正文\n\n## 乙\n\ny\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 36,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 2,
+        "heading": "乙",
+        "start": 36,
+        "markerStart": null,
+        "headingStart": 36,
+        "headingEnd": 40,
+        "bodyStart": 41,
+        "end": 44,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "marker_owning_between_sections",
+    "text": "## 甲\n\n正文\n\n<!-- na-clip:c-10 b1 -->\n## 乙\n\ny\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 10,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 2,
+        "heading": "乙",
+        "start": 10,
+        "markerStart": 10,
+        "headingStart": 35,
+        "headingEnd": 39,
+        "bodyStart": 40,
+        "end": 43,
+        "collectionId": "c-10",
+        "blockIds": [
+          "b1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "heading_in_fence_is_not_a_section",
+    "text": "## 甲\n\n正文\n\n```\n## 假节\n\n样例\n```\n\n## 乙\n\ny\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 29,
+        "collectionId": "",
+        "blockIds": []
+      },
+      {
+        "level": 2,
+        "heading": "乙",
+        "start": 29,
+        "markerStart": null,
+        "headingStart": 29,
+        "headingEnd": 33,
+        "bodyStart": 34,
+        "end": 37,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "marker_inside_fence_owns_nothing",
+    "text": "## 甲\n\nx\n\n```\n<!-- na-clip:c-1 b1 -->\n## 假节\n```\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 47,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "unclosed_fence_swallows_the_rest",
+    "text": "## 甲\n\nx\n\n```\n## 乙\n\ny\n",
+    "preamble": [
+      0,
+      0
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "甲",
+        "start": 0,
+        "markerStart": null,
+        "headingStart": 0,
+        "headingEnd": 4,
+        "bodyStart": 5,
+        "end": 21,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  },
+  {
+    "name": "a_comment_between_marker_and_heading_ends_the_wait",
+    "text": "<!-- na-clip:c-9 -->\n<!-- na-note -->\n## Defined\n\nbody\n",
+    "preamble": [
+      0,
+      38
+    ],
+    "sections": [
+      {
+        "level": 2,
+        "heading": "Defined",
+        "start": 38,
+        "markerStart": null,
+        "headingStart": 38,
+        "headingEnd": 48,
+        "bodyStart": 49,
+        "end": 55,
+        "collectionId": "",
+        "blockIds": []
+      }
+    ]
+  }
+]

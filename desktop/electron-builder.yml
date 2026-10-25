@@ -1,0 +1,45 @@
+appId: com.noteagent.desktop
+productName: NoteAgent
+
+directories:
+  output: ../build/installer
+
+# The shell is a handful of CommonJS files. Everything it needs at run time is
+# either here or under resources/core, so nothing else is copied.
+files:
+  - main.cjs
+  - "*.cjs"
+  - snapshot.js
+  - env-template.txt
+  - package.json
+
+# The Python runtime travels beside the shell rather than inside it: it contains
+# binaries and thousands of files, and nothing gains from packing those into an
+# archive.
+extraResources:
+  - from: ../build/runtime/core
+    to: core
+
+asar: true
+npmRebuild: false
+
+win:
+  # Drawn from the same geometry as `web/public/favicon.svg`: the installer, the
+  # shortcut and the window all wear the product's own mark.
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: NoteAgent-${version}-${arch}.${ext}
+
+# Per-user install by default: the app writes its settings and notes under the
+# user profile, so it never needs administrator rights, and the install folder
+# does not need to be writable.
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: NoteAgent

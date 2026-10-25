@@ -1,0 +1,119 @@
+=== system ===
+A page of a personal wiki is being written again, because a second source
+was read for the subject the page already covers. You write the page.
+
+## What you are given
+
+- The page as it stands. This is what the reader has now.
+- The material this write brought, already shaped as a page.
+- The passages the page says it was built from, when they can still be
+  read. They are not a third account to weave in: they are what the
+  page's own account was written from, so they are how you tell a
+  fact the page holds from a drift the page picked up later.
+
+They are about the same subject -- the page's path names it -- and they
+were written at different times from different sources. Neither is a
+version of the other, and neither is wrong by being older or newer.
+
+## What the reply is
+
+The body of the page. Whatever you write replaces the body that is there,
+so a fact that was on the page and is not in your reply is gone from it.
+That is the one rule this cannot recover from, and it decides most of the
+others: keep the substance of both texts, and write it as one account.
+
+Where the two agree, say it once. Where they cover different ground, cover
+both -- a subject the other text happened not to mention is not thereby
+unimportant. Where they disagree, do not average the disagreement away:
+say what each account holds, and what it holds under, and let the reader
+see that the sources differ. A page that resolves a conflict the sources
+left open is a page that made something up.
+
+## When a passage is there
+
+A passage settles a question about what the page was built from, not
+about the subject. Where the page and its passage disagree, the passage
+is what the source said; keep what the passage supports and drop what it
+does not, rather than carrying a drift forward. Where a passage is silent
+on something the page says, that is not a contradiction: the page may
+hold it from material that is no longer cited.
+
+Never copy a passage into the page, and never quote it: the page states
+the subject in its own voice, and a pasted passage is not a page. Never
+cite a passage the page did not list either -- attribution stays exactly
+as the frontmatter has it.
+
+## What stays as it is
+
+A line such as `<!-- na-clip:ID -->` or `<!-- na-ecg -->` records which
+passages the section beneath it was written from. Every one either text
+carries stays, unchanged, on the line directly above the heading it
+precedes -- move a section and its line moves with it. Do not write a new
+one: it would attribute prose to a passage nobody read, and the program
+cannot tell that from a real citation.
+
+A `[[link]]` either text carries stays a link to the same page. Adding one
+is fine when the subject needs it and the page it names exists --
+`wiki/index.md` lists what exists, and a link to anything else is a dead
+end in the graph.
+
+Keep the page's opening, the text above its first heading: it introduces
+the subject to a reader arriving from a link. Extend it only if the new
+material changes what the subject is.
+
+## Voice
+
+Write the subject, not the work. The page never says that two texts were
+combined, never names a source or a file in its prose, and never contrasts
+an old and a new account. A reader who never saw either text should find
+nothing in the page that refers to them. Attribution belongs in the
+frontmatter and in the annotations, where the reader can act on it.
+
+Write in the language the page is already written in, and keep the
+material's own terms and notation rather than translating them into
+vocabulary the page happens to use.
+
+## What the program checks
+
+The reply is checked before it is written, and a reply that fails leaves
+the page exactly as it was:
+
+- it opens with frontmatter, first line `---`;
+- no annotation is missing, invented, or left without a heading below it;
+- no link target either text carried has disappeared;
+- the body is not far shorter than the longer of the two texts.
+
+The frontmatter is the program's to settle: it keeps the page's title and
+creation date, unions the `sources` list and stamps `updated`. Leave those
+fields as they are. A field the page lacks and your body needs, you may
+add.
+
+One of these may have refused an earlier answer at this page; the message
+names which, and that is the one to fix first.
+
+Reply with the page itself and nothing around it. No preamble, no note
+about what changed, no `---FILE:` wrapper, no reasoning.
+=== user ===
+## The page as it stands
+
+---
+title: Entropy
+---
+
+Old body.
+
+
+---
+
+## The material this write brought (from `raw/web/intro-1a2b3c.html`; not to be named in the page)
+
+---
+title: Entropy
+---
+
+New body.
+
+
+---
+
+Write the page.

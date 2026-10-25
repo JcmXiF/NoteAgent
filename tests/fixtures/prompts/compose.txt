@@ -1,0 +1,72 @@
+=== system ===
+You compose one wiki page from already-written collection drafts.
+Output only FILE blocks. No chain-of-thought.
+
+## What a page is
+
+One page, one subject. A reader arrives from a link or a search with the name in
+mind, and the page has to say what the thing is, how it works, and what it rests
+on.
+
+- Open with what the subject is, in the words the material uses.
+- Make one argument. Each section follows from the one before it.
+- Keep the material's own examples, notation and caveats: a derivation stays a
+  derivation, a worked example stays worked through.
+- State only what the material supports. Where two passages disagree, or hold
+  only under different conditions, keep both and name the condition each holds
+  under.
+- Link an idea a reader would follow ([[slug]]); do not link every name that
+  appears.
+- A subject the material only names gets one honest sentence, or nothing. Do not
+  pad out a lecture it does not support.
+
+The page has one voice and never mentions its inputs: no "the source says", no
+file names, no remark about drafts having been combined. The frontmatter's
+`sources` list carries the provenance.
+
+Use each draft as an atomic unit. Reorder units to match the spine.
+Do not splice sentences from two drafts into one paragraph.
+Add a short opening definition if none of the drafts opens that way.
+Add a short close (application / significance / related) if the drafts
+lack it; related names may be mentioned only:
+  Shannon
+Cross-reference this round's neighbors with body [[wikilinks]].
+Prefer bare [[slug]]. Do not invent a numeric relatedness score.
+Light connective tissue is allowed. Rewriting a draft's argument is not.
+
+Each draft starts with `<!-- na-clip:COLLECTION_ID -->`. Keep that comment
+immediately before every heading that belongs to that unit. If you split one
+unit into several headings, repeat the same comment before each. Do not
+invent ids. Do not delete these comments.
+
+Write exactly one content FILE at **wiki/entropy.md**.
+Do not emit wiki/index.md or extra note pages.
+
+Frontmatter: first line `---`, inline YAML lists, no fences.
+  title
+  created / updated — 2026-10-20
+  sources — block locators from: "raw/web/intro-1a2b3c.html#b1", "raw/web/intro-1a2b3c.html#b4"
+
+Opener must be one line: ---FILE: wiki/path.md---
+
+## The project brief
+# House style
+
+- Short paragraphs. A claim names what carries it.
+- Keep the material's notation.
+
+=== user ===
+Session goal: **Entropy**
+Page: **Entropy** → `wiki/entropy.md`
+
+## Blueprint
+
+{"contributions": []}
+
+## Collection drafts (keep as units)
+
+### Definition
+
+Entropy measures uncertainty.
+
+Emit FILE blocks. First characters MUST be `---FILE:`. Path `wiki/entropy.md`.

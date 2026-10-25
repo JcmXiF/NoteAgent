@@ -1,0 +1,226 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design tokens, following Tailwind v4 conventions: `@theme inline` only maps
+ * names onto variables, while the values live in `:root` and `.dark`. There is
+ * no tailwind.config file.
+ */
+@theme inline {
+  --font-sans: var(--font-sans-stack);
+  --font-heading: var(--font-sans-stack);
+  --font-mono: var(--font-mono-stack);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-cite: var(--cite);
+  --color-clip: var(--clip);
+  --color-remark: var(--remark);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --font-sans-stack: ui-sans-serif, system-ui, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono-stack: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.62 0.17 149);
+  --warning: oklch(0.7 0.16 75);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+
+  /* Semantic colors for citations and selected passages. */
+  --cite: oklch(0.58 0.13 195);
+  --clip: oklch(0.68 0.14 65);
+  /* A remark is the reader's own writing about a page, so it gets a hue of its
+     own: not the citation teal it would be mistaken for, and not one of the
+     compiler's colours, which say who wrote a stretch rather than that somebody
+     else did. */
+  --remark: oklch(0.52 0.14 265);
+
+  /* Colours for saying who wrote a stretch of a page: kept apart from the
+     semantic colours above, because a person's own writing is not an error and
+     the compile's own section is not a success, so borrowing those hues would
+     read as a verdict on the text. `--part-immutable` is the grey for a passage
+     nobody may edit. */
+  --part-agent: oklch(0.62 0.12 155);
+  --part-modified: oklch(0.7 0.13 78);
+  --part-related: oklch(0.55 0.14 300);
+  --part-editor: oklch(0.58 0.16 25);
+  --part-immutable: oklch(0.72 0 0);
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: oklch(0.16 0.005 260);
+  --foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0.005 260);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0.005 260);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0.005 260);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0.005 260);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.7 0.16 149);
+  --warning: oklch(0.78 0.15 78);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+
+  --sidebar: oklch(0.18 0.005 260);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.24 0.005 260);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  --cite: oklch(0.72 0.12 195);
+  --clip: oklch(0.78 0.13 68);
+  --remark: oklch(0.74 0.12 265);
+
+  --part-agent: oklch(0.72 0.11 155);
+  --part-modified: oklch(0.79 0.12 80);
+  --part-related: oklch(0.72 0.13 300);
+  --part-editor: oklch(0.7 0.15 25);
+  --part-immutable: oklch(0.45 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans-stack);
+    overflow: hidden;
+  }
+
+  /* While a separator is being dragged, text selection would fight the drag. */
+  body[data-panel-resizing="true"] {
+    cursor: col-resize;
+    user-select: none;
+  }
+
+  /*
+   * A section that was just arrived at, so the reader sees where they landed. Set
+   * by the reader for a moment after it scrolls, then removed.
+   */
+  [data-section-focus] {
+    background-color: color-mix(in oklab, var(--cite) 14%, transparent);
+    outline: 1px solid color-mix(in oklab, var(--cite) 45%, transparent);
+    outline-offset: 4px;
+    border-radius: 4px;
+    transition: background-color 0.4s ease;
+  }
+
+  /* Where an answer is still being written. */
+  .na-caret {
+    display: inline-block;
+    width: 0.5em;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    background-color: color-mix(in oklab, var(--foreground) 70%, transparent);
+    animation: na-caret-blink 1s steps(2, start) infinite;
+  }
+
+  @keyframes na-caret-blink {
+    to {
+      visibility: hidden;
+    }
+  }
+}
+
+@layer utilities {
+  /* Thin scrollbars, used by long lists and log output. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: oklch(0.55 0 0 / 45%);
+    border-radius: 3px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}

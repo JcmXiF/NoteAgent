@@ -1,0 +1,1361 @@
+{
+  "app": {
+    "brand": "NA",
+    "brandTitle": "NOTEAGENT"
+  },
+  "language": {
+    "switch": "语言",
+    "switchTo": "语言：{{current}}。点击切换到{{next}}。"
+  },
+  "module": {
+    "chat": {
+      "label": "问答",
+      "hint": "就当前项目的笔记库提问",
+      "sidebar": "会话"
+    },
+    "sources": {
+      "label": "资料",
+      "hint": "已保存的资料与选段",
+      "sidebar": "已保存"
+    },
+    "docs": {
+      "label": "笔记",
+      "hint": "浏览笔记库与原始资料",
+      "sidebar": "文件"
+    },
+    "notes": {
+      "label": "备注",
+      "hint": "在某页旁边写下并查看备注",
+      "sidebar": "备注"
+    },
+    "graph": {
+      "label": "关系图",
+      "hint": "页面之间的链接，以及深搜",
+      "sidebar": "关系图"
+    },
+    "browse": {
+      "label": "浏览",
+      "hint": "搜网页，并在内置浏览器里打开",
+      "sidebar": "搜索"
+    }
+  },
+  "nav": {
+    "toggleLeft": "显示侧栏",
+    "toggleRight": "显示详情面板",
+    "hideRight": "隐藏详情面板",
+    "split": "分屏",
+    "splitHint": "并排打开另一个视图",
+    "swapPanes": "左右互换",
+    "closeSplit": "关闭分屏",
+    "resizeLeft": "调整侧栏宽度",
+    "resizeRight": "调整详情面板宽度",
+    "resizeSplit": "调整两个视图的宽度",
+    "alreadyOpenInSplit": "已在分屏中",
+    "backTo": "回到{{module}}",
+    "back": "退回上一步",
+    "forward": "前进到下一步",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "resizeSection": "调整{{section}}区高度"
+  },
+  "theme": {
+    "label": "主题",
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统",
+    "switchTo": "主题：{{current}}。点击切换到{{next}}。"
+  },
+  "palette": {
+    "open": "搜索",
+    "title": "在这个项目里找",
+    "placeholder": "页面、备注、资料…",
+    "hint": "在笔记、备注和资料中查找。",
+    "empty": "没有匹配的结果。",
+    "failed": "本次搜索未完成",
+    "noProject": "先选择一个项目。",
+    "more": "还有 {{count}} 条",
+    "keys": "↑↓ 选择，回车打开",
+    "esc": "Esc 关闭",
+    "group": {
+      "pages": "笔记",
+      "notes": "备注",
+      "sources": "资料",
+      "actions": "动作"
+    },
+    "action": {
+      "source": "加资料",
+      "sourceHint": "粘贴链接、选择文件，或将网页收入资料。",
+      "import": "导入项目",
+      "importHint": "将已有文件夹加入项目列表。",
+      "export": "导出项目",
+      "exportHint": "将整个项目保存为压缩包。",
+      "settings": "打开设置",
+      "settingsHint": "外观、语言与工作区设置。",
+      "needsProject": "先选一个项目"
+    }
+  },
+  "project": {
+    "label": "项目",
+    "none": "还没有项目",
+    "new": "新建项目",
+    "delete": "删除当前项目",
+    "dismissError": "关闭这条提示",
+    "createTitle": "新建项目",
+    "createDescription": "新建一个笔记项目，并切换过去。",
+    "createNameLabel": "项目名",
+    "createNamePlaceholder": "例如 my-wiki",
+    "createSubmit": "创建并切换",
+    "deleteTitle": "删除项目",
+    "deleteDescription": "整个项目文件夹都会移入最近删除，包括里面的资料、笔记页和备注。请输入项目名确认。",
+    "deleteContents": "这个项目有 {{pages}} 个笔记页、{{sources}} 份资料和 {{notes}} 条备注。",
+    "deleteRecoverable": "删除后会保留 30 天，可以在「最近删除」里恢复。",
+    "deleteConfirmLabel": "输入 {{name}} 以确认",
+    "deleteSubmit": "删除",
+    "nameMismatch": "名称不一致，没有删除。",
+    "needed": "请先新建或选择项目。",
+    "export": "导出为 zip",
+    "unlink": "从列表移除",
+    "unlinkTitle": "从列表移除",
+    "unlinkDescription": "这个文件夹在别处，不是本工具建的。移除只会把它从项目列表里拿掉，不会删除任何文件。",
+    "unlinkContents": "文件夹里现在还有 {{pages}} 个笔记页、{{sources}} 份资料和 {{notes}} 条备注，都会留在原处。",
+    "unlinkSubmit": "从列表移除",
+    "open": {
+      "action": "打开文件夹",
+      "title": "打开文件夹",
+      "description": "选择硬盘上已有的文件夹。已是笔记库的就地使用；一组 Markdown 笔记会复制成新项目。",
+      "pathLabel": "文件夹路径",
+      "pathPlaceholder": "例如 D:\\notes\\my-wiki",
+      "browse": "浏览…",
+      "browseHint": "先填写路径，可查看文件夹中的内容。",
+      "inspecting": "正在检查文件夹内容…",
+      "inspectFailed": "无法读取这个文件夹",
+      "summary": "{{pages}} 篇 Markdown、{{others}} 个其他文件，共 {{size}}。",
+      "truncated": "文件过多，仅统计至此。",
+      "linkOption": "就地使用",
+      "linkHint": "不复制文件，直接读写此文件夹。",
+      "copyOption": "复制到默认位置",
+      "copyHint": "保留原文件夹，复制出一份新项目。",
+      "importOption": "导入成一个新项目",
+      "importHint": "这是一组 Markdown 笔记；将复制进新的笔记库，原文件夹不变。",
+      "nameLabel": "新项目名",
+      "alreadyManaged": "这个文件夹已在项目列表中，从上方列表选择即可。",
+      "alreadyLinked": "这个文件夹已打开过，将直接切换过去。",
+      "submitLink": "打开",
+      "submitCopy": "复制并打开",
+      "failed": "无法打开这个文件夹",
+      "opened": "已打开「{{name}}」",
+      "openedCounts": "导入 {{pages}} 篇 Markdown、{{others}} 个其他文件。",
+      "openedSkipped": "这些文件与项目索引同名，未导入：{{files}}。"
+    }
+  },
+  "welcome": {
+    "title": "把亲手挑选的资料，编译成可追溯的知识库",
+    "body": "资料进入项目，由你挑选段落，模型按你确认的篇目写入笔记库；每一页都可回溯到原文。",
+    "footnote": "所有内容都保存在你自己的文件夹中，可随时导出。",
+    "pickProject": "选择一个项目",
+    "pickProjectHint": "在左上角的项目栏中选择或新建项目。",
+    "startTitle": "从一份资料到第一页",
+    "startBody": "这个项目还没有自己的笔记页。以下三步只需完成当前一步。",
+    "step": {
+      "sources": "加资料",
+      "sourcesHint": "支持网页、PDF、Word 与本地 Markdown。",
+      "sourcesAction": "加第一份资料",
+      "selection": "选段落",
+      "selectionHint": "只有选中的段落会交给模型。",
+      "selectionAction": "去选一段",
+      "compile": "编译第一页",
+      "compileHint": "确认篇目后写入笔记库，页面可回溯到原文。",
+      "compileAction": "去编译"
+    }
+  },
+  "trash": {
+    "open": "最近删除",
+    "title": "最近删除",
+    "body": "删除的项目、整份笔记库与资料会保留 30 天，之后自动清理。恢复时若原位置已有内容，该内容也会移入最近删除。",
+    "loading": "正在读取…",
+    "empty": "最近删除中没有可恢复的内容。",
+    "kind": {
+      "project": "项目",
+      "wiki": "整份笔记库",
+      "file": "资料"
+    },
+    "wikiOf": "「{{name}}」的笔记库",
+    "fileCount": "{{count}} 个文件",
+    "restore": "恢复",
+    "loadFailed": "无法读取最近删除的内容",
+    "restoreFailed": "这一项恢复失败"
+  },
+  "activity": {
+    "title": "作业",
+    "empty": "还没有作业。搜索、抓取、规划与编译的记录会显示在这里。",
+    "noDetail": "没有更多细节。",
+    "clearFinished": "清空已完成",
+    "moreFiles": "另有 {{count}} 个文件",
+    "interrupt": "停止",
+    "retry": "重试",
+    "openModule": "去相关视图",
+    "remove": "移除",
+    "cancelled": "已停止",
+    "failed": "作业失败",
+    "failedCount": "{{count}} 个作业失败",
+    "idleDone": "已完成",
+    "idle": "没有进行中的作业",
+    "kind": {
+      "search": "搜索",
+      "fetch": "抓取",
+      "import": "加入",
+      "save": "保存",
+      "plan": "规划",
+      "compose": "编译",
+      "chat": "问答",
+      "deep-search": "深搜",
+      "project": "项目",
+      "misc": "作业"
+    }
+  },
+  "details": {
+    "title": "作业台"
+  },
+  "selections": {
+    "count": "已选 {{count}} 处",
+    "empty": {
+      "title": "还没有选中内容",
+      "body": "打开一份资料，选择要用于写页面的段落；它们会按来源归集在这里。"
+    },
+    "storedHint": "尚未保存。需先将这一页的正文存入资料库，才能据此写页面。",
+    "fromRound": "来自深搜",
+    "scope": {
+      "label": "看哪些选中的内容",
+      "mine": "本次深搜",
+      "leftover": "上次深搜留下",
+      "everyday": "平时的",
+      "everydayHint": "平时选择的段落，可与其他资料一起整理篇目。",
+      "empty": "这一部分还没有选中的内容。"
+    },
+    "leftover": {
+      "title": "上次深搜留下了 {{count}} 处选中的内容",
+      "body": "那次深搜已经结束，但没有决定这些内容怎么办。留着它们会和平时的一起整理篇目；丢弃就找不回来了。",
+      "keep": "并入平时的",
+      "drop": "丢弃"
+    },
+    "target": {
+      "label": "这段内容写到哪一页",
+      "short": "指定页",
+      "hint": "指定后按此页整理篇目；不指定则由规划决定。",
+      "placeholder": "页面名",
+      "set": "就用这一页",
+      "clear": "不指定",
+      "round": "本次深搜",
+      "wiki": "已有笔记"
+    },
+    "remove": "移除这处选择",
+    "saveShort": "保存",
+    "saveOriginals": "保存这 {{count}} 处选择的原件",
+    "allStored": "选中的内容都已保存",
+    "saveTitle": "保存 {{count}} 份原件",
+    "saving": "正在保存…",
+    "saved": "已保存",
+    "missingSources": "这些页面保存不了，它们的正文已经不在本次会话里了：{{labels}}。请重新获取后再保存。",
+    "storeFailed": "原件保存失败",
+    "attention": "需要处理",
+    "selection": "选中的段落",
+    "plan": "要写的页面",
+    "compile": "写入结果",
+    "readFailed": "无法读取已选内容",
+    "saveFailed": "选中的内容保存失败"
+  },
+  "plan": {
+    "title": "要写的页面",
+    "intentLabel": "这次想做什么？",
+    "intentPlaceholder": "（可选）用一两个词说明目的",
+    "empty": {
+      "title": "还没有归纳出页面",
+      "body": "先选择段落，再查看要写的页面。"
+    },
+    "start": "归纳要写的页面",
+    "again": "重新归纳",
+    "working": "正在归纳要写哪些页面…",
+    "storing": "先把选中的内容保存下来…",
+    "needSelection": "尚未选择段落，请先在资料中选择需要的段落。",
+    "roundOnly": "这里只有上一次深搜留下的内容，属于那次深搜，无法在此规划。",
+    "roundHint": "以下页面均可由本次深搜所选的内容写出。勾选需要写入的页面；开始编译前不会写入任何内容。",
+    "roundIntent": "这次深搜的目的：{{intent}}",
+    "roundNoIntent": "这次深搜没有写目的。",
+    "unlisted": "本次新增",
+    "hint": "以下页面均可由所选内容写出。勾选需要写入的页面；开始编译前不会写入任何内容。",
+    "suggestion": {
+      "label": "建议",
+      "write": "看起来值得单独成页",
+      "mention": "看起来在别的页面里提一下就好",
+      "skip": "看起来可以先不写"
+    },
+    "action": {
+      "legend": "这一页怎么办",
+      "write": "写成页面",
+      "mention": "提一下",
+      "skip": "这次不写"
+    },
+    "relation": {
+      "prerequisite": "在前",
+      "used_by": "被用到",
+      "contrast": "对照",
+      "cooccurs": "相关",
+      "primary": "主页面"
+    },
+    "fromPages": "来自 {{count}} 处选中内容",
+    "sections": "写哪些部分",
+    "summary": {
+      "write": "{{count}} 页要写",
+      "mention": "{{count}} 处提一下",
+      "skip": "{{count}} 页不写"
+    },
+    "planProgress": "正在归纳页面…"
+  },
+  "compile": {
+    "title": "写出页面",
+    "track": {
+      "plan": "规划",
+      "compile": "编译"
+    },
+    "counts": "{{write}} 页要写 · {{mention}} 处提及",
+    "start": "写出 {{count}} 页",
+    "none": "尚未勾选要写的页面",
+    "working": "正在写出页面…",
+    "composing": "正在写出页面…",
+    "done": "写出了 {{count}} 页",
+    "files": "写入 {{count}} 个文件",
+    "failed": "{{count}} 处写入失败",
+    "runFailed": "这次编译没有完成。",
+    "someFailed": "有 {{count}} 个页面写入失败。",
+    "roundUnavailable": "无法读取上一次的编译结果。",
+    "retry": "重试",
+    "findings": "检查结果（{{count}}）",
+    "severity": {
+      "error": "错误",
+      "warning": "警告"
+    },
+    "finding": {
+      "more": "等 {{count}} 个",
+      "unknown": "这一页有一处需要留意的地方",
+      "slug.duplicate": "「{{slug}}」这个名字有两份文件在用：{{paths}}",
+      "fm.missing": "这一页开头缺了每页都会有的那段信息",
+      "fm.repairable": "这一页开头那段信息的格式不太对",
+      "body.short": "这一页的正文只有 {{chars}} 字",
+      "source.missing": "这一页的出处「{{locator}}」对应的原件已不存在",
+      "source.missing.many": "这一页有 {{count}} 处出处对应的原件已不存在：{{items}}",
+      "mark.clip_bad": "这一页有一节的出处标记认不出来",
+      "mark.clip_bad.many": "这一页有 {{count}} 节的出处标记认不出来",
+      "link.broken": "这一页链接到尚不存在的页面：{{target}}",
+      "link.broken.many": "这一页链接到 {{count}} 个尚不存在的页面：{{items}}",
+      "title.duplicate": "「{{title}}」这个标题有两页在用：{{paths}}",
+      "index.ghost": "目录里列了「{{slug}}」，但没有这一页",
+      "index.ghost.many": "目录里列了 {{count}} 个没有的页：{{items}}",
+      "index.missing": "这一页还没有进目录",
+      "layout.emptyKindFolder": "原始资料文件夹「{{folder}}」是空的，可以删掉",
+      "layout.legacyRaw": "原始资料仍在使用旧的结构，需要迁移后才能继续使用。"
+    },
+    "checksSummary": "检查：{{errors}} 个错误、{{warnings}} 个警告",
+    "clean": "没有发现问题。",
+    "lastRound": "上次写出",
+    "lastRoundIntent": "上次写出 · {{intent}}",
+    "truncated": "其余检查结果已截断。"
+  },
+  "graph": {
+    "view": {
+      "loading": "正在读取关系图…",
+      "failed": "无法读取关系图",
+      "failedHint": "本地服务可能未在运行；其他视图仍可使用。",
+      "empty": "还没有可看的关系",
+      "emptyHint": "写下几页笔记后，页面之间的链接会显示在这里。"
+    },
+    "sidebar": {
+      "loading": "正在读取…",
+      "pages": "篇笔记",
+      "links": "条链接",
+      "waiting": "篇被提到、还没写成"
+    },
+    "type": {
+      "note": "笔记",
+      "ghost": "还没写成"
+    },
+    "legend": {
+      "label": "页面种类",
+      "showAll": "全部显示"
+    },
+    "overlay": {
+      "add": "这次要新增的页",
+      "revise": "这次要改的页",
+      "link": "这次要加的链接",
+      "dropped": "已划掉，这次不动"
+    },
+    "resetView": "回到中央",
+    "selected": {
+      "degree": "连着 {{count}} 篇",
+      "ghost": "这一页尚未写成，无法打开。"
+    }
+  },
+  "deepSearch": {
+    "title": {
+      "chew": "Chew · 拾遗",
+      "explore": "Explore · 拓图"
+    },
+    "steps": "这次深搜的步骤",
+    "expand": "展开深搜面板",
+    "collapse": "收起深搜面板",
+    "intent": {
+      "label": "这次想找什么",
+      "placeholder": "（可选）用一两个词说明想找什么"
+    },
+    "start": {
+      "chew": "Chew 拾遗",
+      "explore": "Explore 拓图"
+    },
+    "seed": {
+      "node": "从选中的「{{title}}」出发。",
+      "none": "也可以在关系图中选择一个页面作为起点。"
+    },
+    "potential": {
+      "none": "所有资料都已选择过，没有可拾遗的内容。",
+      "some": "{{total}} 份资料里有 {{files}} 份还没选完（约 {{blocks}} 段）。"
+    },
+    "step": {
+      "range": "范围",
+      "pages": "篇目",
+      "material": "资料",
+      "plan": "规划",
+      "wrapUp": "结束"
+    },
+    "hint": {
+      "pages": "这些是这次想动的页面；确认后就去找资料。",
+      "gather": "先获取勾上的资料，再去资料里挑出要用的内容，然后回来整理篇目。",
+      "plan": "内容够了，可以开始整理篇目。",
+      "write": "在右边挑要写进去的页面；写完之后这次深搜就可以结束了。",
+      "none": "请按上方步骤继续。"
+    },
+    "cards": {
+      "empty": "本次还没有查找资料。",
+      "loose": "还没归到某一页",
+      "include": "收下这条资料",
+      "taken": "{{picked}}/{{total}}",
+      "fetch": "获取勾上的资料",
+      "jobTitle": "获取资料（{{count}} 条）",
+      "fetching": "正在获取资料…已取 {{done}}/{{total}}",
+      "fetched": "取回 {{count}} 条资料"
+    },
+    "pages": {
+      "find": "查看这次要改动的页面",
+      "again": "重新规划",
+      "take": "就按这些页来",
+      "add": "新增",
+      "revise": "改动",
+      "include": "这一页这次要动"
+    },
+    "blocks": {
+      "find": "找出还没选过的内容",
+      "again": "再找一遍",
+      "all": "全都选上",
+      "none": "全部取消",
+      "take": "收下选中的",
+      "empty": "还没有可用的内容。使用「找出还没选过的内容」查看剩余部分。",
+      "noFile": "未归入资料",
+      "noText": "这一段没有文字（可能是图或表）",
+      "include": "收下这一段",
+      "taken": "{{taken}}/{{total}}"
+    },
+    "gather": {
+      "go": "去挑要用的内容"
+    },
+    "plan": {
+      "start": "开始整理篇目",
+      "open": "打开待写篇目"
+    },
+    "end": {
+      "now": "结束这次深搜",
+      "drop": "结束，不要没写进去的内容",
+      "keep": "结束，留着没写进去的内容"
+    },
+    "startOver": "从头来",
+    "startOver.hint": "从第一步重新开始；本次已选的内容会被清除。",
+    "startOver.written": "已经写入笔记，不能再从头来了",
+    "summary": {
+      "pages": "要动的页 {{taken}}/{{total}}",
+      "blocks": "选中的内容 {{taken}}/{{total}}",
+      "cards": "找来的资料 {{taken}}/{{total}}"
+    },
+    "progress": {
+      "start": "正在开始一次深搜…",
+      "proposePages": "正在看这次该写哪些页面…",
+      "acceptPages": "正在定下要写的页面…",
+      "proposeBlocks": "正在找出还没选过的内容…",
+      "acceptBlocks": "正在收下这些内容…",
+      "plan": "正在整理这次要写的篇目…",
+      "ingest": "正在记下写出的页面…",
+      "end": "正在结束这次深搜…",
+      "restart": "正在从头来…",
+      "redo": "正在回到这一步…"
+    },
+    "omitted": {
+      "pages": "有 {{count}} 页没有列出来（一次最多看这么多）。",
+      "cards": "有 {{count}} 条资料没有列出来。",
+      "truncated": "有些内容没有全列出来：每份资料、每一类都有数量上限。"
+    },
+    "atStep": "现在在「{{step}}」这一步",
+    "rewindHint": "回到「{{step}}」；此后完成的步骤会被清除。",
+    "ended": "这次深搜已经结束",
+    "cannotNow": "这一步现在做不了；这次深搜的状态可能已经变了",
+    "loadFailed": "无法读取本次深搜的状态",
+    "reason": {
+      "seed": "本次深搜的起页",
+      "unclipped-survey": "这份来源里还没有选过的内容，先做一页通览",
+      "dangling-link": "{{from}} 链到「{{to}}」，而那一页还没有",
+      "thin-page": "{{page}} 的正文只有 {{chars}} 字，低于 {{floor}}"
+    }
+  },
+  "chat": {
+    "new": "新建会话",
+    "loading": "正在读取会话…",
+    "empty": "还没有会话。",
+    "untitled": "新会话",
+    "turns": "{{count}} 条消息",
+    "remove": "删除这个会话",
+    "search": "搜索会话",
+    "searchEmpty": "没有匹配的会话。",
+    "rename": "重命名这个会话",
+    "renameHint": "双击标题可重命名。",
+    "renameFailed": "会话重命名失败",
+    "delete": {
+      "title": "删除会话「{{title}}」？",
+      "body": "这个会话里的提问和回答会一起删掉，不能恢复。",
+      "submit": "删除会话"
+    },
+    "listFailed": "无法读取会话列表",
+    "openFailed": "无法打开这个会话",
+    "createFailed": "新建会话失败",
+    "deleteFailed": "删除会话失败",
+    "askFailed": "本次提问未得到回答",
+    "askPlaceholder": "提问，或让助手去查找、去写作",
+    "askHint": "回车发送；Shift + 回车换行。",
+    "tooLong": "太长了，请控制在 {{max}} 字以内",
+    "send": "发送",
+    "stop": "停止生成",
+    "stopped": "已停止等待。正在进行的模型调用可能仍会完成，此后不再继续。",
+    "answered": "已作答",
+    "remark": {
+      "save": "存为备注",
+      "saving": "正在保存…",
+      "saved": "已存为备注",
+      "open": "打开",
+      "hint": "把这段回答存为「{{page}}」的备注",
+      "needPage": "先打开一页：备注要写在页面上",
+      "saveFailed": "这段回答未能保存为备注"
+    },
+    "step": {
+      "think": "思考",
+      "tool": "查找",
+      "answer": "回答"
+    },
+    "limits": {
+      "title": "对话参数",
+      "unsaved": "未保存",
+      "intro": "这些数值决定每次提问带入多少内容、助手可读取多少内容。修改后需保存才生效。",
+      "loading": "正在读取…",
+      "save": "保存",
+      "saving": "保存中…",
+      "discard": "放弃改动",
+      "ready": "可以保存",
+      "range": "请填 {{min}}–{{max}}",
+      "loadFailed": "无法读取这些参数",
+      "saveFailed": "保存失败",
+      "group": {
+        "conversation": "这一场对话",
+        "context": "交给助手的项目背景",
+        "reading": "打开笔记的预算"
+      },
+      "unit": {
+        "messages": "条",
+        "chars": "字",
+        "conversations": "个",
+        "pages": "页",
+        "rounds": "轮"
+      },
+      "historyLimit": "每次带上的历史消息",
+      "historyLimitHint": "只带入最近的消息，更早的不进入提示。",
+      "maxMessages": "一个会话最多存",
+      "maxContentChars": "一次提问最长",
+      "maxTitleChars": "会话标题最长",
+      "maxConversations": "最多保留会话",
+      "maxBriefChars": "项目简介取前",
+      "maxBriefCharsHint": "0 表示不带上项目简介。",
+      "maxIndexChars": "笔记索引取前",
+      "contextHint": "从项目文件开头截取的字符数，随每次提问交给助手。",
+      "maxOpenPages": "一次最多打开",
+      "maxPageChars": "单页最多读",
+      "maxPagesChars": "合计最多读",
+      "maxPagesCharsHint": "单次回答可读取的正文总量上限。",
+      "maxToolRounds": "最多查几轮",
+      "maxToolRoundsHint": "助手最多往返查找的轮数。"
+    },
+    "activity": {
+      "think": "正在思考",
+      "tool": "正在查找",
+      "answer": "正在作答"
+    },
+    "view": {
+      "empty": "还没有会话",
+      "emptyHint": "在左侧新建会话即可开始提问。",
+      "firstAsk": "在下方提问，回答会显示在这里。"
+    },
+    "looked": {
+      "toSources": "加入待获取",
+      "missing": "没找到",
+      "notSource": "只是结果，还不是资料",
+      "failed": "没成功",
+      "title": "回答查看过的内容",
+      "reading": "正在读"
+    },
+    "gate": {
+      "title": "写页",
+      "waitingTitle": "还没有写入任何内容",
+      "waitingBody": "写入以计划板上勾选的页面为依据；助手只负责建议，决定由你做出。",
+      "nothingBody": "助手想整理篇目，但还没有可供整理的选中内容。",
+      "wroteTitle": "已按你勾选的页写入",
+      "wroteBody": "你确认的页面已写入笔记；写入的文件列在右侧面板。",
+      "openSources": "去选段落",
+      "goCompile": "去编译",
+      "seeWritten": "看写入结果"
+    }
+  },
+  "browse": {
+    "back": "后退",
+    "forward": "前进",
+    "reload": "刷新",
+    "newTab": "新建标签页",
+    "newTabTitle": "新标签页",
+    "closeTab": "关闭这个标签页",
+    "address": "网址",
+    "addressPlaceholder": "输入网址",
+    "notAnAddress": "这不像网址。只支持 http 和 https。",
+    "actionFailed": "内置浏览器没有响应",
+    "unavailable": "内置浏览器只在桌面应用里可用",
+    "unavailableHint": "当前为浏览器版：网页会在新标签页中打开，登录状态不会带入。桌面版的浏览模块可以直接登录，并将页面收入资料。",
+    "otherPane": "内置浏览器在另一栏显示",
+    "otherPaneHint": "同一时刻只显示一个页面区域；切换到另一栏后再返回即可。",
+    "connecting": "正在连接内置浏览器…",
+    "noPage": "还没有打开网页",
+    "noPageHint": "在上方输入网址，或从资料中打开原页。",
+    "tabs": {
+      "empty": "还没有标签页"
+    },
+    "search": {
+      "label": "搜索什么",
+      "placeholder": "输入搜索词",
+      "run": "搜索",
+      "running": "正在搜索网页…",
+      "done": "找到 {{count}} 条结果",
+      "failed": "这次没搜到",
+      "empty": "在上方搜索，结果会列在这里；勾选后获取。",
+      "none": "本次没有结果，请更换关键词后重试。",
+      "hint": "最多选择 {{max}} 条；获取后收入资料。",
+      "atLimit": "最多选择 {{max}} 条；请先取消一条再选。"
+    },
+    "fetch": {
+      "title": "获取 {{count}} 个网页",
+      "running": "正在获取选中的网页…",
+      "run": "获取已选的 {{count}} 条",
+      "failed": "这些网页没获取成功",
+      "nothing": "这几条都无法读取。",
+      "landed": "已加入 {{count}} 份资料。",
+      "goSelect": "去资料里选段"
+    },
+    "signal": {
+      "signIn": "这个页面还没登录，先登录再收入",
+      "forbidden": "站点拒绝了访问（403）",
+      "rateLimited": "站点限流了（429），过一会儿再收入",
+      "signedIn": "这个站点已登录（{{count}} 项登录信息）",
+      "anonymous": "这个站点还没有登录信息"
+    },
+    "keep": {
+      "run": "收入当前页",
+      "hint": "将当前页面收入资料，保留当前显示的内容。",
+      "running": "正在收入这一页…",
+      "blocked": "这一页还没登录，登录后看见正文再收入",
+      "failed": "这一页收入失败",
+      "nothing": "这一页没有可收入的内容。"
+    }
+  },
+  "attention": {
+    "hint": "需要你决定的事项，不会自动处理。",
+    "readFailed": "无法读取待处理事项",
+    "updateFailed": "这一项更新失败",
+    "revisions": "资料变了",
+    "recovery": "编译没做完",
+    "check": "检查发现",
+    "recheck": "重新检查",
+    "more": "还有 {{count}} 项",
+    "kind": {
+      "raw_modified": "这份资料改过了",
+      "raw_created": "新资料，还没有写成页面",
+      "raw_deleted": "这份资料删掉了",
+      "clips_changed": "选中的段落变了",
+      "locator_broken": "这些段落已不在原文中",
+      "output_missing": "它写出的页面不见了"
+    },
+    "planAgain": "重新归纳",
+    "pickAgain": "去选段落",
+    "ignore": "先不管",
+    "acknowledge": "清楚了",
+    "pages": "· {{count}} 页",
+    "resume": "继续编译",
+    "discard": "丢弃"
+  },
+  "docs": {
+    "group": {
+      "wiki": "笔记",
+      "sources": "原始资料"
+    },
+    "page": {
+      "edit": {
+        "open": "改正文",
+        "title": "改「{{name}}」的正文",
+        "body": "只有正文可以修改；这一页的来源与引文指向保持不变。",
+        "frontmatter": "应用维护的部分（不能改）",
+        "placeholder": "正文",
+        "loadFailed": "无法读取这一页",
+        "failed": "这一页保存失败",
+        "diffTitle": "会改动：新增 {{added}} 处，删去 {{removed}} 处",
+        "unchanged": "没有改动",
+        "saved": "内容没有变化，无需保存。",
+        "check": "查看改动内容",
+        "confirm": "就这样保存",
+        "save": "保存"
+      },
+      "rename": {
+        "open": "改名或挪地方",
+        "title": "给这一页改名",
+        "body": "指向这一页的链接会一并更新，这一页上的备注也会一并迁移。",
+        "label": "页面名",
+        "placeholder": "可包含文件夹，例如 concepts/熵",
+        "failed": "这一页重命名失败",
+        "submit": "改名"
+      },
+      "history": {
+        "open": "以前的版本",
+        "title": "「{{name}}」的版本",
+        "body": "每次写入都会留下被换掉的正文。还原也一样，现在这一版会先留下来。",
+        "loading": "正在读版本…",
+        "empty": "还没有以前的版本",
+        "unknownTime": "没有记下时间",
+        "current": "现在",
+        "byPerson": "你改的",
+        "byApp": "应用写的",
+        "restore": "还原这一版",
+        "readFailed": "无法读取以前的版本",
+        "failed": "这一版还原失败"
+      }
+    },
+    "maintenance": {
+      "fill": "补齐结构",
+      "fillTitle": "补齐项目结构",
+      "fillBody": "为这个项目补齐缺失的目录和空白页。已有内容不会被覆盖，也不会删除任何东西。",
+      "fillSubmit": "补齐",
+      "reset": "重置笔记库",
+      "resetTitle": "重置笔记库",
+      "resetBody": "将清空这个项目里写出的所有笔记页，并恢复为空白。已保存的资料原件会保留。",
+      "resetCounting": "正在看会删掉哪些…",
+      "resetCount": "将删除 {{count}} 个笔记页。",
+      "resetKept": "清空前的笔记页会保留 30 天，可以在「最近删除」里恢复。",
+      "resetConfirmLabel": "输入项目名称 {{name}} 以确认",
+      "resetSubmit": "清空笔记页",
+      "failed": "这一步未完成"
+    },
+    "delete": {
+      "row": "删除「{{name}}」",
+      "title": "删除「{{name}}」？",
+      "body": "这份文件会被移入最近删除，30 天内可以恢复。",
+      "cited": "已有 {{count}} 篇笔记引用它，删除后那些引用会失效。",
+      "backlinks": "有 {{count}} 处链接指向这一页，删除后它们就指空了。",
+      "notes": "这一页上有 {{count}} 条备注，将一并删除。",
+      "dropped": "同时移除了 {{count}} 处选段。",
+      "submit": "删除",
+      "failed": "这个文件删除失败"
+    },
+    "citations": {
+      "summary": "这一页引用了 {{count}} 份资料",
+      "missing": "其中 {{count}} 份已不在项目里",
+      "hintBeside": "Ctrl/⌘ + 点击可开在旁边",
+      "passages": "{{count}} 段",
+      "gone": "已不在项目里",
+      "openBeside": "在旁边打开「{{title}}」",
+      "openSectionSource": "在旁边打开这一节的来源",
+      "noteCount": "{{count}} 篇笔记引用了这份资料",
+      "noteList": "引用这份资料的笔记",
+      "rail": "引用这份资料的笔记",
+      "markLabel": "第 {{index}} 处引用：{{title}}",
+      "tookPassages": "取用了 {{count}} 段",
+      "openNote": "打开这篇笔记"
+    },
+    "tree": {
+      "view": {
+        "label": "列表",
+        "files": "文件",
+        "knowledge": "笔记库"
+      },
+      "loading": "正在读取文件列表…",
+      "failed": "无法读取文件列表",
+      "failedHint": "本地服务可能未在运行；其他视图仍可使用。",
+      "empty": "还没有文件",
+      "emptyHint": "加入资料并编译后，写出的页面会显示在这里。"
+    },
+    "knowledge": {
+      "notes": "笔记",
+      "summaries": "资料摘要",
+      "empty": "笔记库里还没有页面",
+      "emptyHint": "整理并编译所选内容后，写出的页面会显示在这里。"
+    },
+    "view": {
+      "empty": "还没有打开文件",
+      "emptyHint": "在左侧选择文件即可阅读。",
+      "pageEmpty": "这一页还没有正文。",
+      "opening": "正在打开…",
+      "loadFailed": "无法读取这个项目",
+      "loadFailedHint": "本地服务可能未在运行。",
+      "fileFailed": "这个文件无法打开",
+      "missingPage": "这一页还没有写成",
+      "missingPageNamed": "「{{page}}」这一页尚未写成，无法打开。"
+    },
+    "original": {
+      "unreadable": "这份原件读不出来。",
+      "imageAlt": "原件图片",
+      "openSource": "打开原页",
+      "markedCount": "这里标出了 {{count}} 段已选内容",
+      "markedPage": "这一页在你的选段里"
+    },
+    "kind": {
+      "web": "网页",
+      "pdf": "PDF",
+      "office": "文档",
+      "media": "图片",
+      "other": "其他"
+    },
+    "nav": {
+      "closeBeside": "关闭旁边这一页"
+    }
+  },
+  "remark": {
+    "badge": "备注",
+    "unplaced": "{{count}} 条备注还没放进正文",
+    "loadFailed": "无法读取这一页的备注",
+    "open": "打开这条备注",
+    "openPage": "这一页的备注",
+    "page": {
+      "label": "页面",
+      "placeholder": "选择页面"
+    },
+    "loading": "正在读取备注",
+    "new": "新建备注",
+    "writing": "正在写备注",
+    "edit": "编辑",
+    "delete": "删除",
+    "deleteTitle": "删掉这条备注？",
+    "deleteBody": "删掉之后找不回来。",
+    "deleteSubmit": "删掉",
+    "deleteFailed": "删不掉这条备注",
+    "cancel": "取消",
+    "done": "完成",
+    "saving": "正在保存",
+    "saveFailed": "无法保存这条备注",
+    "noProject": "请先选择项目，备注才能保存。",
+    "autosave": "内容会自动保存；若清空后离开，这条备注会被删除。",
+    "bodyLabel": "备注内容",
+    "bodyPlaceholder": "写下阅读这一段时的想法",
+    "emptyDraft": "还没写内容",
+    "pick": {
+      "title": "选择一条备注",
+      "body": "在左侧选择一条备注，或新建一条。"
+    },
+    "pickPage": {
+      "title": "先选一页",
+      "body": "选择一页即可查看它的备注；阅读文档时点击一条备注也会来到这里。"
+    },
+    "empty": {
+      "title": "这一页还没有备注",
+      "body": "新建一条，写下阅读到这里时的想法。"
+    },
+    "place": {
+      "label": "放在哪里",
+      "preamble": "开头",
+      "end": "结尾",
+      "none": "不放进正文",
+      "unplaced": "还没放进正文",
+      "unknown": "位置不确定",
+      "stale": "这一页上已找不到当前的位置。",
+      "unreadable": "无法读取这一页的内容，只能放在开头或结尾。"
+    },
+    "orphans": {
+      "title": "页已不在（{{count}} 条）",
+      "body": "这些备注对应的页面已不在项目中，暂存于此。",
+      "loadFailed": "无法读取项目中的备注"
+    }
+  },
+  "clips": {
+    "untitled": "未命名选段",
+    "range": {
+      "empty": "还没有选中内容",
+      "single": "{{id}}",
+      "span": "{{from}}–{{to}} · {{count}} 段"
+    }
+  },
+  "fidelity": {
+    "ok": "可用",
+    "low": "只读出一部分",
+    "failed": "读不出内容"
+  },
+  "reason": {
+    "too_short": "正文太短了",
+    "http_unauthorized": "需要登录（HTTP 401）",
+    "http_forbidden": "站点拒绝了访问（HTTP 403）",
+    "http_rate_limited": "请求太频繁了（HTTP 429）",
+    "http_error": "请求失败",
+    "skipped_video": "音视频还读不了",
+    "empty": "没有读到正文",
+    "truncated": "页面太大，只读到了一部分",
+    "unsupported_url": "不是 http(s) 链接",
+    "unsupported_media": "不是网页",
+    "missing_images": "部分图片未能保存",
+    "invalid_pdf": "这份 PDF 无法打开",
+    "no_text_layer": "没有文字层（扫描件需要先做 OCR）",
+    "pdf_not_html": "PDF 不能作为网页读取，请使用「获取」。",
+    "office_not_html": "Office 文件不能作为网页读取，请使用「获取」，或直接导入文件。",
+    "image_not_html": "图片不能作为网页读取，请使用「获取」，或直接导入文件。",
+    "adapter_not_ready": "这种文件暂时读不了",
+    "unsupported_kind": "这种文件还不支持",
+    "invalid_payload": "文件读不出来",
+    "invalid_office": "这份文档无法打开",
+    "invalid_image": "这份图片无法打开",
+    "empty_text": "没有读到可以写入页面的文字"
+  },
+  "intake": {
+    "local": "本地文件",
+    "guest": "浏览",
+    "search": "搜索结果",
+    "url": "链接",
+    "other": "资料"
+  },
+  "captureHint": {
+    "needsSignIn": {
+      "guest": "这个页面需要登录。请在「浏览」里打开并登录，再从那页收进来。",
+      "plain": "这个页面需要登录，只有桌面版能做到。请用桌面版打开、登录，再把这页收进来。"
+    },
+    "blocked": {
+      "guest": "站点拦住了自动请求（反爬或安全验证），不是读取器坏了。请在「浏览」里打开，再从那页收进来。",
+      "plain": "站点拦住了自动请求（反爬或安全验证）。用桌面版可以在「浏览」里打开，再把这页收进来。"
+    },
+    "rateLimited": {
+      "guest": "请求太频繁了。过一会儿再试，或在「浏览」里打开原页。",
+      "plain": "请求太频繁了。过一会儿再试，或打开原页。"
+    },
+    "invalidPdf": "这份 PDF 无法打开。可以换一份文件，或打开原页。",
+    "pdfNotHtml": "PDF 不能从浏览器收入，请使用「获取」。",
+    "officeNotHtml": "Word 或 PowerPoint 文件不能从浏览器收入。请使用「获取」，或直接导入文件。",
+    "invalidOffice": "这份文档无法打开。请使用 .docx 或 .pptx，不要使用旧版 .doc。",
+    "invalidImage": "这份图片无法打开。支持 PNG、JPEG、GIF、WebP 与 SVG。",
+    "imageNotHtml": "图片不能从浏览器收入。请使用「获取」，或直接导入文件。",
+    "notSupportedYet": "暂不支持音视频。卡片会保留在这里，便于收入其链接。",
+    "unknownFormat": "这种文件还不支持。目前支持 HTML、PDF、Word、PowerPoint 和图片。",
+    "unreadable": "文件读不出来。请换一份再试。",
+    "generic": {
+      "guest": "这一页没有收入。可打开原页，或在「浏览」中登录后重试。",
+      "plain": "这一页没有收入。可打开原页，或用桌面版登录后重试。"
+    },
+    "tooShort": {
+      "guest": "这一页的正文太少。可能还没加载完，或有要先点掉的提示；等页面完全打开再收一次。",
+      "plain": "这一页的正文太少，可能没有正文，或需要登录后才看得到。"
+    }
+  },
+  "placeholder": {
+    "title": "还没有开放",
+    "body": "这一部分还在完善中，可以暂时使用其他视图。"
+  },
+  "sources": {
+    "empty": {
+      "title": "还没有资料",
+      "body": "在上方粘贴链接或拖入文件。加入的资料会保留在这里，供你挑选用于页面的段落。"
+    },
+    "notInList": "这份资料不在当前列表中，因此无法查看。它可能来自上一次会话，也可能尚未加入；重新获取即可看到。",
+    "dismissNotice": "关闭",
+    "paste": {
+      "label": "用链接添加",
+      "placeholder": "https://…",
+      "submit": "获取",
+      "notHttp": "这里仅支持 http 或 https 链接；文件可直接拖入。"
+    },
+    "local": {
+      "choose": "选择文件",
+      "dropHere": "把文件拖到这里即可加入",
+      "hint": "HTML、PDF、Word、PowerPoint 或图片",
+      "tooMany": "一次最多 {{count}} 个文件。",
+      "tooLarge": "「{{name}}」超过 20 MB。",
+      "unreadable": "「{{name}}」无法读取。"
+    },
+    "remove": {
+      "one": "移除",
+      "selected": "移除选中的 {{count}} 条",
+      "title": "移除 {{count}} 条资料？",
+      "body": "这些资料会从工作台移除，已经保存的原件仍然留在项目里。",
+      "passages": "从这些资料挑出的 {{count}} 处选段也会一起移除。",
+      "submit": "移除"
+    },
+    "fetchFailed": "这个链接获取失败",
+    "localFailed": "这些文件添加失败",
+    "job": {
+      "fetching": "正在获取这个页面…",
+      "reading": "正在读取…",
+      "added": "已加入 {{count}} 条",
+      "filesCount": "{{count}} 个文件"
+    },
+    "saved": "已保存",
+    "restored": {
+      "opening": "正在读取原件…"
+    },
+    "fallback": {
+      "readd": {
+        "title": "这份文件需要重新加进来",
+        "body": "这份文件从本机加入，没有可获取的网址。重新加入同一个文件即可恢复。"
+      }
+    },
+    "refetch": "重新获取",
+    "openInBrowse": "打开原页",
+    "preview": {
+      "noText": "没有读出可用的文字。",
+      "needFetch": {
+        "title": "这条资料需要重新获取",
+        "body": "页面已保留，但正文未保存在浏览器中，因此暂时无法查看。重新获取后即可阅读并选择段落。",
+        "inBrowser": "浏览器还开着这一页，可以直接取过来，不用再登录一次。"
+      }
+    },
+    "picker": {
+      "selectedCount": "已选 {{count}} 段",
+      "dragHint": "在需要使用的段落上拖出选区。",
+      "selectAll": "全选",
+      "addSelected": "加入选集",
+      "noBlocks": "这份资料没有读出内容，暂时没有可选的。",
+      "noOriginal": "无法在此查看原件。",
+      "openingPdf": "正在打开 PDF…",
+      "pdfFailed": "这份 PDF 无法显示。",
+      "pageOf": "第 {{page}} 页 / 共 {{count}} 页",
+      "previousPage": "上一页",
+      "nextPage": "下一页"
+    },
+    "takeFromBrowser": "从浏览器取这一页"
+  },
+  "common": {
+    "close": "关闭",
+    "cancel": "取消",
+    "retry": "再试一次",
+    "listSeparator": "、"
+  },
+  "settings": {
+    "title": "设置",
+    "hint": "模型、搜索和项目说明",
+    "close": "关闭设置",
+    "version": "版本 {{version}}",
+    "save": "保存",
+    "saving": "正在保存…",
+    "saved": "已保存",
+    "saveFailed": "保存失败",
+    "test": "测试连接",
+    "testing": "正在测试…",
+    "show": "显示",
+    "hide": "隐藏",
+    "clearKey": "清除密钥",
+    "keepKey": "保留密钥",
+    "locked": "此项在应用启动时确定，无法在此修改。",
+    "unreadable": "此项无法读取，暂按常用值显示；保存后将写入有效值。",
+    "loading": "正在读取…",
+    "loadFailed": "设置读取失败。",
+    "scope": {
+      "install": "这台电脑",
+      "project": "当前项目",
+      "window": "这个窗口"
+    },
+    "nav": {
+      "model": "模型",
+      "search": "搜索",
+      "project": "项目说明",
+      "diagnostics": "诊断",
+      "appearance": "外观"
+    },
+    "model": {
+      "title": "模型",
+      "intro": "问答、整理与写作均使用这一连接；保存后立即生效，所有项目共用。",
+      "baseUrl": "服务地址",
+      "baseUrlHint": "需以 http:// 或 https:// 开头。",
+      "apiKey": "密钥",
+      "apiKeyKeep": "已保存。不填写则保持不变。",
+      "apiKeyMissing": "尚未填写密钥。不校验密钥的本地服务可填写任意占位值。",
+      "apiKeyClearing": "保存后将清除已保存的密钥。",
+      "model": "模型名",
+      "modelHint": "服务商使用的模型标识，例如 gpt-4o-mini。",
+      "temperature": "温度",
+      "temperatureHint": "数值越低越稳定，越高越发散；常用值为 0.1。",
+      "maxTokens": "单次回答上限",
+      "maxTokensHint": "单次回答的最大长度。",
+      "timeout": "等待上限（秒）",
+      "timeoutHint": "超过此时间即停止等待本次回答。",
+      "testOk": "连接成功。",
+      "testFailed": "连接测试没有成功。",
+      "groupConnection": "连接",
+      "groupGeneration": "生成"
+    },
+    "search": {
+      "title": "网页搜索",
+      "intro": "用于搜索网页并将结果收入资料。未配置时其他功能不受影响，仅无法在此搜索。",
+      "provider": "搜索服务",
+      "provider_none": "不使用",
+      "provider_brave": "Brave",
+      "provider_serper": "Serper",
+      "groupDetails": "连接",
+      "apiKey": "密钥",
+      "apiKeyKeep": "已保存。不填写则保持不变。",
+      "apiKeyMissing": "尚未填写密钥。",
+      "apiKeyClearing": "保存后将清除已保存的密钥。",
+      "country": "地区",
+      "countryHint": "两位字母的地区代码，例如 CN；不填写则使用服务默认值。",
+      "lang": "搜索语言",
+      "langHint": "搜索语言代码，例如 zh-hans 或 en；不填写则使用服务默认值。",
+      "uiLang": "结果语言",
+      "uiLangHint": "结果语言代码，例如 zh-CN；不填写则使用服务默认值。",
+      "timeout": "等待上限（秒）",
+      "extractMedia": "留下资料里的图片",
+      "extractMediaHint": "收入网页或 PDF 时，同时保存其中的图片。",
+      "test": "试搜一次",
+      "testOk": "搜到了 {{count}} 条。",
+      "testNone": "连接是通的，这次没有结果。",
+      "testFailed": "这次试搜没有成功。"
+    },
+    "project": {
+      "title": "这个项目在写什么",
+      "intro": "整理与写作时模型会读取这段说明；每个项目各自维护。",
+      "placeholder": "这个笔记库要回答什么、用什么语言、什么不该写进去。",
+      "usingDefault": "当前使用内置说明。填写并保存后，将改用你写的内容。",
+      "legacy": "这里保留着一份旧版说明，保存后将替换为你现在填写的内容。",
+      "startFromDefault": "从内置说明开始改",
+      "clear": "改回内置说明",
+      "noProject": "请先创建项目，再编写说明。",
+      "loadFailed": "说明没有读出来。",
+      "manage": "新建或删除项目，请关闭设置后在侧栏操作。",
+      "switchBlocked": "先保存或放弃这段说明，再换项目。",
+      "chatLimits": "单次问答可读取的内容量，可在问答侧栏底部调整。",
+      "openChat": "去问答",
+      "tooLong": "说明不能超过 {{limit}} 个字符。"
+    },
+    "appearance": {
+      "title": "外观",
+      "intro": "仅影响当前窗口，与项目设置无关。",
+      "theme": "主题",
+      "language": "界面语言",
+      "fontSize": "文字大小",
+      "fontSizeHint": "整个界面的文字会一并变化。",
+      "smaller": "缩小文字",
+      "larger": "放大文字"
+    },
+    "diagnostics": {
+      "title": "诊断",
+      "intro": "当前这份应用的运行状况。遇到异常时，可先在此确认，再决定是否重启。",
+      "loading": "正在读取…",
+      "loadFailed": "这些信息没有读出来。",
+      "versionLabel": "版本",
+      "uptimeLabel": "已经运行",
+      "addressLabel": "服务地址",
+      "addressNone": "未记录地址；从命令行启动时不会记录。",
+      "restartsLabel": "自动重启",
+      "supervised": "已开启：服务停止后会自动重启。",
+      "unsupervised": "未开启：服务停止后需手动重启。",
+      "restartsCount": "已经重来 {{count}} 次",
+      "lastExit": "上次意外停止在 {{when}}，代码 {{code}}",
+      "projectsLabel": "项目",
+      "projectsActive": "{{count}} 个，当前是「{{name}}」",
+      "projectsNone": "{{count}} 个",
+      "dataLabel": "笔记放在",
+      "logLabel": "日志",
+      "logNone": "此安装不单独保留日志。",
+      "logOpen": "看最近的日志",
+      "logClose": "收起日志",
+      "logEmpty": "日志目前为空。",
+      "logFailed": "日志没有读出来。",
+      "copyPath": "复制位置",
+      "copied": "已复制",
+      "copyFailed": "复制失败，请手动选择后复制。",
+      "refresh": "重新读取",
+      "warnTitle": "以下事项建议先处理",
+      "warn": {
+        "noProject": "尚未创建项目。可在侧栏新建项目，或导入已有文件夹。",
+        "noModel": "尚未配置模型服务，问答与整理功能不可用。",
+        "noLog": "已开启自动重启，但未找到服务日志。",
+        "goModel": "去配置模型"
+      },
+      "check": {
+        "button": "检查更新",
+        "checking": "正在检查…",
+        "unconfigured": "此安装未配置更新来源。当前版本为 {{version}}。",
+        "available": "可用新版本 {{latest}}，当前为 {{current}}。",
+        "upToDate": "当前已是最新版本（{{version}}）。",
+        "download": "打开下载页",
+        "failed": "检查更新未完成。"
+      },
+      "uptime": {
+        "seconds": "{{count}} 秒",
+        "minutes": "{{count}} 分钟",
+        "hours": "{{count}} 小时 {{minutes}} 分",
+        "days": "{{count}} 天 {{hours}} 小时"
+      }
+    },
+    "leave": {
+      "title": "还有没保存的修改",
+      "body": "离开设置将丢弃这些修改。",
+      "stay": "继续编辑",
+      "discard": "放弃修改"
+    },
+    "invalid": {
+      "baseUrl": "服务地址要以 http:// 或 https:// 开头。",
+      "model": "请填写模型名。",
+      "temperature": "温度要在 0 到 2 之间。",
+      "maxTokens": "单次回答上限需为 1 到 128000 之间的整数。",
+      "timeout": "等待上限超出允许范围。",
+      "country": "地区需为两位字母。",
+      "lang": "搜索语言格式不正确。",
+      "uiLang": "结果语言格式不正确。",
+      "secret": "密钥不能包含换行。"
+    }
+  },
+  "error": {
+    "noResult": "作业已结束，但未返回结果。",
+    "noStream": "服务端没有返回进度流",
+    "offline": "无法连接本地服务，它可能未在运行。",
+    "streamStalled": "与服务的连接已中断，服务可能已重启。请重试。",
+    "streamStopped": "已停止等待。正在进行的那次模型调用可能还会跑完，之后就会停下。",
+    "loadProjects": "无法读取项目列表",
+    "switchProject": "无法切换到那个项目",
+    "createProject": "创建项目失败",
+    "openFolder": "无法打开这个文件夹",
+    "deleteProject": "删除项目失败",
+    "code": {
+      "plan": {
+        "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
+      },
+      "compile": {
+        "nothingSelected": "尚未勾选要写的内容，无法编译。请先勾选要写的页面。",
+        "needPlan": "本次尚未整理篇目。请先整理篇目，再编译。",
+        "notInPlan": "这些页面不在这次的篇目里，写不了：{{pages}}",
+        "nothingTicked": "至少要勾选一页要写的内容。"
+      },
+      "search": {
+        "none": "当前没有正在进行的深搜。",
+        "running": "已有一次深搜正在进行，请先结束。",
+        "noMode": "这次深搜还没有选定方式，请先选「Chew 拾遗」或「Explore 拓图」。",
+        "otherMode": "这一步仅适用于另一种方式，本次深搜不包含。",
+        "wrongStep": "尚未到达这一步，请先依次完成前面的步骤。",
+        "pastStepsOnly": "只能回到当前步骤或更早的步骤。",
+        "cannotUndo": "这一步已经写进笔记了，不能靠重做撤掉。",
+        "alreadyWritten": "这次深搜已经写进笔记了，不能从头再来。",
+        "noCollections": "这次深搜还没有可整理篇目的选段。",
+        "nothingLeft": "没有尚未选择的内容可供拾遗。",
+        "chewFirst": "本次为拾遗，先读尚未选择的内容，不会先列出页面。",
+        "needPage": "至少要保留一页才能继续。",
+        "nothingToPick": "还没有可以勾选的内容。",
+        "nothingPicked": "请先勾选至少一段内容。",
+        "cannotCollect": "勾选的内容无法归为同一选段，暂时无法写入。",
+        "noAcceptedBlocks": "这次深搜还没有收下的内容。",
+        "unsettled": "还有 {{count}} 处选段没写进笔记。结束前请选择并入平时的选段，或丢弃。",
+        "hasCollections": "这次深搜已经有选段了。要结束请用「结束这次深搜」。",
+        "planStarted": "这次已经在整理篇目了。要结束请用「结束这次深搜」。"
+      },
+      "source": {
+        "missingOriginal": "这些选择还没有存下原件，暂时用不了：{{collections}}"
+      },
+      "file": {
+        "missing": "这份文件不存在，可能已被删除。",
+        "protected": "这是自动维护的文件，不能在此修改。",
+        "notOriginal": "这里只能打开原件（PDF 或图片）。"
+      },
+      "page": {
+        "missing": "这一页已不在项目中，可能已被删除。",
+        "notAPage": "这不是这个项目里的一篇笔记。",
+        "changed": "这一页在你打开后又被写入过，请重新打开后再修改。",
+        "exists": "已经有同名的页面了，换一个名字。",
+        "nameEmpty": "页面必须有名称。",
+        "nameNotAllowed": "这个页面名不可用，请更换。",
+        "bodyStartsFence": "正文不能以一行短横线开头，否则会被识别为这一页的设置。",
+        "versionMissing": "这个版本已经不在了。"
+      },
+      "trash": {
+        "unknown": "这项内容已不在最近删除中。",
+        "missing": "要删除的内容已不存在。",
+        "damaged": "这项内容的文件不完整，无法恢复。",
+        "outside": "这项内容指向项目之外，无法恢复。",
+        "projectMissing": "这个项目已被删除。请先恢复项目，再恢复它的笔记库。",
+        "unknownKind": "无法识别这项内容的类型，不能恢复。"
+      },
+      "note": {
+        "missing": "这条备注已不存在。",
+        "empty": "备注不能为空。",
+        "notOnPage": "备注只能写在页面里。",
+        "duplicateName": "已有同名备注。",
+        "pageMissing": "这一页不在了，写不了备注。"
+      },
+      "project": {
+        "confirm": "请输入项目名以确认。",
+        "exists": "已存在名为「{{name}}」的项目。",
+        "collidesWithFile": "这个名字已被一个文件使用，请更换。",
+        "unknown": "不存在名为「{{name}}」的项目。",
+        "notADirectory": "这里不是一个项目。",
+        "notValid": "「{{name}}」还不是完整的项目，无法打开。",
+        "snapshotFailed": "重置前未能保存一份笔记库副本，因此没有清空。请确认磁盘空间和权限后重试。",
+        "migrateCollisions": "这个项目暂时不能迁移：有 {{count}} 个名字会落到同一个文件（{{items}}）。请先重命名或合并。",
+        "name": {
+          "empty": "项目名不能是空的。",
+          "tooLong": "项目名最多 64 个字符。",
+          "notAllowed": "这个项目名不能用，请换一个。",
+          "badChars": "项目名里不能有斜杠、冒号、星号这类符号，结尾也不能是空格或点。",
+          "device": "这个名称会被系统保留，请更换。",
+          "taken": "「{{name}}」这个名称已被占用，请更换。",
+          "linked": "「{{name}}」这个名字已经给另一个文件夹用了，请换一个。"
+        },
+        "folder": {
+          "empty": "还没有选文件夹。",
+          "missing": "这个文件夹不存在，可能已被移动或删除。",
+          "notAFolder": "这是一个文件，不是文件夹。",
+          "notProject": "这个文件夹还不是笔记库。请改用「导入成一个新项目」。",
+          "badMode": "不认识的打开方式。",
+          "alreadyManaged": "这个文件夹已经在项目列表里了，直接从列表选它。",
+          "needsName": "这个文件夹的名字不能用作项目名，请另起一个。"
+        }
+      },
+      "llm": {
+        "notConfigured": "尚未配置模型服务。请打开设置，填写连接信息。"
+      },
+      "provider": {
+        "notConfigured": "尚未配置网页搜索。请打开设置，选择搜索服务并填写密钥。",
+        "misconfigured": "网页搜索的配置不完整，请检查一下设置。",
+        "failed": "本次网页搜索未成功，请稍后重试。"
+      },
+      "settings": {
+        "invalid": "有一项设置按当前写法无法保存：{{field}}。",
+        "locked": "{{field}} 由启动应用时的环境变量提供，无法在设置面板中修改。",
+        "briefTooLong": "这段说明超过 {{limit}} 个字符。",
+        "searchOff": "网页搜索已关闭，无法测试。请先选择搜索服务。",
+        "probeRejected": "模型服务拒绝了这个密钥，请检查密钥和服务地址。",
+        "probeUnreachable": "连不上模型服务，请检查地址和网络。",
+        "probeFailed": "模型服务有响应，但未给出可用的答复。",
+        "searchRejected": "搜索服务拒绝了这个密钥，请检查后重试。",
+        "searchUnreachable": "连不上搜索服务，请检查网络。",
+        "searchFailed": "搜索服务有回应，但这次试搜索没有结果。"
+      },
+      "update": {
+        "unreachable": "无法连接更新来源，请检查网络后重试。",
+        "badManifest": "更新来源的响应无法解析，可能尚未准备好。",
+        "badSource": "更新来源地址无效，需以 http:// 或 https:// 开头。"
+      }
+    }
+  }
+}

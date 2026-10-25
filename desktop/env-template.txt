@@ -1,0 +1,33 @@
+# NoteAgent 配置文件 / NoteAgent settings
+#
+# 模型（必填）/ Model access (required)
+# 任何 OpenAI 兼容的 /chat/completions 接口都可以：
+# any OpenAI-compatible endpoint works.
+#
+# NOTEAGENT_LLM_BASE_URL=https://api.openai.com/v1
+# NOTEAGENT_LLM_API_KEY=
+# NOTEAGENT_LLM_MODEL=gpt-4o-mini
+#
+# 可选 / Optional: 温度、回复长度与超时（秒）/ temperature, reply length, timeout
+# NOTEAGENT_LLM_TEMPERATURE=0.1
+# NOTEAGENT_LLM_MAX_TOKENS=4096
+# NOTEAGENT_LLM_TIMEOUT=120
+#
+# 可选 / Optional: 搜索网页时用的服务 / web search
+# provider: none | brave | serper
+# NOTEAGENT_SEARCH_PROVIDER=brave
+# NOTEAGENT_SEARCH_API_KEY=
+# NOTEAGENT_SEARCH_TIMEOUT=30
+# NOTEAGENT_SEARCH_COUNTRY=CN
+# NOTEAGENT_SEARCH_LANG=zh-hans
+# NOTEAGENT_SEARCH_UI_LANG=zh-CN
+#
+# 可选 / Optional: 把 PDF/HTML 里的图片抽出来 / extract images from PDF and HTML
+# NOTEAGENT_EXTRACT_MEDIA=1
+#
+# 可选 / Optional: 指定读取的项目目录 / the project the core reads
+# NOTEAGENT_PROJECT=
+#
+# 可选 / Optional: 检查更新时去问的地址，是一个 JSON 文档 /
+# where "check for updates" looks. Unset means it never asks anyone.
+# NOTEAGENT_UPDATE_URL=

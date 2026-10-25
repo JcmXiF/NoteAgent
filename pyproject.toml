@@ -1,0 +1,54 @@
+[project]
+name = "noteagent"
+version = "0.1.0"
+description = "Turn curated sources into a persistent Markdown wiki"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "JcmXIF" }]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "trafilatura>=2.0",
+    # Imported directly by the extractors, so named here rather than left to
+    # arrive as trafilatura's own dependency.
+    "lxml>=5.0",
+    "charset-normalizer>=3.3",
+    "PyYAML>=6.0",
+    "pypdfium2>=4.30",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115",
+    # Used directly by the routes: pydantic for request bodies, starlette for the
+    # ASGI guard and the static mount. Both come with fastapi, but a direct
+    # import deserves a direct declaration.
+    "pydantic>=2.0",
+    "starlette>=0.37",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+noteagent = "noteagent.__main__:main"
+
+[build-system]
+# 77 is where setuptools accepts an SPDX license expression and `license-files`.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+noteagent = [
+    "templates/default/**/*.md",
+    "acquire/skills/*.md",
+    "chat/skills/*.md",
+    "web/**/*",
+]

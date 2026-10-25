@@ -1,0 +1,41 @@
+# Local wiki projects: the notes someone writes and the sources behind them.
+/projects/
+/wiki/
+
+# Which project this machine has open is a local choice, so a clone starts with
+# none and writes its own pointer.
+/.noteagent-project
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Environment variables
+.env
+.env.*
+
+# Editor
+.vscode/
+
+# Frontend
+node_modules/
+web/dist/
+
+# The release build: `scripts/package.mjs` writes the bundled runtime, the
+# unpacked app and the installer here, and caches the interpreter and wheels it
+# downloads. None of it is input to a checkout; a clone builds its own.
+build/
+
+# The built interface that ships inside the package. `scripts/build-web.mjs`
+# writes it on every release build.
+/src/noteagent/web/
+
+
+# dev
+docs/
