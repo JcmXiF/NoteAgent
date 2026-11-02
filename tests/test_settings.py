@@ -642,3 +642,317 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(view["llm"]["model"], "outside")
             self.assertEqual(view["sources"]["llm.model"], "env")
             self.assertIn("llm.model", view["locked"])
+
+
+@unittest.skipIf(TestClient is None, "fastapi not installed")
+class ProfileSettingsApiTests(unittest.TestCase):
+    """The connection-profile screen's requests, through the API it calls."""
+
+    def test_create_returns_the_profile_without_its_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            created = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "DeepSeek 主账号",
+                    "provider": "deepseek",
+                    "baseUrl": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                    "apiKey": "sk-secret",
+                    "revision": 0,
+                },
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            body = created.json()
+            self.assertEqual([profile["name"] for profile in body["profiles"]], ["DeepSeek 主账号"])
+            profile = body["profiles"][0]
+            self.assertTrue(profile["active"])
+            self.assertTrue(profile["apiKeySet"])
+            self.assertEqual(body["activeProfileId"], profile["id"])
+            self.assertEqual(body["revision"], 1)
+            self.assertNotIn("sk-secret", created.text)
+            self.assertEqual(credentials.values[llm_key(profile["id"])], "sk-secret")
+            self.assertTrue(path.is_file())
+
+    def test_editing_keeps_a_blank_key_and_advances_the_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                    "apiKey": "sk-main",
+                    "revision": 0,
+                },
+            ).json()
+            profile_id = first["profiles"][0]["id"]
+
+            edited = client.put(
+                f"/api/settings/profiles/{profile_id}",
+                json={
+                    "name": "Work",
+                    "model": "gpt-4.1",
+                    "revision": first["revision"],
+                },
+            )
+            self.assertEqual(edited.status_code, 200, edited.text)
+            body = edited.json()
+            self.assertEqual(body["profiles"][0]["name"], "Work")
+            self.assertEqual(body["profiles"][0]["model"], "gpt-4.1")
+            self.assertTrue(body["profiles"][0]["apiKeySet"])
+            self.assertEqual(body["revision"], first["revision"] + 1)
+            self.assertEqual(credentials.values[llm_key(profile_id)], "sk-main")
+            self.assertNotIn("sk-main", edited.text)
+
+            cleared = client.put(
+                f"/api/settings/profiles/{profile_id}",
+                json={"clearApiKey": True, "revision": body["revision"]},
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertFalse(cleared.json()["profiles"][0]["apiKeySet"])
+            self.assertNotIn(llm_key(profile_id), credentials.values)
+            self.assertEqual(cleared.json()["revision"], body["revision"] + 1)
+
+    def test_a_stale_revision_is_a_409_and_changes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                    "revision": 0,
+                },
+            ).json()
+            profile_id = first["profiles"][0]["id"]
+
+            stale = client.put(
+                f"/api/settings/profiles/{profile_id}",
+                json={"model": "other", "revision": 0},
+            )
+            self.assertEqual(stale.status_code, 409, stale.text)
+            self.assertEqual(stale.json()["code"], "settings.staleRevision")
+            current = client.get("/api/settings").json()
+            self.assertEqual(current["profiles"][0]["model"], "gpt-4o-mini")
+
+            refused = client.delete(f"/api/settings/profiles/{profile_id}?revision=0")
+            self.assertEqual(refused.status_code, 409, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.staleRevision")
+
+    def test_an_unknown_profile_is_a_404(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            for method, path, body in (
+                ("put", "/api/settings/profiles/p_9", {"revision": 0}),
+                ("post", "/api/settings/profiles/p_9/activate", {"revision": 0}),
+                ("delete", "/api/settings/profiles/p_9?revision=0", None),
+            ):
+                call = getattr(client, method)
+                answer = call(path, json=body) if body is not None else call(path)
+                self.assertEqual(answer.status_code, 404, answer.text)
+                self.assertEqual(answer.json()["code"], "settings.profileNameNotFound")
+
+    def test_switching_the_active_profile_is_reflected_in_the_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "One",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m-one",
+                    "revision": 0,
+                },
+            ).json()
+            second = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Two",
+                    "provider": "ollama",
+                    "baseUrl": "http://127.0.0.1:11434/v1",
+                    "model": "m-two",
+                    "revision": first["revision"],
+                },
+            ).json()
+            self.assertEqual(second["activeProfileId"], first["activeProfileId"])
+            target = second["profiles"][1]["id"]
+
+            switched = client.post(
+                f"/api/settings/profiles/{target}/activate",
+                json={"revision": second["revision"]},
+            )
+            self.assertEqual(switched.status_code, 200, switched.text)
+            body = switched.json()
+            self.assertEqual(body["activeProfileId"], target)
+            self.assertEqual(
+                [profile["active"] for profile in body["profiles"]], [False, True]
+            )
+            self.assertEqual(body["llm"]["baseUrl"], "http://127.0.0.1:11434/v1")
+            self.assertEqual(body["revision"], second["revision"] + 1)
+
+    def test_deleting_the_active_profile_selects_the_next_and_removes_its_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "One",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m-one",
+                    "apiKey": "sk-one",
+                    "revision": 0,
+                },
+            ).json()
+            second = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Two",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m-two",
+                    "revision": first["revision"],
+                },
+            ).json()
+            active_id = second["activeProfileId"]
+            other_id = next(
+                profile["id"] for profile in second["profiles"] if profile["id"] != active_id
+            )
+
+            deleted = client.delete(
+                f"/api/settings/profiles/{active_id}?revision={second['revision']}"
+            )
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+            body = deleted.json()
+            self.assertEqual([profile["id"] for profile in body["profiles"]], [other_id])
+            self.assertEqual(body["activeProfileId"], other_id)
+            self.assertEqual(credentials.values, {})
+
+    def test_deleting_the_last_profile_returns_the_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Only",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "revision": 0,
+                },
+            ).json()
+            deleted = client.delete(
+                f"/api/settings/profiles/{first['profiles'][0]['id']}?revision={first['revision']}"
+            )
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+            self.assertEqual(deleted.json()["profiles"], [])
+            self.assertIsNone(deleted.json()["activeProfileId"])
+
+    def test_a_key_that_cannot_be_stored_leaves_the_document_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+            tmp, available=False
+        ) as (path, credentials):
+            client = TestClient(create_app())
+            refused = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "apiKey": "sk-main",
+                    "revision": 0,
+                },
+            )
+            self.assertEqual(refused.status_code, 503, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.keychainUnavailable")
+            self.assertFalse(path.exists())
+            self.assertEqual(credentials.values, {})
+
+    def test_a_key_store_that_fails_mid_save_leaves_no_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            # Available when the save starts, gone when the key is written: the
+            # document must not be committed for a save that failed.
+            credentials.fail_writes = True
+            refused = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "apiKey": "sk-main",
+                    "revision": 0,
+                },
+            )
+            self.assertEqual(refused.status_code, 503, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.keychainUnavailable")
+            self.assertFalse(path.exists())
+            self.assertEqual(credentials.values, {})
+
+    def test_a_failed_key_write_on_edit_keeps_the_previous_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "revision": 0,
+                },
+            ).json()
+            profile_id = first["profiles"][0]["id"]
+            credentials.fail_writes = True
+
+            refused = client.put(
+                f"/api/settings/profiles/{profile_id}",
+                json={"model": "other", "apiKey": "sk-new", "revision": first["revision"]},
+            )
+            self.assertEqual(refused.status_code, 503, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.keychainUnavailable")
+
+            view = client.get("/api/settings").json()
+            self.assertEqual(view["profiles"][0]["model"], "m")
+            self.assertEqual(view["revision"], first["revision"])
+            self.assertFalse(view["profiles"][0]["apiKeySet"])
+
+    def test_a_profile_save_refuses_a_value_the_document_could_not_hold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            refused = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "unknown",
+                    "baseUrl": "notaurl",
+                    "model": "m",
+                    "revision": 0,
+                },
+            )
+            self.assertEqual(refused.status_code, 400, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.invalid")
+            self.assertEqual(client.get("/api/settings").json()["profiles"], [])

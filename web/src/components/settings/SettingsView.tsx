@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
-import { ModelSection } from "@/components/settings/ModelSection";
+import { ProfilesSection } from "@/components/settings/ProfilesSection";
 import { ProjectSection } from "@/components/settings/ProjectSection";
 import { SearchSection } from "@/components/settings/SearchSection";
 import { fetchSettings } from "@/lib/api/settings";
@@ -144,10 +144,20 @@ export function SettingsView() {
       </nav>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-xl flex-col px-6 py-6">
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col px-6 py-6",
+            section === "model" ? "max-w-4xl" : "max-w-xl",
+          )}
+        >
           {install ? (
             <div className={cn(section !== "model" && "hidden")}>
-              <ModelSection install={install} onSaved={setInstall} onDirty={onModelDirty} />
+              <ProfilesSection
+                install={install}
+                onSaved={setInstall}
+                onDirty={onModelDirty}
+                onReload={load}
+              />
             </div>
           ) : section === "model" ? (
             waiting

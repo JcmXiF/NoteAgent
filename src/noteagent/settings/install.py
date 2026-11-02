@@ -43,6 +43,7 @@ from noteagent.llm.config import (
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
     CredentialStore,
+    CredentialStoreUnavailable,
     keyring_store,
 )
 from noteagent.settings.fields import (
@@ -100,6 +101,7 @@ __all__ = [
     "install_view",
     "probe_llm",
     "probe_search",
+    "settings_store",
 ]
 
 
@@ -154,6 +156,14 @@ def _context(
         effective = effective_mod.resolve(config, store)
         effective_mod.apply(effective)
         return _Context(store=store, config=config, effective=effective)
+
+
+def settings_store(
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+) -> ConfigStore:
+    """The store the running core uses, with the stored document applied."""
+    return _context(path, credentials).store
 
 
 def _current(field: Field) -> str | None:
@@ -605,6 +615,16 @@ def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _
 # --- the screen's answer -----------------------------------------------------
 
 
+def _key_set(store: ConfigStore, profile_id: str) -> bool:
+    """Whether a key is stored for one profile. The key itself never leaves."""
+    if not store.keychain_available():
+        return False
+    try:
+        return bool(store.get_llm_key(profile_id))
+    except CredentialStoreUnavailable:
+        return False
+
+
 def install_view(
     *,
     path: Path | None = None,
@@ -664,6 +684,7 @@ def install_view(
                 "baseUrl": profile.base_url,
                 "model": profile.model,
                 "active": profile.id == config.active_profile_id,
+                "apiKeySet": _key_set(context.store, profile.id),
             }
             for profile in config.profiles
         ],

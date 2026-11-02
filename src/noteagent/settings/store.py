@@ -441,11 +441,20 @@ class ConfigStore:
         *,
         expected_revision: int | None = None,
         force: bool = False,
+        alongside: Callable[[Config], None] | None = None,
     ) -> Config:
         """Read, change and write under one lock, refusing a stale revision.
 
         ``force`` records a change that lives outside the document (a key in the
         credential store) so a secret-only save still advances the revision.
+
+        ``alongside`` changes what the document does not hold — a credential —
+        and runs under the same lock, after the revision has been accepted and
+        before the document is written. A refused save therefore cannot leave a
+        key changed, and a credential that cannot be written leaves the document
+        as it was. (The two stores are not one transaction: a document write that
+        fails after the credential changed is reported, and retrying the save
+        repeats the credential change idempotently.)
         """
         with _locked(self.path, self.lock_timeout):
             current = self.read()
@@ -460,6 +469,8 @@ class ConfigStore:
             if changed == current and not force:
                 return current
             next_config = replace(changed, revision=current.revision + 1)
+            if alongside is not None:
+                alongside(next_config)
             write_text_atomic(self.path, dump_config(next_config))
             return next_config
 
@@ -484,15 +495,20 @@ class ConfigStore:
         self._delete(SEARCH_KEY)
 
     def delete_profile(self, profile_id: str, *, expected_revision: int | None = None) -> Config:
-        """Remove a profile, its key and its claim on the active slot."""
+        """Remove a profile, its key and its claim on the active slot.
+
+        The key goes first, under the lock: a key that cannot be removed leaves
+        the profile in place rather than producing a profile with no secret. If
+        the document write then fails, the profile remains without its key and
+        deleting it again finishes the job.
+        """
         self.require_keychain()
-        config = self.update(
+        return self.update(
             lambda current: remove_profile(current, profile_id),
             expected_revision=expected_revision,
             force=True,
+            alongside=lambda _config: self.delete_llm_key(profile_id),
         )
-        self.delete_llm_key(profile_id)
-        return config
 
     def _get(self, key: str) -> str:
         if not self.keychain_available():

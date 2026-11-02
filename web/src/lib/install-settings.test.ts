@@ -5,12 +5,19 @@ import {
   llmDraftFrom,
   llmPatch,
   llmProblems,
+  profileCreateDirty,
+  profileCreatePatch,
+  profileDirty,
+  profileDraftFrom,
+  profilePatch,
+  profileProblems,
   searchCanProbe,
   searchDirty,
   searchDraftFrom,
   searchPatch,
   searchProblems,
   type InstallSettings,
+  type ProfileSettings,
 } from "@/lib/install-settings";
 
 const SAVED: InstallSettings = {
@@ -37,6 +44,9 @@ const SAVED: InstallSettings = {
   locked: [],
   invalid: [],
   revision: 1,
+  profiles: [],
+  activeProfileId: null,
+  keychainAvailable: true,
 };
 
 describe("the model form", () => {
@@ -67,6 +77,63 @@ describe("the model form", () => {
   it("does not treat 0.10 as a different temperature", () => {
     const draft = { ...llmDraftFrom(SAVED.llm), temperature: "0.10" };
     expect(llmDirty(draft, SAVED.llm)).toBe(false);
+  });
+});
+
+const PROFILE: ProfileSettings = {
+  id: "p_1",
+  name: "Main",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-4o-mini",
+  active: true,
+  apiKeySet: true,
+};
+
+describe("the connection form", () => {
+  it("treats a blank key as unchanged and sends nothing on its own", () => {
+    const draft = profileDraftFrom(PROFILE);
+    expect(profileDirty(draft, PROFILE)).toBe(false);
+    expect(profilePatch(draft, PROFILE, 3)).toEqual({ revision: 3 });
+  });
+
+  it("sends only the field that changed, and a typed key", () => {
+    const draft = { ...profileDraftFrom(PROFILE), model: "other", apiKey: "new-key" };
+    expect(profilePatch(draft, PROFILE, 4)).toEqual({
+      revision: 4,
+      model: "other",
+      apiKey: "new-key",
+    });
+  });
+
+  it("clears a key only when asked", () => {
+    const draft = { ...profileDraftFrom(PROFILE), clearApiKey: true };
+    expect(profilePatch(draft, PROFILE, 5)).toEqual({ revision: 5, clearApiKey: true });
+  });
+
+  it("does not treat a trailing slash as a change", () => {
+    const draft = { ...profileDraftFrom(PROFILE), baseUrl: "https://api.openai.com/v1/" };
+    expect(profileDirty(draft, PROFILE)).toBe(false);
+  });
+
+  it("names what the core would refuse", () => {
+    const draft = { ...profileDraftFrom(PROFILE), name: " ", baseUrl: "notaurl" };
+    expect(profileProblems(draft)).toEqual([
+      "settings.invalid.name",
+      "settings.invalid.baseUrl",
+    ]);
+  });
+
+  it("builds a create payload without a blank key", () => {
+    const draft = { ...profileDraftFrom(PROFILE), name: "  Main  ", apiKey: "" };
+    expect(profileCreateDirty({ ...draft, name: "", baseUrl: "", model: "" })).toBe(false);
+    expect(profileCreatePatch(draft, 0)).toEqual({
+      name: "Main",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      revision: 0,
+    });
   });
 });
 

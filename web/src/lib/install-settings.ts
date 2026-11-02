@@ -18,6 +18,48 @@ export type LlmSettings = {
 
 export type SearchProvider = "none" | "brave" | "serper";
 
+/** The canonical ids the core accepts for a connection profile. */
+export type ProviderId = "openai" | "anthropic" | "deepseek" | "qwen" | "ollama" | "custom";
+
+export type ProfileSettings = {
+  id: string;
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  active: boolean;
+  /** A key is stored for this profile; the key itself is never sent back. */
+  apiKeySet: boolean;
+};
+
+export type ProfileDraft = {
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  clearApiKey: boolean;
+};
+
+export type ProfileCreatePatch = {
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  revision: number;
+};
+
+export type ProfileUpdatePatch = {
+  revision: number;
+  name?: string;
+  provider?: ProviderId;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
 export type SearchSettings = {
   provider: SearchProvider;
   apiKeySet: boolean;
@@ -37,6 +79,10 @@ export type InstallSettings = {
   invalid: string[];
   /** The document revision this answer was read from. A save carries it back. */
   revision: number;
+  profiles: ProfileSettings[];
+  activeProfileId: string | null;
+  /** False when the OS credential store cannot be used: keys can be neither read nor saved. */
+  keychainAvailable: boolean;
 };
 
 export type LlmDraft = {
@@ -84,6 +130,79 @@ export function llmDraftFrom(llm: LlmSettings): LlmDraft {
     maxTokens: String(llm.maxTokens),
     timeoutSeconds: String(llm.timeoutSeconds),
   };
+}
+
+export function profileDraftFrom(profile: ProfileSettings): ProfileDraft {
+  return {
+    name: profile.name,
+    provider: profile.provider,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    apiKey: "",
+    clearApiKey: false,
+  };
+}
+
+function trimmedBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+/** The fields a draft changed. A blank key is absent, so the saved one stays. */
+function changedProfileFields(
+  draft: ProfileDraft,
+  profile: ProfileSettings,
+): Omit<ProfileUpdatePatch, "revision"> {
+  const changes: Omit<ProfileUpdatePatch, "revision"> = {};
+  if (draft.name.trim() !== profile.name) changes.name = draft.name.trim();
+  if (draft.provider !== profile.provider) changes.provider = draft.provider;
+  if (trimmedBaseUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
+  if (draft.model.trim() !== profile.model) changes.model = draft.model.trim();
+  if (draft.apiKey.trim()) changes.apiKey = draft.apiKey.trim();
+  else if (draft.clearApiKey) changes.clearApiKey = true;
+  return changes;
+}
+
+/** Whether the form holds something worth sending; a saved key is not in it. */
+export function profileDirty(draft: ProfileDraft, profile: ProfileSettings): boolean {
+  return Object.keys(changedProfileFields(draft, profile)).length > 0;
+}
+
+export function profileCreateDirty(draft: ProfileDraft): boolean {
+  return Boolean(
+    draft.name.trim() || draft.baseUrl.trim() || draft.model.trim() || draft.apiKey.trim(),
+  );
+}
+
+/** i18n keys for values the core would refuse on a profile save. */
+export function profileProblems(draft: ProfileDraft): string[] {
+  const problems: string[] = [];
+  if (!draft.name.trim()) problems.push("settings.invalid.name");
+  if (!validBaseUrl(draft.baseUrl)) problems.push("settings.invalid.baseUrl");
+  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
+  return problems;
+}
+
+export function profileCreatePatch(
+  draft: ProfileDraft,
+  revision: number,
+): ProfileCreatePatch {
+  return {
+    name: draft.name.trim(),
+    provider: draft.provider,
+    baseUrl: draft.baseUrl.trim(),
+    model: draft.model.trim(),
+    ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+    revision,
+  };
+}
+
+/** The revision makes a stale save a 409 instead of a silent overwrite. */
+export function profilePatch(
+  draft: ProfileDraft,
+  profile: ProfileSettings,
+  revision: number,
+): ProfileUpdatePatch {
+  return { revision, ...changedProfileFields(draft, profile) };
 }
 
 export function searchDraftFrom(search: SearchSettings, extractMedia: boolean): SearchDraft {
