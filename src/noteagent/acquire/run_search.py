@@ -18,7 +18,12 @@ from noteagent.acquire.search_config import (
     load_search_config,
     native_support,
 )
-from noteagent.acquire.tools.providers.openai_native import native_search
+from noteagent.acquire.tools.providers.anthropic_native import (
+    native_search as anthropic_native_search,
+)
+from noteagent.acquire.tools.providers.openai_native import (
+    native_search as openai_native_search,
+)
 from noteagent.acquire.tools.web_search import web_search
 from noteagent.acquire.types import CandidateCard, ProviderNotConfiguredError, SerpHit
 from noteagent.settings.store import SEARCH_MODES
@@ -37,6 +42,13 @@ _NATIVE_MISSING = (
     "native search needs a usable model connection: "
     "service address, key and model"
 )
+
+#: The adapter for each provider whose model service can search natively. Kept
+#: equal to ``NATIVE_SEARCH_PROVIDERS`` by a test, so the two cannot drift.
+NATIVE_ADAPTERS = {
+    "openai": openai_native_search,
+    "anthropic": anthropic_native_search,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +112,13 @@ def run_web_search(
         if mode == "external" or native is None:
             hits = web_search(query, top_k=limit, config=cfg, client=client)
         else:
+            adapter = NATIVE_ADAPTERS.get(native.provider)
+            if adapter is None:
+                # A build where the capability set and the adapter map drifted
+                # apart. ``auto`` still has the external path to fall back to.
+                raise NativeSearchError(_NO_ADAPTER)
             try:
-                hits = native_search(
+                hits = adapter(
                     query,
                     top_k=limit,
                     config=native,

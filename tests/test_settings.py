@@ -18,7 +18,11 @@ from unittest.mock import patch
 
 import httpx
 
-from noteagent.acquire.search_config import SearchError, active_llm_provider
+from noteagent.acquire.search_config import (
+    SearchConfig,
+    SearchError,
+    active_llm_provider,
+)
 from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
 from noteagent.settings.brief import brief_view, save_brief
@@ -534,6 +538,37 @@ class ProbeTests(unittest.TestCase):
 
             probe_search({"provider": "brave"}, path=path, runner=runner)
             self.assertEqual(seen["key"], "saved-key")
+
+    def test_search_probe_uses_a_saved_anthropic_connection_natively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            apply_install(
+                {
+                    "llm": {
+                        "baseUrl": "https://api.anthropic.com/v1",
+                        "apiKey": "sk-ant",
+                        "model": "claude-sonnet-5-5",
+                    }
+                }
+            )
+            seen: dict[str, object] = {}
+
+            class Run:
+                cards = ()
+
+            def runner(query: str, *, top_k: int, config: SearchConfig) -> Run:
+                seen["mode"] = config.mode
+                seen["provider"] = config.native.provider if config.native else None
+                seen["base_url"] = config.native.base_url if config.native else None
+                return Run()
+
+            count = probe_search({"mode": "native"}, path=path, runner=runner)
+            self.assertEqual(count, 0)
+            self.assertEqual(seen["mode"], "native")
+            self.assertEqual(seen["provider"], "anthropic")
+            self.assertEqual(seen["base_url"], "https://api.anthropic.com/v1")
 
     def test_search_probe_names_the_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
@@ -1270,22 +1305,32 @@ class ProfileSettingsApiTests(unittest.TestCase):
             self.assertEqual(view["sources"]["llm.temperature"], "env")
             self.assertIn("llm.temperature", view["locked"])
 
-    def test_an_openai_profile_reports_native_search_available(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
-            client = TestClient(create_app())
-            created = client.post(
-                "/api/settings/profiles",
-                json={
-                    "name": "Main",
-                    "provider": "openai",
-                    "baseUrl": "https://api.openai.com/v1",
-                    "model": "gpt-4o-mini",
-                    "revision": 0,
-                },
-            )
-            self.assertEqual(created.status_code, 200, created.text)
-            view = client.get("/api/settings").json()
-            self.assertTrue(view["search"]["nativeAvailable"])
+    def test_a_supported_profile_reports_native_search_available(self) -> None:
+        cases = (
+            ("openai", "https://api.openai.com/v1", "gpt-4o-mini"),
+            ("anthropic", "https://api.anthropic.com/v1", "claude-sonnet-5-5"),
+        )
+        for provider, base_url, model in cases:
+            with (
+                self.subTest(provider=provider),
+                tempfile.TemporaryDirectory() as tmp,
+                isolated_env(),
+                settings_home(tmp),
+            ):
+                client = TestClient(create_app())
+                created = client.post(
+                    "/api/settings/profiles",
+                    json={
+                        "name": "Main",
+                        "provider": provider,
+                        "baseUrl": base_url,
+                        "model": model,
+                        "revision": 0,
+                    },
+                )
+                self.assertEqual(created.status_code, 200, created.text)
+                view = client.get("/api/settings").json()
+                self.assertTrue(view["search"]["nativeAvailable"])
 
     def test_a_profile_save_refuses_a_value_the_document_could_not_hold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

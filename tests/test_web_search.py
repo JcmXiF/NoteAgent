@@ -13,6 +13,7 @@ import httpx
 from noteagent.acquire.cards import cards_from_hits, favicon_for_host
 from noteagent.acquire.run_search import WebSearchRun, run_web_search
 from noteagent.acquire.search_config import (
+    NATIVE_SEARCH_PROVIDERS,
     NativeSearchConfig,
     NativeSearchConfigMissing,
     NativeSearchError,
@@ -26,6 +27,9 @@ from noteagent.acquire.search_config import (
     load_search_config,
     native_search_available,
     provider_for_host,
+)
+from noteagent.acquire.tools.providers.anthropic_native import (
+    native_search as anthropic_native_search,
 )
 from noteagent.acquire.tools.providers.brave import (
     normalize_brave_search_lang,
@@ -245,6 +249,62 @@ NATIVE_PAYLOAD = {
 }
 
 
+ANTHROPIC_PAYLOAD = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_search",
+            "input": {"query": "KL divergence"},
+        },
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_1",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "title": "Wiki",
+                    "url": "https://zh.wikipedia.org/wiki/KL",
+                    "encrypted_content": "x",
+                    "page_age": "2026-01-01",
+                },
+                {
+                    "type": "web_search_result",
+                    "title": "Other",
+                    "url": "https://example.com/a",
+                    "encrypted_content": "y",
+                },
+            ],
+        },
+        {
+            "type": "text",
+            "text": "KL is a measure of difference.",
+            "citations": [
+                {
+                    "type": "web_search_result_location",
+                    "url": "https://zh.wikipedia.org/wiki/KL",
+                    "title": "Wiki",
+                    "cited_text": "定义",
+                    "encrypted_index": "z",
+                },
+                {
+                    "type": "web_search_result_location",
+                    "url": "https://example.com/b",
+                    "title": "B",
+                    "cited_text": "a measure",
+                },
+            ],
+        },
+    ],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 10, "output_tokens": 20},
+}
+
+
 def native_config() -> NativeSearchConfig:
     return NativeSearchConfig(
         provider="openai",
@@ -252,6 +312,33 @@ def native_config() -> NativeSearchConfig:
         api_key="sk-openai",
         model="gpt-4o-mini",
     )
+
+
+def anthropic_config() -> NativeSearchConfig:
+    return NativeSearchConfig(
+        provider="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        api_key="sk-ant",
+        model="claude-sonnet-5-5",
+    )
+
+
+#: One entry per provider with a native adapter: how to configure it, what it
+#: answers, and the URL that answer comes from.
+NATIVE_PROVIDERS = {
+    "openai": {
+        "config": native_config,
+        "payload": NATIVE_PAYLOAD,
+        "path": "/responses",
+        "url": "https://api.openai.com/v1/responses",
+    },
+    "anthropic": {
+        "config": anthropic_config,
+        "payload": ANTHROPIC_PAYLOAD,
+        "path": "/messages",
+        "url": "https://api.anthropic.com/v1/messages",
+    },
+}
 
 
 class CliSearchTests(unittest.TestCase):
@@ -274,16 +361,28 @@ class CliSearchTests(unittest.TestCase):
 
 
 class NativeSupportTests(unittest.TestCase):
-    def test_an_openai_host_names_its_provider(self) -> None:
+    def test_every_supported_provider_has_an_adapter(self) -> None:
+        from noteagent.acquire.run_search import NATIVE_ADAPTERS
+
+        self.assertEqual(set(NATIVE_ADAPTERS), set(NATIVE_SEARCH_PROVIDERS))
+
+    def test_a_native_host_names_its_provider(self) -> None:
         self.assertEqual(provider_for_host("https://api.openai.com/v1"), "openai")
+        self.assertEqual(provider_for_host("https://api.anthropic.com/v1"), "anthropic")
         self.assertEqual(provider_for_host("https://api.deepseek.com/v1"), "")
         self.assertEqual(provider_for_host("http://["), "")
 
     def test_native_is_available_for_a_supported_provider(self) -> None:
         self.assertTrue(native_search_available(provider="openai", base_url=""))
+        self.assertTrue(native_search_available(provider="anthropic", base_url=""))
         self.assertFalse(native_search_available(provider="deepseek", base_url=""))
         self.assertTrue(
             native_search_available(provider="", base_url="https://api.openai.com/v1")
+        )
+        self.assertTrue(
+            native_search_available(
+                provider="", base_url="https://api.anthropic.com/v1"
+            )
         )
         self.assertFalse(
             native_search_available(provider="", base_url="https://example.com")
@@ -309,8 +408,16 @@ class NativeSupportTests(unittest.TestCase):
             build_native_config("deepseek", "https://api.deepseek.com/v1", "sk", "m")
         )
 
+    def test_an_anthropic_connection_is_built_like_any_other(self) -> None:
+        ready = build_native_config(
+            "anthropic", "https://api.anthropic.com/v1", "sk-ant", "claude-sonnet-5-5"
+        )
+        self.assertIsNotNone(ready)
+        assert ready is not None
+        self.assertEqual(ready.provider, "anthropic")
 
-class NativeAdapterTests(unittest.TestCase):
+
+class OpenAINativeAdapterTests(unittest.TestCase):
     def test_request_shape_auth_and_mapping(self) -> None:
         seen: dict[str, object] = {}
 
@@ -350,48 +457,184 @@ class NativeAdapterTests(unittest.TestCase):
         self.assertEqual(hits[2].snippet, "a measure")
         self.assertEqual(hits[0].site, "zh.wikipedia.org")
 
+    def test_a_citation_fills_a_missing_snippet(self) -> None:
+        payload = {
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "results": [
+                        {
+                            "type": "text_result",
+                            "title": "Wiki",
+                            "url": "https://zh.wikipedia.org/wiki/KL",
+                        }
+                    ],
+                },
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "KL is a measure",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "start_index": 0,
+                                    "end_index": 6,
+                                    "url": "https://zh.wikipedia.org/wiki/KL",
+                                    "title": "Wiki",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ]
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=payload)
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        hits = native_search("KL", top_k=3, config=native_config(), client=client)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].snippet, "KL is")
+
+
+class NativeAdapterFailureTests(unittest.TestCase):
+    def _adapters(self):
+        return (
+            ("openai", native_search, native_config),
+            ("anthropic", anthropic_native_search, anthropic_config),
+        )
+
     def test_failures_are_named(self) -> None:
         cases = (
             (401, NativeSearchRejected),
             (403, NativeSearchRejected),
             (500, NativeSearchError),
         )
-        for status, error in cases:
-            with self.subTest(status=status):
+        for provider, adapter, make_config in self._adapters():
+            for status, error in cases:
+                with self.subTest(provider=provider, status=status):
 
-                def handler(request: httpx.Request, status=status) -> httpx.Response:
-                    return httpx.Response(status, text="no")
+                    def handler(
+                        request: httpx.Request, status=status
+                    ) -> httpx.Response:
+                        return httpx.Response(status, text="no")
 
-                client = httpx.Client(transport=httpx.MockTransport(handler))
-                with self.assertRaises(error):
-                    native_search("q", top_k=3, config=native_config(), client=client)
+                    client = httpx.Client(transport=httpx.MockTransport(handler))
+                    with self.assertRaises(error):
+                        adapter(
+                            "q", top_k=3, config=make_config(), client=client
+                        )
 
     def test_a_transport_failure_is_named(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("down")
+        for provider, adapter, make_config in self._adapters():
+            with self.subTest(provider=provider):
 
-        client = httpx.Client(transport=httpx.MockTransport(handler))
-        with self.assertRaises(NativeSearchUnreachable):
-            native_search("q", top_k=3, config=native_config(), client=client)
+                def handler(request: httpx.Request) -> httpx.Response:
+                    raise httpx.ConnectError("down")
+
+                client = httpx.Client(transport=httpx.MockTransport(handler))
+                with self.assertRaises(NativeSearchUnreachable):
+                    adapter("q", top_k=3, config=make_config(), client=client)
 
     def test_a_malformed_answer_is_named(self) -> None:
+        for provider, adapter, make_config in self._adapters():
+            with self.subTest(provider=provider):
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    return httpx.Response(200, text="not JSON")
+
+                client = httpx.Client(transport=httpx.MockTransport(handler))
+                with self.assertRaises(NativeSearchError):
+                    adapter("q", top_k=3, config=make_config(), client=client)
+
+
+class AnthropicNativeAdapterTests(unittest.TestCase):
+    def test_request_shape_auth_and_mapping(self) -> None:
+        seen: dict[str, object] = {}
+
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, text="not JSON")
+            seen["method"] = request.method
+            seen["url"] = str(request.url)
+            seen["api_key"] = request.headers.get("x-api-key")
+            seen["version"] = request.headers.get("anthropic-version")
+            seen["authorization"] = request.headers.get("Authorization")
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(200, json=ANTHROPIC_PAYLOAD)
 
         client = httpx.Client(transport=httpx.MockTransport(handler))
-        with self.assertRaises(NativeSearchError):
-            native_search("q", top_k=3, config=native_config(), client=client)
+        hits = anthropic_native_search(
+            "KL divergence",
+            top_k=3,
+            config=anthropic_config(),
+            client=client,
+        )
+
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(seen["url"], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(seen["api_key"], "sk-ant")
+        self.assertEqual(seen["version"], "2023-06-01")
+        self.assertIsNone(seen["authorization"])
+        body = seen["body"]
+        self.assertEqual(body["model"], "claude-sonnet-5-5")
+        self.assertEqual(body["messages"], [{"role": "user", "content": "KL divergence"}])
+        self.assertEqual(
+            body["tools"],
+            [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+        )
+
+        self.assertEqual(
+            [hit.url for hit in hits],
+            [
+                "https://zh.wikipedia.org/wiki/KL",
+                "https://example.com/a",
+                "https://example.com/b",
+            ],
+        )
+        self.assertEqual(hits[0].snippet, "定义")
+        self.assertEqual(hits[2].snippet, "a measure")
+        self.assertEqual(hits[0].site, "zh.wikipedia.org")
+
+    def test_a_tool_error_block_is_named(self) -> None:
+        payload = {
+            "type": "message",
+            "content": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": {
+                        "type": "web_search_tool_result_error",
+                        "error_code": "max_uses_exceeded",
+                    },
+                }
+            ],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=payload)
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        with self.assertRaises(NativeSearchError) as caught:
+            anthropic_native_search(
+                "q", top_k=3, config=anthropic_config(), client=client
+            )
+        self.assertIn("max_uses_exceeded", str(caught.exception))
 
 
 class NativeResolverTests(unittest.TestCase):
-    def _client(self, *, native_status: int = 200) -> tuple[httpx.Client, list[str]]:
+    def _client(
+        self, *, native_status: int = 200, provider: str = "openai"
+    ) -> tuple[httpx.Client, list[str]]:
+        spec = NATIVE_PROVIDERS[provider]
         calls: list[str] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(str(request.url))
-            if str(request.url).endswith("/responses"):
+            if str(request.url).endswith(spec["path"]):
                 if native_status == 200:
-                    return httpx.Response(200, json=NATIVE_PAYLOAD)
+                    return httpx.Response(200, json=spec["payload"])
                 return httpx.Response(native_status, text="no")
             return httpx.Response(
                 200,
@@ -419,7 +662,9 @@ class NativeResolverTests(unittest.TestCase):
         provider: str = "brave",
         api_key: str = "tok",
     ) -> SearchConfig:
-        native = native_config() if connection and llm_provider == "openai" else None
+        native = None
+        if connection and llm_provider in NATIVE_PROVIDERS:
+            native = NATIVE_PROVIDERS[llm_provider]["config"]()
         return SearchConfig(
             provider=provider,
             api_key=api_key,
@@ -429,58 +674,99 @@ class NativeResolverTests(unittest.TestCase):
         )
 
     def test_auto_prefers_native(self) -> None:
-        client, calls = self._client()
-        run = run_web_search("KL", config=self._config("auto"), client=client)
-        self.assertEqual(run.provider, "openai")
-        self.assertEqual(run.cards[0].source, "openai")
-        self.assertEqual(calls, ["https://api.openai.com/v1/responses"])
+        for provider, spec in NATIVE_PROVIDERS.items():
+            with self.subTest(provider=provider):
+                client, calls = self._client(provider=provider)
+                run = run_web_search(
+                    "KL",
+                    config=self._config("auto", llm_provider=provider),
+                    client=client,
+                )
+                self.assertEqual(run.provider, provider)
+                self.assertEqual(run.cards[0].source, provider)
+                self.assertEqual(calls, [spec["url"]])
 
     def test_external_never_calls_native(self) -> None:
-        client, calls = self._client()
-        run = run_web_search("KL", config=self._config("external"), client=client)
-        self.assertEqual(run.provider, "brave")
-        self.assertEqual(run.cards[0].source, "brave")
-        self.assertEqual(len(calls), 1)
-        self.assertNotIn("/responses", calls[0])
+        for provider, spec in NATIVE_PROVIDERS.items():
+            with self.subTest(provider=provider):
+                client, calls = self._client(provider=provider)
+                run = run_web_search(
+                    "KL",
+                    config=self._config("external", llm_provider=provider),
+                    client=client,
+                )
+                self.assertEqual(run.provider, "brave")
+                self.assertEqual(run.cards[0].source, "brave")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn(spec["path"], calls[0])
 
     def test_native_never_falls_back(self) -> None:
-        client, calls = self._client()
-        run = run_web_search("KL", config=self._config("native"), client=client)
-        self.assertEqual(run.provider, "openai")
-        self.assertEqual(calls, ["https://api.openai.com/v1/responses"])
+        for provider, spec in NATIVE_PROVIDERS.items():
+            with self.subTest(provider=provider):
+                client, calls = self._client(provider=provider)
+                run = run_web_search(
+                    "KL",
+                    config=self._config("native", llm_provider=provider),
+                    client=client,
+                )
+                self.assertEqual(run.provider, provider)
+                self.assertEqual(calls, [spec["url"]])
 
     def test_native_failure_never_falls_back(self) -> None:
-        client, calls = self._client(native_status=401)
-        with self.assertRaises(NativeSearchRejected):
-            run_web_search("KL", config=self._config("native"), client=client)
-        self.assertEqual(calls, ["https://api.openai.com/v1/responses"])
+        for provider, spec in NATIVE_PROVIDERS.items():
+            with self.subTest(provider=provider):
+                client, calls = self._client(native_status=401, provider=provider)
+                with self.assertRaises(NativeSearchRejected):
+                    run_web_search(
+                        "KL",
+                        config=self._config("native", llm_provider=provider),
+                        client=client,
+                    )
+                self.assertEqual(calls, [spec["url"]])
 
     def test_auto_falls_back_when_native_fails(self) -> None:
-        client, calls = self._client(native_status=401)
-        run = run_web_search("KL", config=self._config("auto"), client=client)
-        self.assertEqual(run.provider, "brave")
-        self.assertEqual(run.cards[0].source, "brave")
-        self.assertTrue(any(url.endswith("/responses") for url in calls))
-        self.assertTrue(any("api.search.brave.com" in url for url in calls))
+        for provider, spec in NATIVE_PROVIDERS.items():
+            with self.subTest(provider=provider):
+                client, calls = self._client(native_status=401, provider=provider)
+                run = run_web_search(
+                    "KL",
+                    config=self._config("auto", llm_provider=provider),
+                    client=client,
+                )
+                self.assertEqual(run.provider, "brave")
+                self.assertEqual(run.cards[0].source, "brave")
+                self.assertTrue(any(url.endswith(spec["path"]) for url in calls))
+                self.assertTrue(any("api.search.brave.com" in url for url in calls))
 
     def test_auto_keeps_the_native_error_when_no_external_is_configured(self) -> None:
-        client, _calls = self._client(native_status=401)
-        with self.assertRaises(NativeSearchRejected):
-            run_web_search(
-                "KL",
-                config=self._config("auto", provider="none", api_key=""),
-                client=client,
-            )
+        for provider in NATIVE_PROVIDERS:
+            with self.subTest(provider=provider):
+                client, _calls = self._client(native_status=401, provider=provider)
+                with self.assertRaises(NativeSearchRejected):
+                    run_web_search(
+                        "KL",
+                        config=self._config(
+                            "auto",
+                            llm_provider=provider,
+                            provider="none",
+                            api_key="",
+                        ),
+                        client=client,
+                    )
 
     def test_native_without_a_model_connection_is_named(self) -> None:
-        client, calls = self._client()
-        with self.assertRaises(NativeSearchConfigMissing):
-            run_web_search(
-                "KL",
-                config=self._config("native", connection=False),
-                client=client,
-            )
-        self.assertEqual(calls, [])
+        for provider in NATIVE_PROVIDERS:
+            with self.subTest(provider=provider):
+                client, calls = self._client(provider=provider)
+                with self.assertRaises(NativeSearchConfigMissing):
+                    run_web_search(
+                        "KL",
+                        config=self._config(
+                            "native", connection=False, llm_provider=provider
+                        ),
+                        client=client,
+                    )
+                self.assertEqual(calls, [])
 
     def test_auto_with_neither_path_is_named(self) -> None:
         client, calls = self._client()

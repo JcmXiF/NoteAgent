@@ -21,9 +21,8 @@ from noteagent.util.refusal import CodedError
 
 KNOWN_PROVIDERS = frozenset({"none", "brave", "serper"})
 
-#: Providers whose model service can search natively. The Anthropic adapter
-#: adds itself here when it lands.
-NATIVE_SEARCH_PROVIDERS: frozenset[str] = frozenset({"openai"})
+#: Providers whose model service can search natively.
+NATIVE_SEARCH_PROVIDERS: frozenset[str] = frozenset({"openai", "anthropic"})
 
 #: Why native search can or cannot run, in the order the resolver asks.
 NativeSupport = Literal["ready", "config-missing", "no-adapter"]
@@ -37,6 +36,8 @@ def provider_for_host(base_url: str) -> str:
         return ""
     if host == "api.openai.com":
         return "openai"
+    if host == "api.anthropic.com":
+        return "anthropic"
     return ""
 
 

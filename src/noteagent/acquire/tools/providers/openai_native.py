@@ -14,13 +14,13 @@ from collections.abc import Mapping
 
 import httpx
 
-from noteagent.acquire.cards import host_from_url
-from noteagent.acquire.search_config import (
-    NativeSearchConfig,
-    NativeSearchError,
-    NativeSearchRejected,
-    NativeSearchUnreachable,
+from noteagent.acquire.search_config import NativeSearchConfig, NativeSearchError
+from noteagent.acquire.tools.providers.native_request import (
+    clean_query,
+    post_search,
+    result_limit,
 )
+from noteagent.acquire.tools.providers.sources import SourceCollector, source_text
 from noteagent.acquire.types import SerpHit
 
 #: The GA tool name. ``web_search_preview`` is the legacy spelling.
@@ -28,23 +28,10 @@ NATIVE_TOOL = {"type": "web_search"}
 #: Ask for the raw hits the call found, not only the answer's citations.
 INCLUDE_RESULTS = ["web_search_call.results"]
 
-_SNIPPET_LIMIT = 280
-
-
-def _text(value: object) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
 
 def _hits_from_payload(payload: Mapping[str, object], *, top_k: int) -> list[SerpHit]:
     """The sources in one Responses answer, deduplicated in the order found."""
-    found: list[tuple[str, str, str]] = []
-
-    def add(title: object, url: object, snippet: object = "") -> None:
-        address = _text(url)
-        if not address or any(existing[1] == address for existing in found):
-            return
-        found.append((_text(title), address, _text(snippet)[:_SNIPPET_LIMIT]))
-
+    sources = SourceCollector()
     output = payload.get("output")
     if not isinstance(output, list):
         return []
@@ -57,7 +44,9 @@ def _hits_from_payload(payload: Mapping[str, object], *, top_k: int) -> list[Ser
             if isinstance(results, list):
                 for raw in results:
                     if isinstance(raw, Mapping):
-                        add(raw.get("title"), raw.get("url"), raw.get("snippet"))
+                        sources.add(
+                            raw.get("title"), raw.get("url"), raw.get("snippet")
+                        )
         elif kind == "message":
             content = item.get("content")
             if not isinstance(content, list):
@@ -65,7 +54,7 @@ def _hits_from_payload(payload: Mapping[str, object], *, top_k: int) -> list[Ser
             for block in content:
                 if not isinstance(block, Mapping):
                     continue
-                text = _text(block.get("text"))
+                text = source_text(block.get("text"))
                 annotations = block.get("annotations")
                 if not isinstance(annotations, list):
                     continue
@@ -83,21 +72,9 @@ def _hits_from_payload(payload: Mapping[str, object], *, top_k: int) -> list[Ser
                         and 0 <= start < end <= len(text)
                     ):
                         snippet = text[start:end]
-                    add(annotation.get("title"), annotation.get("url"), snippet)
+                    sources.add(annotation.get("title"), annotation.get("url"), snippet)
 
-    hits: list[SerpHit] = []
-    for title, url, snippet in found[:top_k]:
-        site = host_from_url(url)
-        hits.append(
-            SerpHit(
-                title=title or url,
-                url=url,
-                snippet=snippet,
-                site=site,
-                site_name=site,
-            )
-        )
-    return hits
+    return sources.hits(top_k)
 
 
 def native_search(
@@ -108,10 +85,8 @@ def native_search(
     client: httpx.Client | None = None,
 ) -> list[SerpHit]:
     """Run one search with the provider's own tool, and return its sources."""
-    cleaned = " ".join(query.split())
-    if not cleaned:
-        raise ValueError("search query must not be empty")
-    count = max(1, min(int(top_k), 20))
+    cleaned = clean_query(query)
+    count = result_limit(top_k)
     url = f"{config.base_url.rstrip('/')}/responses"
     body = {
         "model": config.model,
@@ -123,32 +98,13 @@ def native_search(
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
     }
-    try:
-        if client is not None:
-            response = client.post(
-                url, headers=headers, json=body, timeout=config.timeout_seconds
-            )
-        else:
-            with httpx.Client(timeout=config.timeout_seconds) as own:
-                response = own.post(url, headers=headers, json=body)
-    except httpx.HTTPError as err:
-        raise NativeSearchUnreachable(f"native search request failed: {err}") from err
-    if response.status_code in (401, 403):
-        raise NativeSearchRejected(
-            f"native search HTTP {response.status_code}: {response.text[:120]}"
-        )
-    if response.status_code >= 400:
-        raise NativeSearchError(
-            f"native search HTTP {response.status_code}: {response.text[:120]}"
-        )
-    try:
-        answer = response.json()
-    except ValueError as err:
-        raise NativeSearchError(
-            f"native search was not JSON: {response.text[:120]}"
-        ) from err
-    if not isinstance(answer, Mapping):
-        raise NativeSearchError("native search did not return an object")
+    answer = post_search(
+        url,
+        headers=headers,
+        body=body,
+        timeout_seconds=config.timeout_seconds,
+        client=client,
+    )
     if answer.get("error"):
         raise NativeSearchError(f"native search error: {str(answer.get('error'))[:120]}")
     if answer.get("status") == "failed":
