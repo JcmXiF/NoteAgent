@@ -91,10 +91,19 @@ class SupervisorStateTests(unittest.TestCase):
         self.assertIsNone(diag.supervisor_state(None))
 
 
+_INSTALL = {
+    "llm": {"configured": True},
+    "configPath": "C:/config.json",
+    "schemaVersion": 1,
+    "revision": 4,
+    "keychainAvailable": True,
+}
+
+
 class DiagnosticsPayloadTests(unittest.TestCase):
-    def _payload(self, repo: Path, **kwargs: object) -> dict:
+    def _payload(self, repo: Path, install: dict | None = None, **kwargs: object) -> dict:
         with (
-            patch.object(diag, "install_view", lambda: {"llm": {"configured": True}}),
+            patch.object(diag, "install_view", lambda: install or _INSTALL),
             patch.object(
                 diag,
                 "list_projects",
@@ -117,6 +126,19 @@ class DiagnosticsPayloadTests(unittest.TestCase):
             self.assertFalse(payload["supervised"])
             self.assertIsNone(payload["logs"])
             self.assertEqual(payload["warnings"], [])
+
+    def test_the_configuration_block_says_where_the_document_lives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = self._payload(Path(tmp), env={})
+            self.assertEqual(
+                payload["configuration"],
+                {
+                    "path": "C:/config.json",
+                    "schemaVersion": 1,
+                    "revision": 4,
+                    "keychainAvailable": True,
+                },
+            )
 
     def test_a_checkout_has_no_restart_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

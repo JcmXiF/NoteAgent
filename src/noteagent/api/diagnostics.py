@@ -202,6 +202,13 @@ def diagnostics_payload(
             (str(item["name"]) for item in projects if item.get("active")),
             None,
         ),
+        # The document this process reads, and whether its secrets have a home.
+        "configuration": {
+            "path": install.get("configPath"),
+            "schemaVersion": install.get("schemaVersion"),
+            "revision": install.get("revision"),
+            "keychainAvailable": install.get("keychainAvailable"),
+        },
         "logs": log_info,
         "supervised": _flag(source, ENV_SUPERVISED),
         "restarts": state["restarts"] if state else 0,

@@ -74,7 +74,7 @@ export function SearchSection({
     setSaving(true);
     setError(null);
     try {
-      const next = await saveSettings(patch);
+      const next = await saveSettings({ ...patch, revision: install.revision });
       onSaved(next);
       setMessage(t("settings.saved"));
     } catch (err) {

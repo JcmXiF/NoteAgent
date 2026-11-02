@@ -36,6 +36,7 @@ const SAVED: InstallSettings = {
   extractMedia: true,
   locked: [],
   invalid: [],
+  revision: 1,
 };
 
 describe("the model form", () => {

@@ -35,6 +35,8 @@ export type InstallSettings = {
   extractMedia: boolean;
   locked: string[];
   invalid: string[];
+  /** The document revision this answer was read from. A save carries it back. */
+  revision: number;
 };
 
 export type LlmDraft = {
@@ -62,6 +64,8 @@ export type SettingsPatch = {
   llm?: Record<string, unknown>;
   search?: Record<string, unknown>;
   extractMedia?: boolean;
+  /** The revision the form was built from; a stale one is refused with 409. */
+  revision?: number;
 };
 
 const LANG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;

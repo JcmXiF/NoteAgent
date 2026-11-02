@@ -51,6 +51,18 @@ def reset_process_env_keys() -> None:
     _process_env_keys = None
 
 
+def capture_process_env() -> frozenset[str]:
+    """Record the ``NOTEAGENT_*`` names the process was started with.
+
+    Unlike ``process_env_keys`` this reads no file: the settings layer needs the
+    snapshot before it decides whether a legacy ``.env`` is part of the answer.
+    """
+    global _process_env_keys
+    if _process_env_keys is None:
+        _process_env_keys = {key for key in os.environ if key.startswith("NOTEAGENT_")}
+    return frozenset(_process_env_keys)
+
+
 def process_env_keys() -> frozenset[str]:
     """``NOTEAGENT_*`` names set before the settings file was applied."""
     if _process_env_keys is None:
@@ -142,3 +154,8 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
     )
+
+
+# Taken at import, before any module can read a legacy file: a value that came
+# from that file must never be mistaken for one the process was started with.
+capture_process_env()

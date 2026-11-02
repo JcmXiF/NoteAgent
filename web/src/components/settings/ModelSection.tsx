@@ -73,7 +73,7 @@ export function ModelSection({
     setSaving(true);
     setError(null);
     try {
-      const next = await saveSettings({ llm: patch });
+      const next = await saveSettings({ llm: patch, revision: install.revision });
       onSaved(next);
       setMessage(t("settings.saved"));
     } catch (err) {

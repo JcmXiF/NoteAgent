@@ -211,6 +211,9 @@ class InstallSettingsBody(BaseModel):
     llm: LlmSettingsBody | None = None
     search: SearchSettingsBody | None = None
     extractMedia: bool | None = None
+    #: The revision the form was built from. A save that read an older document
+    #: is refused instead of overwriting a change it never saw.
+    revision: int | None = Field(default=None, ge=0)
 
 
 class BriefBody(BaseModel):
@@ -488,6 +491,14 @@ _INBOX_POLL_S = 8.0
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    # The runtime reads the model connection from the process environment, so
+    # the document is applied once before any job can start. A document the
+    # settings screen has to report must not stop the app from opening.
+    try:
+        install_view()
+    except (CodedError, OSError):
+        pass
+
     stop = asyncio.Event()
 
     async def _poll_inbox() -> None:

@@ -1,12 +1,14 @@
-"""Install settings: one model connection and one search setup for this computer.
+"""Install settings: the model connections, generation and search for this user.
 
-They live in the ``.env`` the process already reads, so the command line and
-the screen cannot drift into two configurations. A name that was already in
-the environment when the process started is left alone — the file has never
-overridden those, and saving must not pretend otherwise.
+The document lives in the per-user configuration directory (``store.py``) and
+the API keys live in the operating system credential store
+(``credentials.py``). Environment variables already present when the process
+started still win, and are reported as such. This layer reads no ``.env``
+file: it is the configuration document plus the credential store.
 
-Secrets are never returned. An empty key field means "leave it"; clearing is
-a separate, explicit request.
+The screen's existing answer shape is kept. Profiles, the revision and the
+source of each value are added beside it, so a client built before the profile
+screen does not have to change at the same time.
 """
 
 from __future__ import annotations
@@ -14,8 +16,9 @@ from __future__ import annotations
 import math
 import os
 import re
+import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -31,63 +34,73 @@ from noteagent.acquire.search_config import (
     SearchError,
 )
 from noteagent.acquire.types import ProviderNotConfiguredError
-from noteagent.llm.config import LlmConfig, LlmConfigError, load_dotenv, process_env_keys
-from noteagent.settings.envfile import dotenv_path, update_env_text, write_env_file
+from noteagent.llm.config import (
+    LlmConfig,
+    LlmConfigError,
+    capture_process_env,
+    process_env_keys,
+)
+from noteagent.settings import effective as effective_mod
+from noteagent.settings.credentials import (
+    CredentialStore,
+    keyring_store,
+)
+from noteagent.settings.fields import (
+    F_BASE,
+    F_COUNTRY,
+    F_LANG,
+    F_LLM_KEY,
+    F_LLM_TIMEOUT,
+    F_MAX_TOKENS,
+    F_MEDIA,
+    F_MODEL,
+    F_PROVIDER,
+    F_SEARCH_KEY,
+    F_SEARCH_TIMEOUT,
+    F_TEMPERATURE,
+    F_UI_LANG,
+    Field,
+    MANAGED_ENV_NAMES,
+)
+from noteagent.settings.store import (
+    DEFAULT_LLM_TIMEOUT,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SEARCH_TIMEOUT,
+    DEFAULT_TEMPERATURE,
+    Config,
+    ConfigStore,
+    Profile,
+    default_config_path,
+    format_number,
+)
 from noteagent.util.refusal import Refusal
-
-_HEADER = "# NOTEAGENT settings. The app writes values here and keeps comments.\n"
 
 _PROBE_TIMEOUT = 20.0
 _PROBE_QUERY = "example"
 
-_DEFAULT_TEMPERATURE = 0.1
-_DEFAULT_MAX_TOKENS = 4096
-_DEFAULT_LLM_TIMEOUT = 120.0
-_DEFAULT_SEARCH_TIMEOUT = 30.0
-
 _LANG = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")
 _HTTP_STATUS = re.compile(r"HTTP (\d+)")
 
+_PROVIDER_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
+    "qwen": "Qwen",
+    "ollama": "Ollama",
+}
 
-@dataclass(frozen=True, slots=True)
-class _Field:
-    """One value the screen can edit, and the environment name that stores it."""
-
-    id: str
-    env: str
-
-
-F_BASE = _Field("llm.baseUrl", "NOTEAGENT_LLM_BASE_URL")
-F_LLM_KEY = _Field("llm.apiKey", "NOTEAGENT_LLM_API_KEY")
-F_MODEL = _Field("llm.model", "NOTEAGENT_LLM_MODEL")
-F_TEMPERATURE = _Field("llm.temperature", "NOTEAGENT_LLM_TEMPERATURE")
-F_MAX_TOKENS = _Field("llm.maxTokens", "NOTEAGENT_LLM_MAX_TOKENS")
-F_LLM_TIMEOUT = _Field("llm.timeoutSeconds", "NOTEAGENT_LLM_TIMEOUT")
-F_PROVIDER = _Field("search.provider", "NOTEAGENT_SEARCH_PROVIDER")
-F_SEARCH_KEY = _Field("search.apiKey", "NOTEAGENT_SEARCH_API_KEY")
-F_SEARCH_TIMEOUT = _Field("search.timeoutSeconds", "NOTEAGENT_SEARCH_TIMEOUT")
-F_COUNTRY = _Field("search.country", "NOTEAGENT_SEARCH_COUNTRY")
-F_LANG = _Field("search.searchLang", "NOTEAGENT_SEARCH_LANG")
-F_UI_LANG = _Field("search.uiLang", "NOTEAGENT_SEARCH_UI_LANG")
-F_MEDIA = _Field("extractMedia", "NOTEAGENT_EXTRACT_MEDIA")
-
-_FIELDS = (
-    F_BASE,
-    F_LLM_KEY,
-    F_MODEL,
-    F_TEMPERATURE,
-    F_MAX_TOKENS,
-    F_LLM_TIMEOUT,
-    F_PROVIDER,
-    F_SEARCH_KEY,
-    F_SEARCH_TIMEOUT,
-    F_COUNTRY,
-    F_LANG,
-    F_UI_LANG,
-    F_MEDIA,
-)
-
-MANAGED_ENV_NAMES = frozenset(field.env for field in _FIELDS)
+__all__ = [
+    "MANAGED_ENV_NAMES",
+    "apply_install",
+    "clean_base_url",
+    "clean_max_tokens",
+    "clean_model",
+    "clean_secret",
+    "clean_temperature",
+    "install_view",
+    "probe_llm",
+    "probe_search",
+]
 
 
 def _invalid(field: str, message: str) -> Refusal:
@@ -97,7 +110,7 @@ def _invalid(field: str, message: str) -> Refusal:
 def _locked(field: str) -> Refusal:
     return Refusal(
         "settings.locked",
-        f"{field} is set in the process environment; the settings file cannot change it",
+        f"{field} is set in the process environment; the configuration cannot change it",
         params={"field": field},
         status=409,
     )
@@ -110,47 +123,44 @@ def _media_enabled() -> bool:
     return media_extract_enabled()
 
 
-def _prepare(env_file: Path | None) -> Path:
-    """Read the settings file this call is about, and no other one.
+@dataclass(frozen=True, slots=True)
+class _Context:
+    store: ConfigStore
+    config: Config
+    effective: effective_mod.Effective
 
-    An explicit path must not walk upward: a test, or a write aimed at one
-    file, would otherwise adopt a ``.env`` that happened to sit above it.
+
+#: The process environment is one value per name, so reading the document and
+#: applying it must not interleave with another request doing the same.
+_context_lock = threading.Lock()
+
+
+def _context(
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+) -> _Context:
+    """Read the document once and make this process use its values.
+
+    The document is read before the environment is touched: a damaged file
+    raises without leaving the process with values that came from nowhere. The
+    process snapshot is recorded before any file could be read, so an outside
+    override is never mistaken for something the screen may change.
     """
-    if env_file is not None:
-        path = Path(env_file)
-        load_dotenv(path.parent, walk=False)
-        return path
-    load_dotenv()
-    return dotenv_path()
+    with _context_lock:
+        capture_process_env()
+        store = ConfigStore(path or default_config_path(), credentials or keyring_store())
+        config = store.read()
+        effective_mod.forget_applied()
+        effective = effective_mod.resolve(config, store)
+        effective_mod.apply(effective)
+        return _Context(store=store, config=config, effective=effective)
 
 
-def _current(field: _Field) -> str | None:
+def _current(field: Field) -> str | None:
     """The effective value, or ``None`` when the process has no such name."""
     if field.env not in os.environ:
         return None
     return os.environ[field.env].strip()
-
-
-def _stage(changes: dict[str, str | None], field: _Field, new: str | None) -> None:
-    """Record one change, or refuse it when the environment owns the name.
-
-    ``None`` deletes the name. A value equal to what is already in effect is
-    not a change, including on a locked name — saving the form again must not
-    fail just because the process started with that value.
-    """
-    current = _current(field)
-    if new is None:
-        if current is None:
-            return
-        if field.env in process_env_keys():
-            raise _locked(field.id)
-        changes[field.env] = None
-        return
-    if current == new:
-        return
-    if field.env in process_env_keys():
-        raise _locked(field.id)
-    changes[field.env] = new
 
 
 def _finite(value: object, field: str) -> float:
@@ -160,11 +170,6 @@ def _finite(value: object, field: str) -> float:
     if not math.isfinite(number):
         raise _invalid(field, f"{field} is not a finite number")
     return number
-
-
-def _format_number(value: float) -> str:
-    text = f"{value:.6f}".rstrip("0").rstrip(".")
-    return text or "0"
 
 
 def clean_base_url(value: object) -> str:
@@ -201,7 +206,7 @@ def clean_temperature(value: object) -> str:
     number = _finite(value, F_TEMPERATURE.id)
     if number < 0 or number > 2:
         raise _invalid(F_TEMPERATURE.id, "temperature is outside 0..2")
-    return _format_number(number)
+    return format_number(number)
 
 
 def clean_max_tokens(value: object) -> str:
@@ -218,14 +223,14 @@ def clean_llm_timeout(value: object) -> str:
     number = _finite(value, F_LLM_TIMEOUT.id)
     if number < 5 or number > 600:
         raise _invalid(F_LLM_TIMEOUT.id, "timeout is outside 5..600")
-    return _format_number(number)
+    return format_number(number)
 
 
 def clean_search_timeout(value: object) -> str:
     number = _finite(value, F_SEARCH_TIMEOUT.id)
     if number < 1 or number > 120:
         raise _invalid(F_SEARCH_TIMEOUT.id, "search timeout is outside 1..120")
-    return _format_number(number)
+    return format_number(number)
 
 
 def clean_provider(value: object) -> str:
@@ -255,7 +260,7 @@ def clean_lang(value: object, field: str) -> str:
     return text
 
 
-def _read_float(field: _Field, default: float, invalid: list[str]) -> float:
+def _read_float(field: Field, default: float, invalid: list[str]) -> float:
     raw = _current(field)
     if not raw:
         return default
@@ -270,7 +275,7 @@ def _read_float(field: _Field, default: float, invalid: list[str]) -> float:
     return value
 
 
-def _read_int(field: _Field, default: int, invalid: list[str]) -> int:
+def _read_int(field: Field, default: int, invalid: list[str]) -> int:
     value = _read_float(field, float(default), invalid)
     if field.id in invalid:
         return default
@@ -289,80 +294,338 @@ def _mapping(body: Mapping[str, Any], key: str) -> Mapping[str, Any] | None:
     return value
 
 
-def _collect_llm(body: Mapping[str, Any], changes: dict[str, str | None]) -> None:
-    if "baseUrl" in body and body["baseUrl"] is not None:
-        _stage(changes, F_BASE, clean_base_url(body["baseUrl"]))
-    # A replacement wins over a clear sent in the same request: the field the
-    # person just typed is the one they mean to keep.
-    if body.get("apiKey"):
-        _stage(changes, F_LLM_KEY, clean_secret(body["apiKey"], F_LLM_KEY.id))
-    elif body.get("clearApiKey"):
-        _stage(changes, F_LLM_KEY, None)
-    if "model" in body and body["model"] is not None:
-        _stage(changes, F_MODEL, clean_model(body["model"]))
-    if "temperature" in body and body["temperature"] is not None:
-        _stage(changes, F_TEMPERATURE, clean_temperature(body["temperature"]))
-    if "maxTokens" in body and body["maxTokens"] is not None:
-        _stage(changes, F_MAX_TOKENS, clean_max_tokens(body["maxTokens"]))
-    if "timeoutSeconds" in body and body["timeoutSeconds"] is not None:
-        _stage(changes, F_LLM_TIMEOUT, clean_llm_timeout(body["timeoutSeconds"]))
-
-
-def _collect_optional_text(
-    changes: dict[str, str | None],
-    field: _Field,
-    body: Mapping[str, Any],
-    key: str,
-    clean: Callable[[object], str],
-) -> None:
-    if key not in body or body[key] is None:
+def _check_locked(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> None:
+    """Refuse a change the process environment owns; the same value is allowed."""
+    if field.env not in process_env_keys():
         return
-    text = clean(body[key])
-    # An empty optional is the default, so the file does not keep a blank line.
-    _stage(changes, field, text or None)
+    compare = normalise or (lambda value: value)
+    if compare(_current(field) or "") != compare(new):
+        raise _locked(field.id)
 
 
-def _collect_search(body: Mapping[str, Any], changes: dict[str, str | None]) -> None:
-    if "provider" in body and body["provider"] is not None:
-        _stage(changes, F_PROVIDER, clean_provider(body["provider"]))
+# --- reading a save request --------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _LlmPatch:
+    base_url: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout_seconds: float | None = None
+    #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
+    secret: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SearchPatch:
+    provider: str | None = None
+    timeout_seconds: float | None = None
+    country: str | None = None
+    search_lang: str | None = None
+    ui_lang: str | None = None
+    secret: str | None = None
+
+
+def _unchanged(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> bool:
+    compare = normalise or (lambda value: value)
+    return compare(_current(field) or "") == compare(new)
+
+
+def _read_secret_patch(
+    body: Mapping[str, Any], field: Field, current: effective_mod.Value
+) -> str | None:
+    """A key replacement, ``""`` to remove it, or ``None`` to leave it alone."""
     if body.get("apiKey"):
-        _stage(changes, F_SEARCH_KEY, clean_secret(body["apiKey"], F_SEARCH_KEY.id))
-    elif body.get("clearApiKey"):
-        _stage(changes, F_SEARCH_KEY, None)
-    if "timeoutSeconds" in body and body["timeoutSeconds"] is not None:
-        _stage(changes, F_SEARCH_TIMEOUT, clean_search_timeout(body["timeoutSeconds"]))
-    _collect_optional_text(changes, F_COUNTRY, body, "country", clean_country)
-    _collect_optional_text(changes, F_LANG, body, "searchLang", lambda value: clean_lang(value, F_LANG.id))
-    _collect_optional_text(
-        changes, F_UI_LANG, body, "uiLang", lambda value: clean_lang(value, F_UI_LANG.id)
+        value = clean_secret(body["apiKey"], field.id)
+        _check_locked(field, value)
+        # The same key already in the credential store needs no write.
+        if current.source != effective_mod.SOURCE_ENV and value != current.text:
+            return value
+        return None
+    if body.get("clearApiKey"):
+        _check_locked(field, "")
+        if current.source != effective_mod.SOURCE_ENV and current.text:
+            return ""
+    return None
+
+
+def _read_llm_patch(body: Mapping[str, Any], context: _Context) -> _LlmPatch:
+    if body.get("baseUrl") is not None:
+        base_url = clean_base_url(body["baseUrl"])
+        _check_locked(F_BASE, base_url)
+        if _unchanged(F_BASE, base_url):
+            base_url = None
+    else:
+        base_url = None
+    if body.get("model") is not None:
+        model = clean_model(body["model"])
+        _check_locked(F_MODEL, model)
+        if _unchanged(F_MODEL, model):
+            model = None
+    else:
+        model = None
+    temperature = (
+        float(clean_temperature(body["temperature"]))
+        if body.get("temperature") is not None
+        else None
+    )
+    if temperature is not None:
+        _check_locked(F_TEMPERATURE, format_number(temperature))
+        if _unchanged(F_TEMPERATURE, format_number(temperature)):
+            temperature = None
+    max_tokens = (
+        int(clean_max_tokens(body["maxTokens"])) if body.get("maxTokens") is not None else None
+    )
+    if max_tokens is not None:
+        _check_locked(F_MAX_TOKENS, str(max_tokens))
+        if _unchanged(F_MAX_TOKENS, str(max_tokens)):
+            max_tokens = None
+    timeout = (
+        float(clean_llm_timeout(body["timeoutSeconds"]))
+        if body.get("timeoutSeconds") is not None
+        else None
+    )
+    if timeout is not None:
+        _check_locked(F_LLM_TIMEOUT, format_number(timeout))
+        if _unchanged(F_LLM_TIMEOUT, format_number(timeout)):
+            timeout = None
+
+    secret = _read_secret_patch(body, F_LLM_KEY, context.effective.llm_key)
+    return _LlmPatch(
+        base_url=base_url,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_seconds=timeout,
+        secret=secret,
     )
 
 
-def _apply_process(changes: Mapping[str, str | None]) -> None:
-    for key, value in changes.items():
-        if value is None:
-            os.environ.pop(key, None)
+def _read_optional_text(
+    body: Mapping[str, Any],
+    key: str,
+    field: Field,
+    clean: Callable[[object], str],
+    *,
+    normalise: Callable[[str], str] | None = None,
+) -> str | None:
+    if key not in body or body[key] is None:
+        return None
+    text = clean(body[key])
+    _check_locked(field, text, normalise=normalise)
+    if _unchanged(field, text, normalise=normalise):
+        return None
+    return text
+
+
+def _read_search_patch(body: Mapping[str, Any], context: _Context) -> _SearchPatch:
+    provider = clean_provider(body["provider"]) if body.get("provider") is not None else None
+    if provider is not None:
+        _check_locked(F_PROVIDER, provider, normalise=str.lower)
+        if _unchanged(F_PROVIDER, provider, normalise=str.lower):
+            provider = None
+    timeout = (
+        float(clean_search_timeout(body["timeoutSeconds"]))
+        if body.get("timeoutSeconds") is not None
+        else None
+    )
+    if timeout is not None:
+        _check_locked(F_SEARCH_TIMEOUT, format_number(timeout))
+        if _unchanged(F_SEARCH_TIMEOUT, format_number(timeout)):
+            timeout = None
+    country = _read_optional_text(body, "country", F_COUNTRY, clean_country, normalise=str.upper)
+    search_lang = _read_optional_text(
+        body, "searchLang", F_LANG, lambda value: clean_lang(value, F_LANG.id)
+    )
+    ui_lang = _read_optional_text(
+        body, "uiLang", F_UI_LANG, lambda value: clean_lang(value, F_UI_LANG.id)
+    )
+
+    secret = _read_secret_patch(body, F_SEARCH_KEY, context.effective.search_key)
+    return _SearchPatch(
+        provider=provider,
+        timeout_seconds=timeout,
+        country=country,
+        search_lang=search_lang,
+        ui_lang=ui_lang,
+        secret=secret,
+    )
+
+
+def _read_media(body: Mapping[str, Any]) -> bool | None:
+    if "extractMedia" not in body or body["extractMedia"] is None:
+        return None
+    enabled = body["extractMedia"]
+    if not isinstance(enabled, bool):
+        raise _invalid(F_MEDIA.id, "extractMedia is not true or false")
+    if F_MEDIA.env in process_env_keys() and _media_enabled() != enabled:
+        raise _locked(F_MEDIA.id)
+    return enabled
+
+
+# --- writing -----------------------------------------------------------------
+
+
+def _infer_provider(base_url: str) -> str:
+    host = (urlsplit(base_url).hostname or "").lower() if base_url else ""
+    if host == "api.openai.com":
+        return "openai"
+    if host.endswith("anthropic.com"):
+        return "anthropic"
+    if host.endswith("deepseek.com"):
+        return "deepseek"
+    if "dashscope" in host or host.endswith("aliyuncs.com"):
+        return "qwen"
+    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+        return "ollama"
+    return "custom"
+
+
+def _profile_name(provider: str, base_url: str) -> str:
+    if provider in _PROVIDER_NAMES:
+        return _PROVIDER_NAMES[provider]
+    host = (urlsplit(base_url).hostname or "") if base_url else ""
+    return host or "Default"
+
+
+def _new_profile_id(profiles: list[Profile]) -> str:
+    taken = {profile.id for profile in profiles}
+    index = 1
+    while f"p_{index}" in taken:
+        index += 1
+    return f"p_{index}"
+
+
+def _with_profile(config: Config, llm: _LlmPatch) -> Config:
+    """Apply an endpoint change to the active profile, creating it if needed."""
+    if llm.base_url is None and llm.model is None and not llm.secret:
+        return config
+    profiles = list(config.profiles)
+    active = config.active_profile_id
+    if active is None:
+        base_url = llm.base_url or ""
+        provider = _infer_provider(base_url)
+        ident = _new_profile_id(profiles)
+        profiles.append(
+            Profile(
+                id=ident,
+                name=_profile_name(provider, base_url),
+                provider=provider,
+                base_url=base_url,
+                model=llm.model or "",
+            )
+        )
+        return replace(config, profiles=tuple(profiles), active_profile_id=ident)
+    if llm.base_url is None and llm.model is None:
+        return config
+    updated = [
+        replace(
+            profile,
+            base_url=llm.base_url if llm.base_url is not None else profile.base_url,
+            model=llm.model if llm.model is not None else profile.model,
+            provider=(
+                _infer_provider(llm.base_url) if llm.base_url is not None else profile.provider
+            ),
+        )
+        if profile.id == active
+        else profile
+        for profile in profiles
+    ]
+    return replace(config, profiles=tuple(updated))
+
+
+def _with_generation(config: Config, llm: _LlmPatch) -> Config:
+    current = config.generation
+    return replace(
+        config,
+        generation=replace(
+            current,
+            temperature=llm.temperature if llm.temperature is not None else current.temperature,
+            max_tokens=llm.max_tokens if llm.max_tokens is not None else current.max_tokens,
+            timeout_seconds=(
+                llm.timeout_seconds
+                if llm.timeout_seconds is not None
+                else current.timeout_seconds
+            ),
+        ),
+    )
+
+
+def _with_search(config: Config, search: _SearchPatch) -> Config:
+    current = config.search
+    return replace(
+        config,
+        search=replace(
+            current,
+            external_provider=(
+                search.provider if search.provider is not None else current.external_provider
+            ),
+            timeout_seconds=(
+                search.timeout_seconds
+                if search.timeout_seconds is not None
+                else current.timeout_seconds
+            ),
+            country=search.country if search.country is not None else current.country,
+            search_lang=(
+                search.search_lang if search.search_lang is not None else current.search_lang
+            ),
+            ui_lang=search.ui_lang if search.ui_lang is not None else current.ui_lang,
+        ),
+    )
+
+
+def _mutate(
+    config: Config,
+    llm: _LlmPatch,
+    search: _SearchPatch,
+    media: bool | None,
+) -> Config:
+    config = _with_profile(config, llm)
+    config = _with_generation(config, llm)
+    config = _with_search(config, search)
+    return config if media is None else replace(config, extract_media=media)
+
+
+def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _SearchPatch) -> None:
+    profile = config.active_profile
+    if llm.secret is not None:
+        if not llm.secret:
+            if profile is not None:
+                store.delete_llm_key(profile.id)
+        elif profile is not None:
+            store.set_llm_key(profile.id, llm.secret)
+    if search.secret is not None:
+        if search.secret:
+            store.set_search_key(search.secret)
         else:
-            os.environ[key] = value
+            store.delete_search_key()
 
 
-def install_view(*, env_file: Path | None = None) -> dict[str, Any]:
+# --- the screen's answer -----------------------------------------------------
+
+
+def install_view(
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+) -> dict[str, Any]:
     """What the screen shows. Keys are reported as set or not, never as text."""
-    _prepare(env_file)
+    context = _context(path, credentials)
     invalid: list[str] = []
     base_url = _current(F_BASE) or ""
     model = _current(F_MODEL) or ""
     llm_key = _current(F_LLM_KEY) or ""
-    temperature = _read_float(F_TEMPERATURE, _DEFAULT_TEMPERATURE, invalid)
-    max_tokens = _read_int(F_MAX_TOKENS, _DEFAULT_MAX_TOKENS, invalid)
-    llm_timeout = _read_float(F_LLM_TIMEOUT, _DEFAULT_LLM_TIMEOUT, invalid)
+    temperature = _read_float(F_TEMPERATURE, DEFAULT_TEMPERATURE, invalid)
+    max_tokens = _read_int(F_MAX_TOKENS, DEFAULT_MAX_TOKENS, invalid)
+    llm_timeout = _read_float(F_LLM_TIMEOUT, DEFAULT_LLM_TIMEOUT, invalid)
     provider = (_current(F_PROVIDER) or "none").lower()
     if provider not in KNOWN_PROVIDERS:
         invalid.append(F_PROVIDER.id)
         provider = "none"
     search_key = _current(F_SEARCH_KEY) or ""
-    search_timeout = _read_float(F_SEARCH_TIMEOUT, _DEFAULT_SEARCH_TIMEOUT, invalid)
-    locked = [field.id for field in _FIELDS if field.env in process_env_keys()]
+    search_timeout = _read_float(F_SEARCH_TIMEOUT, DEFAULT_SEARCH_TIMEOUT, invalid)
+    config = context.config
     return {
         "version": __version__,
         "llm": {
@@ -381,38 +644,79 @@ def install_view(*, env_file: Path | None = None) -> dict[str, Any]:
             "country": _current(F_COUNTRY) or "",
             "searchLang": _current(F_LANG) or "",
             "uiLang": _current(F_UI_LANG) or "",
+            "mode": config.search.mode,
             "configured": provider not in ("", "none") and bool(search_key),
         },
         "extractMedia": _media_enabled(),
-        "locked": locked,
+        "locked": context.effective.locked(),
         "invalid": invalid,
+        # Added alongside the shape above, for the profile-based screen.
+        "schemaVersion": config.schema_version,
+        "revision": config.revision,
+        "configPath": str(context.store.path),
+        "keychainAvailable": context.effective.keychain_available,
+        "sources": context.effective.sources(),
+        "profiles": [
+            {
+                "id": profile.id,
+                "name": profile.name,
+                "provider": profile.provider,
+                "baseUrl": profile.base_url,
+                "model": profile.model,
+                "active": profile.id == config.active_profile_id,
+            }
+            for profile in config.profiles
+        ],
+        "activeProfileId": config.active_profile_id,
+        "generation": {
+            "temperature": config.generation.temperature,
+            "maxTokens": config.generation.max_tokens,
+            "timeoutSeconds": config.generation.timeout_seconds,
+        },
     }
 
 
-def apply_install(body: Mapping[str, Any], *, env_file: Path | None = None) -> dict[str, Any]:
+def apply_install(
+    body: Mapping[str, Any],
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+) -> dict[str, Any]:
     """Write the given fields and make this process use them immediately."""
-    path = _prepare(env_file)
-    changes: dict[str, str | None] = {}
-    llm = _mapping(body, "llm")
-    if llm is not None:
-        _collect_llm(llm, changes)
-    search = _mapping(body, "search")
-    if search is not None:
-        _collect_search(search, changes)
-    if "extractMedia" in body and body["extractMedia"] is not None:
-        enabled = body["extractMedia"]
-        if not isinstance(enabled, bool):
-            raise _invalid(F_MEDIA.id, "extractMedia is not true or false")
-        if _media_enabled() != enabled:
-            _stage(changes, F_MEDIA, "1" if enabled else "0")
-    if changes:
-        text = path.read_text(encoding="utf-8") if path.is_file() else _HEADER
-        write_env_file(path, update_env_text(text, changes))
-        _apply_process(changes)
-    return install_view(env_file=path)
+    context = _context(path, credentials)
+    expected = body.get("revision")
+    if expected is not None and (
+        isinstance(expected, bool) or not isinstance(expected, int) or expected < 0
+    ):
+        raise _invalid("revision", "revision is not a whole number")
+    llm_body = _mapping(body, "llm")
+    search_body = _mapping(body, "search")
+    llm = _read_llm_patch(llm_body, context) if llm_body is not None else _LlmPatch()
+    search = _read_search_patch(search_body, context) if search_body is not None else _SearchPatch()
+    media = _read_media(body)
+
+    writes_secret = llm.secret is not None or search.secret is not None
+    if writes_secret:
+        # The credential store is checked before the document changes, so the
+        # common failure (no backend) leaves nothing half-saved. A backend that
+        # fails between the two writes still reaches the caller as an error; the
+        # document keeps the revision that write gave it.
+        context.store.require_keychain()
+
+    updated = context.store.update(
+        lambda current: _mutate(current, llm, search, media),
+        expected_revision=expected,
+        force=writes_secret,
+    )
+    if writes_secret:
+        _write_secrets(context.store, updated, llm, search)
+    return install_view(path=path, credentials=credentials)
 
 
-def _use(field: _Field, new: str) -> str:
+# --- trial calls -------------------------------------------------------------
+
+
+def _use(field: Field, new: str) -> str:
     """Accept *new* for a trial call, unless the environment owns a different value."""
     current = _current(field) or ""
     if field.env in process_env_keys() and new != current:
@@ -420,7 +724,7 @@ def _use(field: _Field, new: str) -> str:
     return new
 
 
-def _overlay_secret(body: Mapping[str, Any], field: _Field) -> str:
+def _overlay_secret(body: Mapping[str, Any], field: Field) -> str:
     current = _current(field) or ""
     if body.get("apiKey"):
         return _use(field, clean_secret(body["apiKey"], field.id))
@@ -439,18 +743,29 @@ def _llm_config_for(body: Mapping[str, Any]) -> LlmConfig:
     else:
         model = _current(F_MODEL) or ""
     key = _overlay_secret(body, F_LLM_KEY)
+    # A stored key belongs to the service it was saved for. If a caller could
+    # name any address while keeping that key, this trial call would be a way to
+    # send the key wherever the caller likes. A new endpoint needs a new key.
+    saved_base = _current(F_BASE) or ""
+    if not body.get("apiKey") and key and _origin(base) != _origin(saved_base):
+        raise Refusal(
+            "settings.probeKeyRequired",
+            "the stored API key belongs to a different service address; "
+            "enter the key again to test this one",
+            status=409,
+        )
     if "temperature" in body and body["temperature"] is not None:
         temperature = float(_use(F_TEMPERATURE, clean_temperature(body["temperature"])))
     else:
-        temperature = _read_float(F_TEMPERATURE, _DEFAULT_TEMPERATURE, [])
+        temperature = _read_float(F_TEMPERATURE, DEFAULT_TEMPERATURE, [])
     if "maxTokens" in body and body["maxTokens"] is not None:
         max_tokens = int(_use(F_MAX_TOKENS, clean_max_tokens(body["maxTokens"])))
     else:
-        max_tokens = _read_int(F_MAX_TOKENS, _DEFAULT_MAX_TOKENS, [])
+        max_tokens = _read_int(F_MAX_TOKENS, DEFAULT_MAX_TOKENS, [])
     if "timeoutSeconds" in body and body["timeoutSeconds"] is not None:
         timeout = float(_use(F_LLM_TIMEOUT, clean_llm_timeout(body["timeoutSeconds"])))
     else:
-        timeout = _read_float(F_LLM_TIMEOUT, _DEFAULT_LLM_TIMEOUT, [])
+        timeout = _read_float(F_LLM_TIMEOUT, DEFAULT_LLM_TIMEOUT, [])
     if not base or not model or not key:
         raise LlmConfigError(
             "Missing LLM config: base URL, API key and model are required to test the connection."
@@ -463,6 +778,29 @@ def _llm_config_for(body: Mapping[str, Any]) -> LlmConfig:
         max_tokens=max_tokens,
         timeout_seconds=timeout,
     )
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(value: str) -> tuple[str, str, int] | None:
+    """Scheme, host and effective port of a URL, or ``None`` when it has none.
+
+    A key belongs to this, not to the whole address: another path under the same
+    service still receives the same key, a different port or scheme must not.
+    """
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname
+    if not scheme or not host:
+        return None
+    if port is None:
+        port = _DEFAULT_PORTS.get(scheme, 0)
+    return scheme, host.lower(), port
 
 
 def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
@@ -479,7 +817,7 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
     if "timeoutSeconds" in body and body["timeoutSeconds"] is not None:
         timeout = float(_use(F_SEARCH_TIMEOUT, clean_search_timeout(body["timeoutSeconds"])))
     else:
-        timeout = _read_float(F_SEARCH_TIMEOUT, _DEFAULT_SEARCH_TIMEOUT, [])
+        timeout = _read_float(F_SEARCH_TIMEOUT, DEFAULT_SEARCH_TIMEOUT, [])
     if "country" in body and body["country"] is not None:
         country = _use(F_COUNTRY, clean_country(body["country"]))
     else:
@@ -494,7 +832,7 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
         ui_lang = _current(F_UI_LANG) or ""
     if provider not in KNOWN_PROVIDERS:
         raise SearchConfigError(
-            f"Unknown NOTEAGENT_SEARCH_PROVIDER={provider!r}. "
+            f"Unknown search provider {provider!r}. "
             f"Use one of: {', '.join(sorted(KNOWN_PROVIDERS))}."
         )
     return SearchConfig(
@@ -535,7 +873,8 @@ def _probe_refusal(message: str, *, search: bool) -> Refusal:
 def probe_llm(
     body: Mapping[str, Any] | None = None,
     *,
-    env_file: Path | None = None,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
     poster: Callable[..., Any] | None = None,
 ) -> None:
     """Ask the model endpoint for one short answer, without saving.
@@ -543,7 +882,7 @@ def probe_llm(
     HTTP 200 is enough: a reasoning model may spend a tiny budget before it
     emits text, and the question here is whether the connection is accepted.
     """
-    _prepare(env_file)
+    _context(path, credentials)
     config = _llm_config_for(body or {})
     timeout = min(config.timeout_seconds, _PROBE_TIMEOUT)
     payload = {
@@ -575,11 +914,12 @@ def probe_llm(
 def probe_search(
     body: Mapping[str, Any] | None = None,
     *,
-    env_file: Path | None = None,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
     runner: Callable[..., Any] | None = None,
 ) -> int:
     """Run one small search with the draft, without saving. Returns how many cards came back."""
-    _prepare(env_file)
+    _context(path, credentials)
     config = _search_config_for(body or {})
     if config.provider in ("", "none"):
         raise Refusal("settings.searchOff", "search provider is none", status=400)
