@@ -112,6 +112,11 @@ export function EffectiveConfigSection({ install }: { install: InstallSettings }
             source={source("search.provider")}
           />
           <Row
+            label={t("settings.search.mode")}
+            value={t(`settings.search.mode_${install.search.mode}`)}
+            source={source("search.mode")}
+          />
+          <Row
             label={t("settings.search.apiKey")}
             value={keyState(install.search.apiKeySet)}
             source={source("search.apiKey")}

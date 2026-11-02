@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Loader2, Search } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MAX_FETCH_CARDS } from "@/lib/api/acquire";
-import { atLimit, selectedCards, toggleSelected } from "@/lib/search-cards";
+import { atLimit, selectedCards, sourceKey, toggleSelected } from "@/lib/search-cards";
 import { cn } from "@/lib/utils";
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useNavStore } from "@/stores/nav-store";
@@ -121,6 +122,7 @@ export function BrowseSearch() {
           <ul className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             {results.map((card) => {
               const ticked = selected.includes(card.url);
+              const source = card.source ? sourceKey(card.source) : null;
               return (
                 <li key={card.url}>
                   <button
@@ -144,8 +146,13 @@ export function BrowseSearch() {
                       <span className="block truncate text-[11px] font-medium">
                         {card.title || card.url}
                       </span>
-                      <span className="block truncate text-[10px] text-muted-foreground">
-                        {card.site || card.url}
+                      <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <span className="truncate">{card.site || card.url}</span>
+                        {card.source ? (
+                          <Badge tone="outline" className="ml-auto">
+                            {source ? t(source) : card.source}
+                          </Badge>
+                        ) : null}
                       </span>
                       {card.snippet ? (
                         <span className="mt-0.5 line-clamp-2 block text-[10px] leading-snug text-muted-foreground">

@@ -4,9 +4,19 @@ import os
 from dataclasses import dataclass
 
 from noteagent.llm.config import load_dotenv
+from noteagent.settings.store import SEARCH_MODES
 from noteagent.util.refusal import CodedError
 
 KNOWN_PROVIDERS = frozenset({"none", "brave", "serper"})
+
+#: Providers whose model service can search natively. Empty in this build;
+#: the OpenAI and Anthropic adapters add themselves here as they land.
+NATIVE_SEARCH_PROVIDERS: frozenset[str] = frozenset()
+
+
+def native_search_available() -> bool:
+    """Whether any native adapter exists, which is what makes ``native`` usable."""
+    return bool(NATIVE_SEARCH_PROVIDERS)
 
 
 class SearchConfigError(CodedError, ValueError):
@@ -20,6 +30,13 @@ class SearchError(CodedError, RuntimeError):
 
     code = "provider.failed"
     status = 502
+
+
+class SearchModeUnavailable(CodedError, RuntimeError):
+    """Native search was selected, but this build has no adapter for it."""
+
+    code = "provider.nativeUnavailable"
+    status = 503
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +54,9 @@ class SearchConfig:
     country: str = ""
     search_lang: str = ""
     ui_lang: str = ""
+    #: ``auto`` prefers a native adapter and falls back to the external one;
+    #: ``external`` never tries native; ``native`` refuses when no adapter exists.
+    mode: str = "auto"
 
     @property
     def configured(self) -> bool:
@@ -55,6 +75,7 @@ def load_search_config() -> SearchConfig:
                                     Brave Chinese: ``zh-hans`` or ``zh-hant``.
                                     ``zh`` is accepted and sent as ``zh-hans``.
         NOTEAGENT_SEARCH_UI_LANG    optional, Brave ``ui_lang`` (e.g. ``zh-CN``)
+        NOTEAGENT_SEARCH_MODE       auto | external | native, default auto
     """
     load_dotenv()
     provider = os.environ.get("NOTEAGENT_SEARCH_PROVIDER", "none").strip().lower() or "none"
@@ -62,6 +83,12 @@ def load_search_config() -> SearchConfig:
         raise SearchConfigError(
             f"Unknown NOTEAGENT_SEARCH_PROVIDER={provider!r}. "
             f"Use one of: {', '.join(sorted(KNOWN_PROVIDERS))}."
+        )
+    mode = os.environ.get("NOTEAGENT_SEARCH_MODE", "auto").strip().lower() or "auto"
+    if mode not in SEARCH_MODES:
+        raise SearchConfigError(
+            f"Unknown NOTEAGENT_SEARCH_MODE={mode!r}. "
+            f"Use one of: {', '.join(sorted(SEARCH_MODES))}."
         )
     api_key = os.environ.get("NOTEAGENT_SEARCH_API_KEY", "").strip()
     timeout_seconds = float(os.environ.get("NOTEAGENT_SEARCH_TIMEOUT", "30"))
@@ -75,4 +102,5 @@ def load_search_config() -> SearchConfig:
         country=country,
         search_lang=search_lang,
         ui_lang=ui_lang,
+        mode=mode,
     )

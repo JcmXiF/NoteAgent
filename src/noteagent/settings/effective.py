@@ -28,6 +28,7 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
     F_TEMPERATURE,
@@ -59,6 +60,7 @@ _VALUE_FIELDS: tuple[tuple[Field, str], ...] = (
     (F_MAX_TOKENS, "max_tokens"),
     (F_LLM_TIMEOUT, "llm_timeout"),
     (F_PROVIDER, "search_provider"),
+    (F_SEARCH_MODE, "search_mode"),
     (F_SEARCH_KEY, "search_key"),
     (F_SEARCH_TIMEOUT, "search_timeout"),
     (F_COUNTRY, "country"),
@@ -104,6 +106,7 @@ class Effective:
     max_tokens: Value
     llm_timeout: Value
     search_provider: Value
+    search_mode: Value
     search_key: Value
     search_timeout: Value
     country: Value
@@ -233,6 +236,14 @@ def resolve(
             F_PROVIDER.env,
             search.external_provider,
             "none",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "search_mode": _plain(
+            F_SEARCH_MODE.env,
+            search.mode,
+            "auto",
             file_exists=exists,
             process_keys=keys,
             environ=source,

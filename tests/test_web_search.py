@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
 from noteagent.acquire.cards import cards_from_hits, favicon_for_host
 from noteagent.acquire.run_search import run_web_search
-from noteagent.acquire.search_config import SearchConfig, SearchError
+from noteagent.acquire.search_config import (
+    SearchConfig,
+    SearchConfigError,
+    SearchError,
+    SearchModeUnavailable,
+    load_search_config,
+)
 from noteagent.acquire.tools.providers.brave import (
     normalize_brave_search_lang,
     parse_brave_payload,
@@ -18,6 +26,7 @@ from noteagent.acquire.tools.providers.brave import (
 from noteagent.acquire.tools.providers.serper import parse_serper_payload
 from noteagent.acquire.tools.web_search import web_search
 from noteagent.acquire.types import SerpHit
+from noteagent.api.search import card_to_dict
 from noteagent.project.init import init_project
 from noteagent.util.run_log import RunLogger, run_log_path
 
@@ -176,6 +185,68 @@ class WebSearchDispatchTests(unittest.TestCase):
             "https://cdn.example/z.png",
         )
         self.assertIn("zhihu.com", favicon_for_host("zhihu.com"))
+
+
+class SearchModeTests(unittest.TestCase):
+    def _client(self) -> httpx.Client:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "web": {
+                        "results": [
+                            {
+                                "title": "T",
+                                "url": "https://example.com/1",
+                                "description": "d",
+                            }
+                        ]
+                    }
+                },
+            )
+
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+    def test_auto_and_external_use_the_external_provider(self) -> None:
+        for mode in ("auto", "external"):
+            with self.subTest(mode=mode):
+                cfg = SearchConfig(provider="brave", api_key="tok", mode=mode)
+                run = run_web_search("KL", config=cfg, client=self._client())
+                self.assertEqual(len(run.cards), 1)
+                self.assertEqual(run.cards[0].source, "brave")
+
+    def test_native_is_refused_until_an_adapter_exists(self) -> None:
+        cfg = SearchConfig(provider="brave", api_key="tok", mode="native")
+        with self.assertRaises(SearchModeUnavailable) as caught:
+            run_web_search("KL", config=cfg, client=self._client())
+        self.assertEqual(caught.exception.code, "provider.nativeUnavailable")
+
+    def test_a_card_names_the_source_that_produced_it(self) -> None:
+        cfg = SearchConfig(provider="brave", api_key="tok")
+        run = run_web_search("KL", config=cfg, client=self._client())
+        self.assertEqual(card_to_dict(run.cards[0])["source"], "brave")
+
+    def test_the_mode_is_read_from_the_environment(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "NOTEAGENT_SEARCH_PROVIDER": "brave",
+                    "NOTEAGENT_SEARCH_API_KEY": "tok",
+                    "NOTEAGENT_SEARCH_MODE": "external",
+                },
+            ),
+            patch("noteagent.acquire.search_config.load_dotenv"),
+        ):
+            self.assertEqual(load_search_config().mode, "external")
+
+    def test_an_unknown_mode_is_refused(self) -> None:
+        with (
+            patch.dict(os.environ, {"NOTEAGENT_SEARCH_MODE": "sideways"}),
+            patch("noteagent.acquire.search_config.load_dotenv"),
+        ):
+            with self.assertRaises(SearchConfigError):
+                load_search_config()
 
 
 class SearchRunLogTests(unittest.TestCase):

@@ -9,9 +9,15 @@ import httpx
 
 from noteagent.acquire.budget import MAX_CANDIDATES
 from noteagent.acquire.cards import cards_from_hits
-from noteagent.acquire.search_config import SearchConfig, load_search_config
+from noteagent.acquire.search_config import (
+    SearchConfig,
+    SearchConfigError,
+    SearchModeUnavailable,
+    load_search_config,
+)
 from noteagent.acquire.tools.web_search import web_search
 from noteagent.acquire.types import CandidateCard, SerpHit
+from noteagent.settings.store import SEARCH_MODES
 from noteagent.util.run_log import RunLogger
 
 _ERROR_MESSAGE_LIMIT = 300
@@ -39,25 +45,38 @@ def run_web_search(
     limit = MAX_CANDIDATES if top_k is None else max(1, min(int(top_k), 20))
     started = perf_counter()
     provider: str | None = None
+    mode: str | None = None
     try:
         cfg = config if config is not None else load_search_config()
         provider = cfg.provider
+        mode = cfg.mode
+        if mode not in SEARCH_MODES:
+            raise SearchConfigError(f"Unknown search mode {mode!r}.")
+        if mode == "native":
+            # An adapter belongs to the active model service; until one exists,
+            # falling back to an external provider would not be what was chosen.
+            raise SearchModeUnavailable(
+                "native search is selected, but this version has no adapter "
+                "for the active model service"
+            )
         logger.append(
             "search.start",
             component="acquire",
             query=cleaned,
             provider=provider,
+            mode=mode,
             top_k=limit,
             caller=caller,
         )
         hits = web_search(query, top_k=limit, config=cfg, client=client)
-        cards = cards_from_hits(hits, query=cleaned, limit=limit)
+        cards = cards_from_hits(hits, query=cleaned, limit=limit, source=cfg.provider)
     except Exception as err:
         logger.append(
             "search.error",
             component="acquire",
             query=cleaned,
             provider=provider,
+            mode=mode,
             caller=caller,
             error=type(err).__name__,
             message=str(err)[:_ERROR_MESSAGE_LIMIT],
@@ -69,6 +88,7 @@ def run_web_search(
         component="acquire",
         query=cleaned,
         provider=provider,
+        mode=mode,
         caller=caller,
         hits=len(hits),
         cards=len(cards),

@@ -1172,6 +1172,17 @@
     "search": {
       "title": "网页搜索",
       "intro": "用于搜索网页并将结果收入资料。未配置时其他功能不受影响，仅无法在此搜索。",
+      "mode": "搜索方式",
+      "modeHint": "自动会优先使用原生搜索，不可用时改用外部搜索。",
+      "modeHintNativeUnavailable": "自动会优先使用原生搜索，不可用时改用外部搜索；当前版本尚未提供原生搜索。",
+      "mode_auto": "自动",
+      "mode_external": "仅外部搜索",
+      "mode_native": "原生",
+      "mode_nativeUnavailable": "原生（尚未提供）",
+      "source_brave": "Brave",
+      "source_serper": "Serper",
+      "source_openai": "OpenAI",
+      "source_anthropic": "Anthropic",
       "provider": "搜索服务",
       "provider_none": "不使用",
       "provider_brave": "Brave",
@@ -1400,6 +1411,7 @@
       "provider": {
         "notConfigured": "尚未配置网页搜索。请打开设置，选择搜索服务并填写密钥。",
         "misconfigured": "网页搜索的配置不完整，请检查一下设置。",
+        "nativeUnavailable": "已选择原生搜索，但当前版本还没有支持它的模型服务。请在设置中改用自动或仅外部搜索。",
         "failed": "本次网页搜索未成功，请稍后重试。"
       },
       "settings": {

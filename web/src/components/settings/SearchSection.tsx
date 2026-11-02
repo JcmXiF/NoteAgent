@@ -22,6 +22,7 @@ import {
   searchProblems,
   type InstallSettings,
   type SearchDraft,
+  type SearchMode,
   type SearchProvider,
 } from "@/lib/install-settings";
 import { cn } from "@/lib/utils";
@@ -113,6 +114,32 @@ export function SearchSection({
 
   return (
     <SettingsSection title={t("settings.search.title")} intro={t("settings.search.intro")}>
+      <Field
+        label={t("settings.search.mode")}
+        hint={
+          install.search.nativeAvailable
+            ? t("settings.search.modeHint")
+            : t("settings.search.modeHintNativeUnavailable")
+        }
+        locked={locked("search.mode")}
+      >
+        <select
+          aria-label={t("settings.search.mode")}
+          className={cn(inputClass, "h-8 text-sm")}
+          value={draft.mode}
+          disabled={locked("search.mode")}
+          onChange={(event) => edit({ mode: event.target.value as SearchMode })}
+        >
+          <option value="auto">{t("settings.search.mode_auto")}</option>
+          <option value="external">{t("settings.search.mode_external")}</option>
+          <option value="native" disabled={!install.search.nativeAvailable}>
+            {install.search.nativeAvailable
+              ? t("settings.search.mode_native")
+              : t("settings.search.mode_nativeUnavailable")}
+          </option>
+        </select>
+      </Field>
+
       <Field
         label={t("settings.search.provider")}
         locked={locked("search.provider")}
@@ -268,7 +295,12 @@ export function SearchSection({
         <Button
           type="button"
           variant="outline"
-          disabled={!searchCanProbe(draft, install.search) || probing || saving}
+          disabled={
+            !searchCanProbe(draft, install.search) ||
+            (draft.mode === "native" && !install.search.nativeAvailable) ||
+            probing ||
+            saving
+          }
           onClick={() => void trial()}
         >
           {probing ? t("settings.testing") : t("settings.search.test")}

@@ -33,6 +33,8 @@ const SAVED: InstallSettings = {
   },
   search: {
     provider: "brave",
+    mode: "auto",
+    nativeAvailable: false,
     apiKeySet: true,
     timeoutSeconds: 30,
     country: "CN",
@@ -176,4 +178,13 @@ describe("the search form", () => {
     const draft = { ...searchDraftFrom(SAVED.search, true), extractMedia: false };
     expect(searchPatch(draft, SAVED.search, true)).toEqual({ extractMedia: false });
   });
+
+  it("saves a changed search mode and nothing else", () => {
+    const draft = { ...searchDraftFrom(SAVED.search, true), mode: "external" as const };
+    expect(searchDirty(draft, SAVED.search, true)).toBe(true);
+    expect(searchPatch(draft, SAVED.search, true)).toEqual({
+      search: { mode: "external" },
+    });
+  });
+
 });

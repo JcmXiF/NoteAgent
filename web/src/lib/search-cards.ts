@@ -9,6 +9,18 @@ import type { ResourceCard } from "@/lib/api/types";
  * the reader's decision; saying that the limit is reached is part of answering it.
  */
 
+const SOURCE_KEYS: Record<string, string> = {
+  brave: "settings.search.source_brave",
+  serper: "settings.search.source_serper",
+  openai: "settings.search.source_openai",
+  anthropic: "settings.search.source_anthropic",
+};
+
+/** The catalog key for a provider, or null when this build has no name for it. */
+export function sourceKey(source: string): string | null {
+  return SOURCE_KEYS[source] ?? null;
+}
+
 type ToggleResult = {
   selected: string[];
   /** Set when the tick could not be given, so the reader can be told why. */

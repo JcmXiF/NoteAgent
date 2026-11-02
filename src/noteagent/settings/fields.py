@@ -26,6 +26,7 @@ F_TEMPERATURE = Field("llm.temperature", "NOTEAGENT_LLM_TEMPERATURE")
 F_MAX_TOKENS = Field("llm.maxTokens", "NOTEAGENT_LLM_MAX_TOKENS")
 F_LLM_TIMEOUT = Field("llm.timeoutSeconds", "NOTEAGENT_LLM_TIMEOUT")
 F_PROVIDER = Field("search.provider", "NOTEAGENT_SEARCH_PROVIDER")
+F_SEARCH_MODE = Field("search.mode", "NOTEAGENT_SEARCH_MODE")
 F_SEARCH_KEY = Field("search.apiKey", "NOTEAGENT_SEARCH_API_KEY")
 F_SEARCH_TIMEOUT = Field("search.timeoutSeconds", "NOTEAGENT_SEARCH_TIMEOUT")
 F_COUNTRY = Field("search.country", "NOTEAGENT_SEARCH_COUNTRY")
@@ -41,6 +42,7 @@ FIELDS = (
     F_MAX_TOKENS,
     F_LLM_TIMEOUT,
     F_PROVIDER,
+    F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
     F_COUNTRY,
@@ -63,6 +65,7 @@ __all__ = [
     "F_MEDIA",
     "F_MODEL",
     "F_PROVIDER",
+    "F_SEARCH_MODE",
     "F_SEARCH_KEY",
     "F_SEARCH_TIMEOUT",
     "F_TEMPERATURE",

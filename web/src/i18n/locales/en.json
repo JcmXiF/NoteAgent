@@ -1172,6 +1172,17 @@
     "search": {
       "title": "Web search",
       "intro": "Searches the web and keeps the results as sources. Without it everything else still works; only searching here does not.",
+      "mode": "Search mode",
+      "modeHint": "Auto uses native search first and falls back to external.",
+      "modeHintNativeUnavailable": "Auto uses native search first and falls back to external. Native search is not available in this version.",
+      "mode_auto": "Auto",
+      "mode_external": "External only",
+      "mode_native": "Native",
+      "mode_nativeUnavailable": "Native (not available yet)",
+      "source_brave": "Brave",
+      "source_serper": "Serper",
+      "source_openai": "OpenAI",
+      "source_anthropic": "Anthropic",
       "provider": "Search service",
       "provider_none": "Off",
       "provider_brave": "Brave",
@@ -1400,6 +1411,7 @@
       "provider": {
         "notConfigured": "No web search is set up yet. Open Settings, choose a search service and add its key.",
         "misconfigured": "The web search settings are incomplete. Check them.",
+        "nativeUnavailable": "Native search is selected, but this version has no model service that supports it. Choose Auto or External only in Settings.",
         "failed": "The web search did not go through. Try again later."
       },
       "settings": {

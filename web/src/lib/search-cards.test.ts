@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { MAX_FETCH_CARDS } from "@/lib/api/acquire";
-import { atLimit, keepKnown, selectedCards, toggleSelected } from "@/lib/search-cards";
+import {
+  atLimit,
+  keepKnown,
+  selectedCards,
+  sourceKey,
+  toggleSelected,
+} from "@/lib/search-cards";
 import type { ResourceCard } from "@/lib/api/types";
 
 function card(url: string): ResourceCard {
@@ -16,6 +22,19 @@ function card(url: string): ResourceCard {
     intake: "search",
   };
 }
+
+describe("the source marker", () => {
+  it("points a known provider at its catalog name", () => {
+    expect(sourceKey("brave")).toBe("settings.search.source_brave");
+    expect(sourceKey("serper")).toBe("settings.search.source_serper");
+    expect(sourceKey("openai")).toBe("settings.search.source_openai");
+    expect(sourceKey("anthropic")).toBe("settings.search.source_anthropic");
+  });
+
+  it("has no name for a provider this build does not know", () => {
+    expect(sourceKey("local-engine")).toBeNull();
+  });
+});
 
 describe("ticking a result", () => {
   it("ticks it and unticks it", () => {

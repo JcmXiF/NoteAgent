@@ -16,6 +16,8 @@
 # 可选 / Optional: 搜索网页时用的服务 / web search
 # provider: none | brave | serper
 # NOTEAGENT_SEARCH_PROVIDER=brave
+# mode: auto | external | native
+# NOTEAGENT_SEARCH_MODE=auto
 # NOTEAGENT_SEARCH_API_KEY=
 # NOTEAGENT_SEARCH_TIMEOUT=30
 # NOTEAGENT_SEARCH_COUNTRY=CN

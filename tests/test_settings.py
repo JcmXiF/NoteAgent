@@ -303,6 +303,30 @@ class InstallSettingsTests(unittest.TestCase):
             self.assertEqual(view["sources"]["llm.apiKey"], "env")
 
 
+class SearchSettingsTests(unittest.TestCase):
+    """The search surface shares the document, and its mode has a source."""
+
+    def test_search_mode_and_locale_persist_in_the_shared_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = apply_install(
+                {"search": {"mode": "external", "country": "cn", "timeoutSeconds": 12}}
+            )
+            self.assertEqual(view["search"]["mode"], "external")
+            self.assertEqual(view["search"]["country"], "CN")
+            self.assertEqual(view["search"]["timeoutSeconds"], 12)
+            self.assertFalse(view["search"]["nativeAvailable"])
+            self.assertEqual(install_view()["search"]["mode"], "external")
+
+    def test_a_search_mode_from_the_environment_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_SEARCH_MODE"] = "native"
+            reset_process_env_keys()
+            view = install_view()
+            self.assertEqual(view["search"]["mode"], "native")
+            self.assertEqual(view["sources"]["search.mode"], "env")
+            self.assertIn("search.mode", view["locked"])
+
+
 class ProbeTests(unittest.TestCase):
     def _save_connection(self, key: str = "secret") -> None:
         apply_install(
@@ -502,7 +526,6 @@ class ProbeTests(unittest.TestCase):
             with self.assertRaises(Refusal) as caught:
                 probe_search(path=path, runner=lambda *_a, **_k: None)
             self.assertEqual(caught.exception.code, "settings.searchOff")
-
 
 class _ModelsResponse:
     """One answer from a model-list endpoint, without a network."""
@@ -768,6 +791,18 @@ class SettingsApiTests(unittest.TestCase):
                 self.assertEqual(wrote.status_code, 200, wrote.text)
                 self.assertEqual(wrote.json()["text"], "About birds.")
                 self.assertEqual(wrote.json()["source"], "project")
+
+    def test_search_mode_saves_through_the_settings_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            saved = client.put(
+                "/api/settings",
+                json={"search": {"mode": "external", "country": "cn"}},
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["search"]["mode"], "external")
+            self.assertEqual(saved.json()["search"]["country"], "CN")
+            self.assertEqual(client.get("/api/settings").json()["search"]["mode"], "external")
 
     def test_a_stale_revision_is_a_409_with_its_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

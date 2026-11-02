@@ -32,6 +32,7 @@ from noteagent.acquire.search_config import (
     SearchConfig,
     SearchConfigError,
     SearchError,
+    native_search_available,
 )
 from noteagent.acquire.types import ProviderNotConfiguredError
 from noteagent.llm.config import (
@@ -57,6 +58,7 @@ from noteagent.settings.fields import (
     F_MODEL,
     F_PROVIDER,
     F_SEARCH_KEY,
+    F_SEARCH_MODE,
     F_SEARCH_TIMEOUT,
     F_TEMPERATURE,
     F_UI_LANG,
@@ -69,6 +71,7 @@ from noteagent.settings.store import (
     DEFAULT_SEARCH_TIMEOUT,
     DEFAULT_TEMPERATURE,
     PROVIDERS,
+    SEARCH_MODES,
     Config,
     ConfigStore,
     Profile,
@@ -101,6 +104,7 @@ __all__ = [
     "clean_base_url",
     "clean_max_tokens",
     "clean_model",
+    "clean_search_mode",
     "clean_secret",
     "clean_temperature",
     "install_view",
@@ -249,6 +253,18 @@ def clean_search_timeout(value: object) -> str:
     return format_number(number)
 
 
+def clean_search_mode(value: object) -> str:
+    if not isinstance(value, str):
+        raise _invalid(F_SEARCH_MODE.id, "search mode is not text")
+    text = value.strip().lower()
+    if text not in SEARCH_MODES:
+        raise _invalid(
+            F_SEARCH_MODE.id,
+            f"search mode must be one of {', '.join(sorted(SEARCH_MODES))}",
+        )
+    return text
+
+
 def clean_provider(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid(F_PROVIDER.id, "provider is not text")
@@ -336,6 +352,7 @@ class _LlmPatch:
 @dataclass(frozen=True, slots=True)
 class _SearchPatch:
     provider: str | None = None
+    mode: str | None = None
     timeout_seconds: float | None = None
     country: str | None = None
     search_lang: str | None = None
@@ -441,6 +458,11 @@ def _read_search_patch(body: Mapping[str, Any], context: _Context) -> _SearchPat
         _check_locked(F_PROVIDER, provider, normalise=str.lower)
         if _unchanged(F_PROVIDER, provider, normalise=str.lower):
             provider = None
+    mode = clean_search_mode(body["mode"]) if body.get("mode") is not None else None
+    if mode is not None:
+        _check_locked(F_SEARCH_MODE, mode)
+        if _unchanged(F_SEARCH_MODE, mode):
+            mode = None
     timeout = (
         float(clean_search_timeout(body["timeoutSeconds"]))
         if body.get("timeoutSeconds") is not None
@@ -461,6 +483,7 @@ def _read_search_patch(body: Mapping[str, Any], context: _Context) -> _SearchPat
     secret = _read_secret_patch(body, F_SEARCH_KEY, context.effective.search_key)
     return _SearchPatch(
         provider=provider,
+        mode=mode,
         timeout_seconds=timeout,
         country=country,
         search_lang=search_lang,
@@ -577,6 +600,7 @@ def _with_search(config: Config, search: _SearchPatch) -> Config:
             external_provider=(
                 search.provider if search.provider is not None else current.external_provider
             ),
+            mode=search.mode if search.mode is not None else current.mode,
             timeout_seconds=(
                 search.timeout_seconds
                 if search.timeout_seconds is not None
@@ -651,6 +675,10 @@ def install_view(
         provider = "none"
     search_key = _current(F_SEARCH_KEY) or ""
     search_timeout = _read_float(F_SEARCH_TIMEOUT, DEFAULT_SEARCH_TIMEOUT, invalid)
+    mode = (_current(F_SEARCH_MODE) or context.config.search.mode).lower()
+    if mode not in SEARCH_MODES:
+        invalid.append(F_SEARCH_MODE.id)
+        mode = "auto"
     config = context.config
     return {
         "version": __version__,
@@ -670,7 +698,8 @@ def install_view(
             "country": _current(F_COUNTRY) or "",
             "searchLang": _current(F_LANG) or "",
             "uiLang": _current(F_UI_LANG) or "",
-            "mode": config.search.mode,
+            "mode": mode,
+            "nativeAvailable": native_search_available(),
             "configured": provider not in ("", "none") and bool(search_key),
         },
         "extractMedia": _media_enabled(),
@@ -862,6 +891,10 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
         ui_lang = _use(F_UI_LANG, clean_lang(body["uiLang"], F_UI_LANG.id))
     else:
         ui_lang = _current(F_UI_LANG) or ""
+    if "mode" in body and body["mode"] is not None:
+        mode = _use(F_SEARCH_MODE, clean_search_mode(body["mode"]))
+    else:
+        mode = clean_search_mode(_current(F_SEARCH_MODE) or "auto")
     if provider not in KNOWN_PROVIDERS:
         raise SearchConfigError(
             f"Unknown search provider {provider!r}. "
@@ -874,6 +907,7 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
         country=country,
         search_lang=search_lang,
         ui_lang=ui_lang,
+        mode=mode,
     )
 
 

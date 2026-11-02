@@ -18,6 +18,9 @@ export type LlmSettings = {
 
 export type SearchProvider = "none" | "brave" | "serper";
 
+/** How a search is resolved: native first when possible, or external only. */
+export type SearchMode = "auto" | "native" | "external";
+
 /** Where a resolved value came from, as the core reports it. */
 export type ValueSource = "env" | "config" | "keychain" | "default";
 
@@ -76,6 +79,9 @@ export type ProfileUpdatePatch = {
 
 export type SearchSettings = {
   provider: SearchProvider;
+  mode: SearchMode;
+  /** Whether this build has a native adapter, as the core reports it. */
+  nativeAvailable: boolean;
   apiKeySet: boolean;
   timeoutSeconds: number;
   country: string;
@@ -118,6 +124,7 @@ export type GenerationDraft = {
 
 export type SearchDraft = {
   provider: SearchProvider;
+  mode: SearchMode;
   apiKey: string;
   clearApiKey: boolean;
   timeoutSeconds: string;
@@ -217,6 +224,7 @@ export function profilePatch(
 export function searchDraftFrom(search: SearchSettings, extractMedia: boolean): SearchDraft {
   return {
     provider: search.provider,
+    mode: search.mode,
     apiKey: "",
     clearApiKey: false,
     timeoutSeconds: String(search.timeoutSeconds),
@@ -379,6 +387,7 @@ export function searchDirty(
 ): boolean {
   return (
     draft.provider !== saved.provider ||
+    draft.mode !== saved.mode ||
     draft.clearApiKey ||
     Boolean(draft.apiKey.trim()) ||
     numberDirty(draft.timeoutSeconds, saved.timeoutSeconds) ||
@@ -404,6 +413,7 @@ export function searchPatch(
   const patch: SettingsPatch = {};
   const search: Record<string, unknown> = {};
   if (draft.provider !== saved.provider) search.provider = draft.provider;
+  if (draft.mode !== saved.mode) search.mode = draft.mode;
   if (draft.apiKey.trim()) search.apiKey = draft.apiKey.trim();
   else if (draft.clearApiKey) search.clearApiKey = true;
   if (

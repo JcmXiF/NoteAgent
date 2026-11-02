@@ -211,6 +211,7 @@ class LlmSettingsBody(BaseModel):
 
 class SearchSettingsBody(BaseModel):
     provider: str | None = None
+    mode: str | None = None
     apiKey: str | None = None
     clearApiKey: bool = False
     timeoutSeconds: float | None = None

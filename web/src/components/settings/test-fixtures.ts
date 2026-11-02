@@ -35,6 +35,8 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
     },
     search: {
       provider: "none",
+      mode: "auto",
+      nativeAvailable: false,
       apiKeySet: false,
       timeoutSeconds: 30,
       country: "",

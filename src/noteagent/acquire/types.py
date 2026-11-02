@@ -84,6 +84,8 @@ class CandidateCard:
     snippet: str
     why: str
     via: str
+    #: The search provider that produced the hit (brave, serper, a native adapter).
+    source: str = ""
     site_name: str = ""
     favicon: str = ""
 

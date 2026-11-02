@@ -46,6 +46,8 @@ const EFFECTIVE: Partial<InstallSettings> = {
   },
   search: {
     provider: "brave",
+    mode: "auto",
+    nativeAvailable: false,
     apiKeySet: true,
     timeoutSeconds: 30,
     country: "CN",
@@ -66,6 +68,7 @@ const EFFECTIVE: Partial<InstallSettings> = {
     "llm.maxTokens": "default",
     "llm.timeoutSeconds": "config",
     "search.provider": "config",
+    "search.mode": "config",
     "search.apiKey": "keychain",
     "search.timeoutSeconds": "default",
     "search.country": "config",
@@ -97,6 +100,8 @@ describe("the effective configuration", () => {
     expect(text).toContain("8192");
     expect(text).toContain("90");
     expect(text).toContain("Brave");
+    expect(text).toContain("搜索方式");
+    expect(text).toContain("自动");
     expect(text).toContain("CN");
     expect(text).toContain("zh-hans");
     expect(text).toContain("zh-CN");
