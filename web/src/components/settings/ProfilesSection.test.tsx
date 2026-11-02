@@ -4,8 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { ProfilesSection } from "@/components/settings/ProfilesSection";
+import {
+  installSettings as install,
+  profileSettings as profile,
+  typeInto,
+} from "@/components/settings/test-fixtures";
 import { ApiError } from "@/lib/api/client";
-import type { InstallSettings, ProfileSettings } from "@/lib/install-settings";
+import type { InstallSettings } from "@/lib/install-settings";
 
 vi.mock("@/lib/api/settings", () => ({
   createProfile: vi.fn(),
@@ -51,52 +56,6 @@ afterEach(() => {
   host.remove();
 });
 
-function profile(over: Partial<ProfileSettings> = {}): ProfileSettings {
-  return {
-    id: "p_1",
-    name: "Main",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-    active: true,
-    apiKeySet: true,
-    ...over,
-  };
-}
-
-function install(over: Partial<InstallSettings> = {}): InstallSettings {
-  const profiles = over.profiles ?? [];
-  return {
-    version: "0.1.0",
-    llm: {
-      baseUrl: "",
-      apiKeySet: false,
-      model: "",
-      temperature: 0.1,
-      maxTokens: 4096,
-      timeoutSeconds: 120,
-      configured: false,
-    },
-    search: {
-      provider: "none",
-      apiKeySet: false,
-      timeoutSeconds: 30,
-      country: "",
-      searchLang: "",
-      uiLang: "",
-      configured: false,
-    },
-    extractMedia: true,
-    locked: [],
-    invalid: [],
-    revision: 1,
-    profiles,
-    activeProfileId: profiles.find((item) => item.active)?.id ?? null,
-    keychainAvailable: true,
-    ...over,
-  };
-}
-
 async function draw(next: InstallSettings) {
   await act(async () => {
     root.render(
@@ -141,13 +100,6 @@ function profileButton(name: string): HTMLButtonElement {
   );
   if (!found) throw new Error(`no profile button: ${name}`);
   return found;
-}
-
-/** Types into a controlled input the way a reader would. */
-function type(element: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  setter?.call(element, value);
-  element.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function choose(element: HTMLSelectElement, value: string) {
@@ -198,11 +150,11 @@ describe("a first run with no profiles", () => {
 
     await draw(install({ profiles: [], activeProfileId: null, revision: 0 }));
     await press("新建连接");
-    type(input("连接名称"), "DeepSeek");
+    typeInto(input("连接名称"), "DeepSeek");
     choose(select("服务商"), "deepseek");
-    type(input("服务地址"), "https://api.deepseek.com/v1");
-    type(input("模型名"), "deepseek-chat");
-    type(input("密钥"), "sk-secret");
+    typeInto(input("服务地址"), "https://api.deepseek.com/v1");
+    typeInto(input("模型名"), "deepseek-chat");
+    typeInto(input("密钥"), "sk-secret");
     await press("保存");
 
     expect(createProfile).toHaveBeenCalledWith({
@@ -251,12 +203,34 @@ describe("the saved connections", () => {
     vi.mocked(updateProfile).mockResolvedValue(changed);
 
     await draw(install({ profiles: [main], revision: 3 }));
-    type(input("模型名"), "gpt-4.1");
+    typeInto(input("模型名"), "gpt-4.1");
     expect(onDirty).toHaveBeenLastCalledWith(true);
     await press("保存");
 
     expect(updateProfile).toHaveBeenCalledWith("p_1", { model: "gpt-4.1", revision: 3 });
     expect(onSaved).toHaveBeenCalledWith(changed);
+  });
+
+  it("keeps the active connection's environment-owned fields read-only", async () => {
+    await draw(
+      install({
+        profiles: [
+          profile({ id: "p_1", name: "One", active: false }),
+          profile({ id: "p_2", name: "Two", active: true }),
+        ],
+        activeProfileId: "p_2",
+        locked: ["llm.baseUrl"],
+        sources: { "llm.baseUrl": "env" },
+        revision: 2,
+      }),
+    );
+
+    expect(input("服务地址").disabled).toBe(true);
+    expect(host.textContent).toContain("环境变量");
+
+    // Only the connection that is actually in use is fixed by the environment.
+    await pressProfile("One");
+    expect(input("服务地址").disabled).toBe(false);
   });
 
   it("switches the active profile and says so at once", async () => {
@@ -322,7 +296,7 @@ describe("a save the document no longer accepts", () => {
     );
 
     await draw(install({ profiles: [main], revision: 3 }));
-    type(input("连接名称"), "Renamed");
+    typeInto(input("连接名称"), "Renamed");
     await press("保存");
 
     expect(host.textContent).toContain("设置已在别处被修改");
@@ -343,9 +317,9 @@ describe("a save the document no longer accepts", () => {
 
     await draw(install({ profiles: [], activeProfileId: null, revision: 0 }));
     await press("新建连接");
-    type(input("连接名称"), "Main");
-    type(input("服务地址"), "https://api.openai.com/v1");
-    type(input("模型名"), "gpt-4o-mini");
+    typeInto(input("连接名称"), "Main");
+    typeInto(input("服务地址"), "https://api.openai.com/v1");
+    typeInto(input("模型名"), "gpt-4o-mini");
     await press("保存");
 
     expect(host.textContent).toContain("设置已在别处被修改");

@@ -3,7 +3,13 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, inputClass } from "@/components/ui/input";
-import { Field, FieldGroup, SaveRow, SettingsSection } from "@/components/settings/fields";
+import {
+  Field,
+  FieldGroup,
+  SaveRow,
+  SettingsSection,
+  SourceBadge,
+} from "@/components/settings/fields";
 import { probeSearch, saveSettings } from "@/lib/api/settings";
 import { errorMessage } from "@/lib/api/client";
 import {
@@ -240,7 +246,10 @@ export function SearchSection({
           onCheckedChange={(checked) => edit({ extractMedia: checked === true })}
         />
         <span className="flex flex-col gap-0.5">
-          <span className="text-sm">{t("settings.search.extractMedia")}</span>
+          <span className="flex items-center gap-2">
+            <span className="text-sm">{t("settings.search.extractMedia")}</span>
+            {locked("extractMedia") ? <SourceBadge source="env" /> : null}
+          </span>
           <span className="text-xs leading-relaxed text-muted-foreground">
             {locked("extractMedia")
               ? t("settings.locked")

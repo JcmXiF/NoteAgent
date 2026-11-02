@@ -1063,6 +1063,8 @@
     "saving": "Saving…",
     "saved": "Saved",
     "saveFailed": "Could not save",
+    "refresh": "Refresh",
+    "refreshed": "Refreshed. You can save again.",
     "test": "Test connection",
     "testing": "Testing…",
     "show": "Show",
@@ -1080,22 +1082,14 @@
     },
     "nav": {
       "model": "Connections",
+      "generation": "Generation",
       "search": "Search",
+      "effective": "Effective config",
       "project": "Project",
       "diagnostics": "Diagnostics",
       "appearance": "Appearance"
     },
     "model": {
-      "title": "Model",
-      "intro": "Chat, planning and writing all use this one connection. Saving takes effect immediately, for every project.",
-      "baseUrl": "Service address",
-      "baseUrlHint": "Must start with http:// or https://.",
-      "apiKey": "Key",
-      "apiKeyKeep": "Saved. Leave it blank to keep it.",
-      "apiKeyMissing": "No key yet. A local service that does not check keys can be given any placeholder.",
-      "apiKeyClearing": "Saving removes the stored key.",
-      "model": "Model name",
-      "modelHint": "The model identifier the service expects, e.g. gpt-4o-mini.",
       "temperature": "Temperature",
       "temperatureHint": "Lower is steadier, higher is more varied; 0.1 is usual.",
       "maxTokens": "Reply limit",
@@ -1104,7 +1098,6 @@
       "timeoutHint": "Waiting for this reply stops after this long.",
       "testOk": "Connection succeeded.",
       "testFailed": "The connection test did not succeed.",
-      "groupConnection": "Connection",
       "groupGeneration": "Generation"
     },
     "profiles": {
@@ -1139,14 +1132,37 @@
       "modelHint": "The model identifier the service expects, e.g. gpt-4o-mini.",
       "noModel": "No model chosen",
       "saveFailed": "The save did not go through.",
-      "refresh": "Refresh",
-      "refreshed": "Refreshed. You can save again.",
       "provider_openai": "OpenAI",
       "provider_anthropic": "Anthropic",
       "provider_deepseek": "DeepSeek",
       "provider_qwen": "Qwen",
       "provider_ollama": "Local Ollama",
       "provider_custom": "Custom"
+    },
+    "generation": {
+      "title": "Generation",
+      "intro": "Temperature, reply limit and wait limit apply to every connection. Saving tests the current connection.",
+      "notConfigured": "Save a usable model connection before testing."
+    },
+    "source": {
+      "env": "Environment",
+      "config": "Config file",
+      "keychain": "Credential store",
+      "default": "Default"
+    },
+    "effective": {
+      "title": "Effective configuration",
+      "intro": "What the program is actually using, and where each value came from. This view is read-only.",
+      "groupConnection": "Model connection",
+      "groupSearch": "Search",
+      "groupFile": "Files",
+      "profile": "Current connection",
+      "noConnection": "No active connection",
+      "stored": "Saved",
+      "unset": "Not set",
+      "on": "On",
+      "off": "Off",
+      "providerNone": "Off"
     },
     "search": {
       "title": "Web search",

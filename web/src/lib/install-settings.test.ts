@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  llmCanProbe,
-  llmDirty,
-  llmDraftFrom,
-  llmPatch,
-  llmProblems,
+  generationDirty,
+  generationDraftFrom,
+  generationPatch,
+  generationProblems,
   profileCreateDirty,
   profileCreatePatch,
   profileDirty,
@@ -16,6 +15,7 @@ import {
   searchDraftFrom,
   searchPatch,
   searchProblems,
+  valueSource,
   type InstallSettings,
   type ProfileSettings,
 } from "@/lib/install-settings";
@@ -47,38 +47,10 @@ const SAVED: InstallSettings = {
   profiles: [],
   activeProfileId: null,
   keychainAvailable: true,
+  sources: {},
+  configPath: "C:\\Users\\me\\AppData\\Roaming\\NoteAgent\\config.json",
+  schemaVersion: 1,
 };
-
-describe("the model form", () => {
-  it("treats a blank key as unchanged", () => {
-    const draft = llmDraftFrom(SAVED.llm);
-    expect(llmDirty(draft, SAVED.llm)).toBe(false);
-    expect(llmPatch(draft, SAVED.llm)).toBeNull();
-    expect(llmCanProbe(draft, SAVED.llm)).toBe(true);
-  });
-
-  it("sends only the field that changed, and a typed key", () => {
-    const draft = { ...llmDraftFrom(SAVED.llm), model: "other", apiKey: "new-key" };
-    expect(llmPatch(draft, SAVED.llm)).toEqual({ model: "other", apiKey: "new-key" });
-  });
-
-  it("clears a key only when asked", () => {
-    const draft = { ...llmDraftFrom(SAVED.llm), clearApiKey: true };
-    expect(llmPatch(draft, SAVED.llm)).toEqual({ clearApiKey: true });
-    expect(llmCanProbe(draft, SAVED.llm)).toBe(false);
-  });
-
-  it("refuses an address that is not an http(s) URL", () => {
-    const draft = { ...llmDraftFrom(SAVED.llm), baseUrl: "notaurl" };
-    expect(llmProblems(draft)).toContain("settings.invalid.baseUrl");
-    expect(llmCanProbe(draft, SAVED.llm)).toBe(false);
-  });
-
-  it("does not treat 0.10 as a different temperature", () => {
-    const draft = { ...llmDraftFrom(SAVED.llm), temperature: "0.10" };
-    expect(llmDirty(draft, SAVED.llm)).toBe(false);
-  });
-});
 
 const PROFILE: ProfileSettings = {
   id: "p_1",
@@ -89,6 +61,47 @@ const PROFILE: ProfileSettings = {
   active: true,
   apiKeySet: true,
 };
+
+describe("a value's source", () => {
+  it("keeps a source the core named", () => {
+    expect(valueSource({ "llm.model": "env" }, "llm.model")).toBe("env");
+    expect(valueSource({ "llm.model": "config" }, "llm.model")).toBe("config");
+    expect(valueSource({ "llm.model": "keychain" }, "llm.model")).toBe("keychain");
+  });
+
+  it("falls back to the default for an unnamed or unknown source", () => {
+    expect(valueSource({}, "llm.model")).toBe("default");
+    expect(valueSource({ "llm.model": "somethingNew" }, "llm.model")).toBe("default");
+  });
+
+  it("does not lend one field's source to another", () => {
+    expect(valueSource({ "llm.model": "env" }, "llm.temperature")).toBe("default");
+  });
+});
+
+const GENERATION = { temperature: 0.1, maxTokens: 4096, timeoutSeconds: 120 };
+
+describe("the generation form", () => {
+  it("does not treat 0.10 as a different temperature", () => {
+    const draft = { ...generationDraftFrom(GENERATION), temperature: "0.10" };
+    expect(generationDirty(draft, GENERATION)).toBe(false);
+    expect(generationPatch(draft, GENERATION)).toBeNull();
+  });
+
+  it("sends only the parameter that changed", () => {
+    const draft = { ...generationDraftFrom(GENERATION), maxTokens: "8192" };
+    expect(generationPatch(draft, GENERATION)).toEqual({ maxTokens: 8192 });
+  });
+
+  it("refuses values outside the ranges the core enforces", () => {
+    const draft = { temperature: "3", maxTokens: "0", timeoutSeconds: "1" };
+    expect(generationProblems(draft)).toEqual([
+      "settings.invalid.temperature",
+      "settings.invalid.maxTokens",
+      "settings.invalid.timeout",
+    ]);
+  });
+});
 
 describe("the connection form", () => {
   it("treats a blank key as unchanged and sends nothing on its own", () => {

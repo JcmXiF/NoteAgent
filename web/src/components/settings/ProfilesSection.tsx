@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, inputClass } from "@/components/ui/input";
 import { Field, SaveRow } from "@/components/settings/fields";
+import { SaveConflict } from "@/components/settings/SaveConflict";
 import { ApiError, errorMessage } from "@/lib/api/client";
 import {
   activateProfile,
@@ -13,6 +14,7 @@ import {
   updateProfile,
 } from "@/lib/api/settings";
 import {
+  isLocked,
   profileCreateDirty,
   profileCreatePatch,
   profileDraftFrom,
@@ -82,6 +84,11 @@ export function ProfilesSection({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const selected = profiles.find((item) => item.id === selectedId) ?? null;
+  // The environment owns the effective connection. It is shown read-only on
+  // the profile every task is using; other stored profiles stay editable,
+  // because they do not describe what the process is using right now.
+  const lockedActive = (field: string) =>
+    selected?.active === true && isLocked(install.locked, field);
   const dirty = creating
     ? profileCreateDirty(draft)
     : selected
@@ -241,7 +248,7 @@ export function ProfilesSection({
   const refresh = async () => {
     await onReload();
     setConflict(false);
-    setMessage(t("settings.profiles.refreshed"));
+    setMessage(t("settings.refreshed"));
   };
 
   const providerLabel = (profile: ProfileSettings) =>
@@ -251,19 +258,7 @@ export function ProfilesSection({
 
   // A conflict can be reached from the create form as well as from an edit, so
   // the prompt is one element both paths render. The draft is never touched.
-  const conflictNotice = conflict ? (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 p-3"
-    >
-      <span className="min-w-0 flex-1 text-xs leading-relaxed">
-        {t("error.code.settings.staleRevision")}
-      </span>
-      <Button type="button" variant="outline" size="sm" onClick={() => void refresh()}>
-        {t("settings.profiles.refresh")}
-      </Button>
-    </div>
-  ) : null;
+  const conflictNotice = conflict ? <SaveConflict onRefresh={refresh} /> : null;
 
   const problems = profileProblems(draft);
   const canSave = dirty && problems.length === 0;
@@ -310,10 +305,12 @@ export function ProfilesSection({
         label={t("settings.profiles.baseUrl")}
         hint={t("settings.profiles.baseUrlHint")}
         error={problem("settings.invalid.baseUrl")}
+        locked={lockedActive("llm.baseUrl")}
       >
         <Input
           aria-label={t("settings.profiles.baseUrl")}
           value={draft.baseUrl}
+          disabled={lockedActive("llm.baseUrl")}
           spellCheck={false}
           autoComplete="off"
           onChange={(event) => edit({ baseUrl: event.target.value })}
@@ -323,13 +320,14 @@ export function ProfilesSection({
         label={t("settings.profiles.apiKey")}
         hint={keyHint}
         error={problem("settings.invalid.secret")}
+        locked={lockedActive("llm.apiKey")}
       >
         <div className="flex gap-1">
           <Input
             aria-label={t("settings.profiles.apiKey")}
             type={showKey ? "text" : "password"}
             value={draft.apiKey}
-            disabled={draft.clearApiKey}
+            disabled={draft.clearApiKey || lockedActive("llm.apiKey")}
             spellCheck={false}
             autoComplete="off"
             onChange={(event) => edit({ apiKey: event.target.value, clearApiKey: false })}
@@ -338,7 +336,7 @@ export function ProfilesSection({
             {showKey ? t("settings.hide") : t("settings.show")}
           </Button>
         </div>
-        {!creating && selected?.apiKeySet ? (
+        {!creating && selected?.apiKeySet && !lockedActive("llm.apiKey") ? (
           <button
             type="button"
             className="self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
@@ -348,10 +346,15 @@ export function ProfilesSection({
           </button>
         ) : null}
       </Field>
-      <Field label={t("settings.profiles.model")} hint={t("settings.profiles.modelHint")}>
+      <Field
+        label={t("settings.profiles.model")}
+        hint={t("settings.profiles.modelHint")}
+        locked={lockedActive("llm.model")}
+      >
         <Input
           aria-label={t("settings.profiles.model")}
           value={draft.model}
+          disabled={lockedActive("llm.model")}
           spellCheck={false}
           autoComplete="off"
           onChange={(event) => edit({ model: event.target.value })}

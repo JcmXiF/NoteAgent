@@ -940,6 +940,64 @@ class ProfileSettingsApiTests(unittest.TestCase):
             self.assertEqual(view["revision"], first["revision"])
             self.assertFalse(view["profiles"][0]["apiKeySet"])
 
+    def test_generation_is_global_and_survives_a_profile_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            first = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "One",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m-one",
+                    "revision": 0,
+                },
+            ).json()
+            second = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Two",
+                    "provider": "ollama",
+                    "baseUrl": "http://127.0.0.1:11434/v1",
+                    "model": "m-two",
+                    "revision": first["revision"],
+                },
+            ).json()
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "llm": {
+                        "temperature": 0.4,
+                        "maxTokens": 2048,
+                        "timeoutSeconds": 90,
+                    },
+                    "revision": second["revision"],
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["generation"]["temperature"], 0.4)
+
+            target = second["profiles"][1]["id"]
+            switched = client.post(
+                f"/api/settings/profiles/{target}/activate",
+                json={"revision": saved.json()["revision"]},
+            )
+            self.assertEqual(switched.status_code, 200, switched.text)
+            body = switched.json()
+            self.assertEqual(body["llm"]["temperature"], 0.4)
+            self.assertEqual(body["llm"]["maxTokens"], 2048)
+            self.assertEqual(body["llm"]["timeoutSeconds"], 90)
+
+    def test_a_generation_value_from_the_environment_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_LLM_TEMPERATURE"] = "0.7"
+            reset_process_env_keys()
+            client = TestClient(create_app())
+            view = client.get("/api/settings").json()
+            self.assertEqual(view["llm"]["temperature"], 0.7)
+            self.assertEqual(view["sources"]["llm.temperature"], "env")
+            self.assertIn("llm.temperature", view["locked"])
+
     def test_a_profile_save_refuses_a_value_the_document_could_not_hold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
             client = TestClient(create_app())

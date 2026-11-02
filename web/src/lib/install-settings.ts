@@ -18,6 +18,20 @@ export type LlmSettings = {
 
 export type SearchProvider = "none" | "brave" | "serper";
 
+/** Where a resolved value came from, as the core reports it. */
+export type ValueSource = "env" | "config" | "keychain" | "default";
+
+/** A source the core named, or the default when it named none this build knows. */
+export function valueSource(
+  sources: Record<string, string>,
+  field: string,
+): ValueSource {
+  const source = sources[field];
+  return source === "env" || source === "config" || source === "keychain"
+    ? source
+    : "default";
+}
+
 /** The canonical ids the core accepts for a connection profile. */
 export type ProviderId = "openai" | "anthropic" | "deepseek" | "qwen" | "ollama" | "custom";
 
@@ -83,13 +97,20 @@ export type InstallSettings = {
   activeProfileId: string | null;
   /** False when the OS credential store cannot be used: keys can be neither read nor saved. */
   keychainAvailable: boolean;
+  /** Where each value came from, keyed by the field id the core reports. */
+  sources: Record<string, string>;
+  configPath: string;
+  schemaVersion: number;
 };
 
-export type LlmDraft = {
-  baseUrl: string;
-  apiKey: string;
-  clearApiKey: boolean;
-  model: string;
+/** The generation values shared by every connection. */
+export type Generation = {
+  temperature: number;
+  maxTokens: number;
+  timeoutSeconds: number;
+};
+
+export type GenerationDraft = {
   temperature: string;
   maxTokens: string;
   timeoutSeconds: string;
@@ -118,18 +139,6 @@ const LANG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 
 export function isLocked(locked: readonly string[], field: string): boolean {
   return locked.includes(field);
-}
-
-export function llmDraftFrom(llm: LlmSettings): LlmDraft {
-  return {
-    baseUrl: llm.baseUrl,
-    apiKey: "",
-    clearApiKey: false,
-    model: llm.model,
-    temperature: String(llm.temperature),
-    maxTokens: String(llm.maxTokens),
-    timeoutSeconds: String(llm.timeoutSeconds),
-  };
 }
 
 export function profileDraftFrom(profile: ProfileSettings): ProfileDraft {
@@ -218,6 +227,86 @@ export function searchDraftFrom(search: SearchSettings, extractMedia: boolean): 
   };
 }
 
+export function generationDraftFrom(generation: Generation): GenerationDraft {
+  return {
+    temperature: String(generation.temperature),
+    maxTokens: String(generation.maxTokens),
+    timeoutSeconds: String(generation.timeoutSeconds),
+  };
+}
+
+export function generationDirty(draft: GenerationDraft, saved: Generation): boolean {
+  return (
+    numberDirty(draft.temperature, saved.temperature) ||
+    integerDirty(draft.maxTokens, saved.maxTokens) ||
+    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds)
+  );
+}
+
+const GENERATION_FIELDS = [
+  {
+    key: "temperature",
+    min: 0,
+    max: 2,
+    integer: false,
+    problem: "settings.invalid.temperature",
+  },
+  {
+    key: "maxTokens",
+    min: 1,
+    max: 128_000,
+    integer: true,
+    problem: "settings.invalid.maxTokens",
+  },
+  {
+    key: "timeoutSeconds",
+    min: 5,
+    max: 600,
+    integer: false,
+    problem: "settings.invalid.timeout",
+  },
+] as const;
+
+type GenerationField = (typeof GENERATION_FIELDS)[number];
+
+function generationInRange(text: string, field: GenerationField): boolean {
+  return field.integer
+    ? integerInRange(text, field.min, field.max)
+    : numberInRange(text, field.min, field.max);
+}
+
+function generationChanged(
+  text: string,
+  saved: number,
+  field: GenerationField,
+): boolean {
+  return field.integer ? integerDirty(text, saved) : numberDirty(text, saved);
+}
+
+/** i18n keys for values the core would refuse on a generation save. */
+export function generationProblems(draft: GenerationDraft): string[] {
+  return GENERATION_FIELDS.filter(
+    (field) => !generationInRange(draft[field.key], field),
+  ).map((field) => field.problem);
+}
+
+/** Only the parameters that differ and are valid. */
+export function generationPatch(
+  draft: GenerationDraft,
+  saved: Generation,
+): Record<string, number> | null {
+  const patch: Record<string, number> = {};
+  for (const field of GENERATION_FIELDS) {
+    if (
+      generationChanged(draft[field.key], saved[field.key], field) &&
+      generationInRange(draft[field.key], field)
+    ) {
+      patch[field.key] = Number(draft[field.key].trim());
+    }
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 function validBaseUrl(value: string): boolean {
   const text = value.trim().replace(/\/+$/, "");
   if (!text || /\s/.test(text) || text.length > 500) return false;
@@ -227,11 +316,6 @@ function validBaseUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function validModel(value: string): boolean {
-  const text = value.trim();
-  return Boolean(text) && text.length <= 200 && !/[\r\n]/.test(text);
 }
 
 function validSecret(value: string): boolean {
@@ -264,18 +348,6 @@ function validCountry(value: string): boolean {
   return text === "" || /^[A-Za-z]{2}$/.test(text);
 }
 
-/** i18n keys for fields the core would refuse. */
-export function llmProblems(draft: LlmDraft): string[] {
-  const problems: string[] = [];
-  if (!validBaseUrl(draft.baseUrl)) problems.push("settings.invalid.baseUrl");
-  if (!validModel(draft.model)) problems.push("settings.invalid.model");
-  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
-  if (!numberInRange(draft.temperature, 0, 2)) problems.push("settings.invalid.temperature");
-  if (!integerInRange(draft.maxTokens, 1, 128_000)) problems.push("settings.invalid.maxTokens");
-  if (!numberInRange(draft.timeoutSeconds, 5, 600)) problems.push("settings.invalid.timeout");
-  return problems;
-}
-
 export function searchProblems(draft: SearchDraft): string[] {
   const problems: string[] = [];
   if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
@@ -300,18 +372,6 @@ export function integerDirty(text: string, saved: number): boolean {
   return Number(text.trim()) !== saved;
 }
 
-export function llmDirty(draft: LlmDraft, saved: LlmSettings): boolean {
-  return (
-    draft.baseUrl.trim() !== saved.baseUrl ||
-    draft.model.trim() !== saved.model ||
-    draft.clearApiKey ||
-    Boolean(draft.apiKey.trim()) ||
-    numberDirty(draft.temperature, saved.temperature) ||
-    integerDirty(draft.maxTokens, saved.maxTokens) ||
-    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds)
-  );
-}
-
 export function searchDirty(
   draft: SearchDraft,
   saved: SearchSettings,
@@ -329,40 +389,11 @@ export function searchDirty(
   );
 }
 
-export function llmCanProbe(draft: LlmDraft, saved: LlmSettings): boolean {
-  if (llmProblems(draft).length > 0) return false;
-  if (draft.apiKey.trim()) return true;
-  if (draft.clearApiKey) return false;
-  return saved.apiKeySet;
-}
-
 export function searchCanProbe(draft: SearchDraft, saved: SearchSettings): boolean {
   if (draft.provider === "none" || searchProblems(draft).length > 0) return false;
   if (draft.apiKey.trim()) return true;
   if (draft.clearApiKey) return false;
   return saved.apiKeySet;
-}
-
-/** Only the fields that differ. A blank key is not sent, so the saved one stays. */
-export function llmPatch(draft: LlmDraft, saved: LlmSettings): Record<string, unknown> | null {
-  const llm: Record<string, unknown> = {};
-  if (draft.baseUrl.trim() !== saved.baseUrl) llm.baseUrl = draft.baseUrl.trim();
-  if (draft.model.trim() !== saved.model) llm.model = draft.model.trim();
-  if (draft.apiKey.trim()) llm.apiKey = draft.apiKey.trim();
-  else if (draft.clearApiKey) llm.clearApiKey = true;
-  if (numberDirty(draft.temperature, saved.temperature) && numberInRange(draft.temperature, 0, 2)) {
-    llm.temperature = Number(draft.temperature.trim());
-  }
-  if (integerDirty(draft.maxTokens, saved.maxTokens) && integerInRange(draft.maxTokens, 1, 128_000)) {
-    llm.maxTokens = Number(draft.maxTokens.trim());
-  }
-  if (
-    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds) &&
-    numberInRange(draft.timeoutSeconds, 5, 600)
-  ) {
-    llm.timeoutSeconds = Number(draft.timeoutSeconds.trim());
-  }
-  return Object.keys(llm).length > 0 ? llm : null;
 }
 
 export function searchPatch(

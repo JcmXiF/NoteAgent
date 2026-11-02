@@ -1063,6 +1063,8 @@
     "saving": "正在保存…",
     "saved": "已保存",
     "saveFailed": "保存失败",
+    "refresh": "刷新设置",
+    "refreshed": "已刷新，可以再次保存。",
     "test": "测试连接",
     "testing": "正在测试…",
     "show": "显示",
@@ -1080,22 +1082,14 @@
     },
     "nav": {
       "model": "模型连接",
+      "generation": "生成",
       "search": "搜索",
+      "effective": "有效配置",
       "project": "项目说明",
       "diagnostics": "诊断",
       "appearance": "外观"
     },
     "model": {
-      "title": "模型",
-      "intro": "问答、整理与写作均使用这一连接；保存后立即生效，所有项目共用。",
-      "baseUrl": "服务地址",
-      "baseUrlHint": "需以 http:// 或 https:// 开头。",
-      "apiKey": "密钥",
-      "apiKeyKeep": "已保存。不填写则保持不变。",
-      "apiKeyMissing": "尚未填写密钥。不校验密钥的本地服务可填写任意占位值。",
-      "apiKeyClearing": "保存后将清除已保存的密钥。",
-      "model": "模型名",
-      "modelHint": "服务商使用的模型标识，例如 gpt-4o-mini。",
       "temperature": "温度",
       "temperatureHint": "数值越低越稳定，越高越发散；常用值为 0.1。",
       "maxTokens": "单次回答上限",
@@ -1104,7 +1098,6 @@
       "timeoutHint": "超过此时间即停止等待本次回答。",
       "testOk": "连接成功。",
       "testFailed": "连接测试没有成功。",
-      "groupConnection": "连接",
       "groupGeneration": "生成"
     },
     "profiles": {
@@ -1139,14 +1132,37 @@
       "modelHint": "服务商使用的模型标识，例如 gpt-4o-mini。",
       "noModel": "未选模型",
       "saveFailed": "保存失败",
-      "refresh": "刷新设置",
-      "refreshed": "已刷新，可以再次保存。",
       "provider_openai": "OpenAI",
       "provider_anthropic": "Anthropic",
       "provider_deepseek": "DeepSeek",
       "provider_qwen": "通义千问",
       "provider_ollama": "本地 Ollama",
       "provider_custom": "自定义"
+    },
+    "generation": {
+      "title": "生成",
+      "intro": "温度、单次回答上限和等待上限对所有连接生效；保存时会测试当前连接。",
+      "notConfigured": "先保存一个可用的模型连接，才能测试。"
+    },
+    "source": {
+      "env": "环境变量",
+      "config": "配置文件",
+      "keychain": "凭据存储",
+      "default": "默认值"
+    },
+    "effective": {
+      "title": "有效配置",
+      "intro": "程序当前实际使用的值，以及每个值的来源；这里只读。",
+      "groupConnection": "模型连接",
+      "groupSearch": "搜索",
+      "groupFile": "文件",
+      "profile": "当前连接",
+      "noConnection": "没有活动连接",
+      "stored": "已保存",
+      "unset": "未设置",
+      "on": "开启",
+      "off": "关闭",
+      "providerNone": "不使用"
     },
     "search": {
       "title": "网页搜索",
