@@ -32,6 +32,7 @@ from noteagent.acquire.search_config import (
     SearchConfig,
     SearchConfigError,
     SearchError,
+    build_native_config,
     native_search_available,
 )
 from noteagent.acquire.types import ProviderNotConfiguredError
@@ -680,6 +681,7 @@ def install_view(
         invalid.append(F_SEARCH_MODE.id)
         mode = "auto"
     config = context.config
+    active_profile = config.active_profile
     return {
         "version": __version__,
         "llm": {
@@ -699,7 +701,10 @@ def install_view(
             "searchLang": _current(F_LANG) or "",
             "uiLang": _current(F_UI_LANG) or "",
             "mode": mode,
-            "nativeAvailable": native_search_available(),
+            "nativeAvailable": native_search_available(
+                provider=active_profile.provider if active_profile else "",
+                base_url=_current(F_BASE) or "",
+            ),
             "configured": provider not in ("", "none") and bool(search_key),
         },
         "extractMedia": _media_enabled(),
@@ -864,7 +869,7 @@ def _key_fits_origin(key: str, saved_base: str, base: str) -> None:
         )
 
 
-def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
+def _search_config_for(body: Mapping[str, Any], context: _Context) -> SearchConfig:
     current_provider = (_current(F_PROVIDER) or "none").lower()
     if "provider" in body and body["provider"] is not None:
         provider = clean_provider(body["provider"])
@@ -900,6 +905,15 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
             f"Unknown search provider {provider!r}. "
             f"Use one of: {', '.join(sorted(KNOWN_PROVIDERS))}."
         )
+    profile = context.config.active_profile
+    provider_id = profile.provider if profile else ""
+    native = build_native_config(
+        provider_id,
+        _current(F_BASE) or "",
+        _current(F_LLM_KEY) or "",
+        _current(F_MODEL) or "",
+        _read_float(F_LLM_TIMEOUT, DEFAULT_LLM_TIMEOUT, []),
+    )
     return SearchConfig(
         provider=provider,
         api_key=key,
@@ -908,6 +922,8 @@ def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
         search_lang=search_lang,
         ui_lang=ui_lang,
         mode=mode,
+        llm_provider=provider_id,
+        native=native,
     )
 
 
@@ -985,15 +1001,19 @@ def probe_search(
     runner: Callable[..., Any] | None = None,
 ) -> int:
     """Run one small search with the draft, without saving. Returns how many cards came back."""
-    _context(path, credentials)
-    config = _search_config_for(body or {})
-    if config.provider in ("", "none"):
-        raise Refusal("settings.searchOff", "search provider is none", status=400)
-    if not config.api_key:
-        raise ProviderNotConfiguredError(
-            "web_search is not configured. Set NOTEAGENT_SEARCH_PROVIDER "
-            "and NOTEAGENT_SEARCH_API_KEY."
-        )
+    context = _context(path, credentials)
+    config = _search_config_for(body or {}, context)
+    external_needed = config.mode == "external" or (
+        config.mode == "auto" and config.native is None
+    )
+    if external_needed:
+        if config.provider in ("", "none"):
+            raise Refusal("settings.searchOff", "search provider is none", status=400)
+        if not config.api_key:
+            raise ProviderNotConfiguredError(
+                "web_search is not configured. Set NOTEAGENT_SEARCH_PROVIDER "
+                "and NOTEAGENT_SEARCH_API_KEY."
+            )
     try:
         if runner is not None:
             run = runner(_PROBE_QUERY, top_k=3, config=config)

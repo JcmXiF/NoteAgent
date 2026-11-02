@@ -187,4 +187,19 @@ describe("the search form", () => {
     });
   });
 
+  it("trials native search only when the core reports an adapter", () => {
+    const draft = { ...searchDraftFrom(SAVED.search, true), mode: "native" as const };
+    expect(searchCanProbe(draft, { ...SAVED.search, nativeAvailable: false })).toBe(false);
+    expect(searchCanProbe(draft, { ...SAVED.search, nativeAvailable: true })).toBe(true);
+  });
+
+  it("trials auto with a native adapter even when no external provider is set", () => {
+    const draft = {
+      ...searchDraftFrom(SAVED.search, true),
+      provider: "none" as const,
+      mode: "auto" as const,
+    };
+    expect(searchCanProbe(draft, { ...SAVED.search, nativeAvailable: false })).toBe(false);
+    expect(searchCanProbe(draft, { ...SAVED.search, nativeAvailable: true })).toBe(true);
+  });
 });

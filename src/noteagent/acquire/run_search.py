@@ -10,17 +10,33 @@ import httpx
 from noteagent.acquire.budget import MAX_CANDIDATES
 from noteagent.acquire.cards import cards_from_hits
 from noteagent.acquire.search_config import (
+    NativeSearchConfigMissing,
+    NativeSearchError,
     SearchConfig,
     SearchConfigError,
     SearchModeUnavailable,
     load_search_config,
+    native_support,
 )
+from noteagent.acquire.tools.providers.openai_native import native_search
 from noteagent.acquire.tools.web_search import web_search
-from noteagent.acquire.types import CandidateCard, SerpHit
+from noteagent.acquire.types import CandidateCard, ProviderNotConfiguredError, SerpHit
 from noteagent.settings.store import SEARCH_MODES
 from noteagent.util.run_log import RunLogger
 
 _ERROR_MESSAGE_LIMIT = 300
+_EXTERNAL_MISSING = (
+    "web_search is not configured. Set NOTEAGENT_SEARCH_PROVIDER "
+    "to brave or serper, and NOTEAGENT_SEARCH_API_KEY."
+)
+_NO_ADAPTER = (
+    "native search is selected, but this build has no adapter "
+    "for the active model service"
+)
+_NATIVE_MISSING = (
+    "native search needs a usable model connection: "
+    "service address, key and model"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,17 +64,30 @@ def run_web_search(
     mode: str | None = None
     try:
         cfg = config if config is not None else load_search_config()
-        provider = cfg.provider
         mode = cfg.mode
         if mode not in SEARCH_MODES:
             raise SearchConfigError(f"Unknown search mode {mode!r}.")
-        if mode == "native":
-            # An adapter belongs to the active model service; until one exists,
-            # falling back to an external provider would not be what was chosen.
-            raise SearchModeUnavailable(
-                "native search is selected, but this version has no adapter "
-                "for the active model service"
-            )
+        native = cfg.native
+        external_ready = cfg.configured
+        support = native_support(cfg)
+        if mode == "external":
+            if not external_ready:
+                raise ProviderNotConfiguredError(_EXTERNAL_MISSING)
+        elif mode == "native":
+            if native is None:
+                if support == "config-missing":
+                    raise NativeSearchConfigMissing(_NATIVE_MISSING)
+                raise SearchModeUnavailable(_NO_ADAPTER)
+        elif native is None and not external_ready:
+            if support == "config-missing":
+                raise NativeSearchConfigMissing(_NATIVE_MISSING)
+            raise ProviderNotConfiguredError(_EXTERNAL_MISSING)
+
+        provider = (
+            native.provider
+            if native is not None and mode != "external"
+            else cfg.provider
+        )
         logger.append(
             "search.start",
             component="acquire",
@@ -68,8 +97,23 @@ def run_web_search(
             top_k=limit,
             caller=caller,
         )
-        hits = web_search(query, top_k=limit, config=cfg, client=client)
-        cards = cards_from_hits(hits, query=cleaned, limit=limit, source=cfg.provider)
+        if mode == "external" or native is None:
+            hits = web_search(query, top_k=limit, config=cfg, client=client)
+        else:
+            try:
+                hits = native_search(
+                    query,
+                    top_k=limit,
+                    config=native,
+                    client=client,
+                )
+            except NativeSearchError:
+                # Native mode was an explicit choice; only auto may fall back.
+                if mode == "native" or not external_ready:
+                    raise
+                provider = cfg.provider
+                hits = web_search(query, top_k=limit, config=cfg, client=client)
+        cards = cards_from_hits(hits, query=cleaned, limit=limit, source=provider)
     except Exception as err:
         logger.append(
             "search.error",
@@ -97,7 +141,7 @@ def run_web_search(
     )
     return WebSearchRun(
         query=cleaned,
-        provider=cfg.provider,
+        provider=provider,
         hits=hits,
         cards=cards,
     )

@@ -1412,6 +1412,10 @@
         "notConfigured": "No web search is set up yet. Open Settings, choose a search service and add its key.",
         "misconfigured": "The web search settings are incomplete. Check them.",
         "nativeUnavailable": "Native search is selected, but this version has no model service that supports it. Choose Auto or External only in Settings.",
+        "nativeConfigMissing": "Native search needs a usable model connection: set the service address, key and model first.",
+        "nativeRejected": "The model service refused the native search. Check the key and the service address.",
+        "nativeUnreachable": "Could not reach the model service's search. Check the network.",
+        "nativeFailed": "The model service's search answered, but not with usable results.",
         "failed": "The web search did not go through. Try again later."
       },
       "settings": {

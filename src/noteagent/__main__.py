@@ -765,8 +765,22 @@ def cmd_acquire_search(
     """
     from noteagent.acquire.cards import format_cards
     from noteagent.acquire.run_search import run_web_search
-    from noteagent.acquire.search_config import SearchConfigError, SearchError
+    from noteagent.acquire.search_config import (
+        NativeSearchError,
+        SearchConfigError,
+        SearchError,
+        SearchModeUnavailable,
+    )
     from noteagent.acquire.types import ProviderNotConfiguredError
+    from noteagent.settings.install import install_view
+
+    # Make the document this process's settings, as the server does at startup.
+    # A damaged document must not make a CLI search impossible; the environment
+    # it was started with is still usable.
+    try:
+        install_view()
+    except Exception:
+        pass
 
     logger = _acquire_logger(project, enabled=run_log)
     try:
@@ -782,7 +796,7 @@ def cmd_acquire_search(
     except ProviderNotConfiguredError as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
-    except (SearchConfigError, SearchError) as err:
+    except (SearchConfigError, SearchError, SearchModeUnavailable, NativeSearchError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
     print(f"provider: {run.provider}")

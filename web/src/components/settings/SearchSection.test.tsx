@@ -103,6 +103,28 @@ describe("the search mode", () => {
     expect(host.textContent).toContain("当前版本尚未提供原生搜索");
   });
 
+  it("enables native search when the active connection supports it", async () => {
+    await draw(
+      install({
+        search: {
+          ...install().search,
+          provider: "none",
+          apiKeySet: false,
+          configured: false,
+          nativeAvailable: true,
+          mode: "native",
+        },
+      }),
+    );
+
+    const mode = select("搜索方式");
+    const native = [...mode.options].find((option) => option.value === "native");
+    expect(native?.disabled).toBe(false);
+    // Native search needs the model connection, not an external provider.
+    expect(button("试搜一次").disabled).toBe(false);
+    expect(host.textContent).not.toContain("当前版本尚未提供原生搜索");
+  });
+
   it("saves a changed mode with the shared configuration", async () => {
     const next = install({
       search: { ...install().search, mode: "external" },

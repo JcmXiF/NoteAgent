@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import httpx
 
-from noteagent.acquire.search_config import SearchError
+from noteagent.acquire.search_config import SearchError, active_llm_provider
 from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
 from noteagent.settings.brief import brief_view, save_brief
@@ -326,6 +326,48 @@ class SearchSettingsTests(unittest.TestCase):
             self.assertEqual(view["sources"]["search.mode"], "env")
             self.assertIn("search.mode", view["locked"])
 
+    def test_the_active_provider_is_read_for_native_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            create_profile(
+                {
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                    "revision": 0,
+                },
+                path=path,
+                credentials=credentials,
+            )
+            with (
+                patch(
+                    "noteagent.acquire.search_config.default_config_path",
+                    lambda: path,
+                ),
+                patch(
+                    "noteagent.acquire.search_config.keyring_store",
+                    lambda: credentials,
+                ),
+            ):
+                self.assertEqual(active_llm_provider(), "openai")
+
+    def test_a_missing_config_names_no_active_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch(
+                    "noteagent.acquire.search_config.default_config_path",
+                    lambda: Path(tmp) / "missing.json",
+                ),
+                patch(
+                    "noteagent.acquire.search_config.keyring_store",
+                    lambda: FakeCredentials(),
+                ),
+            ):
+                self.assertEqual(active_llm_provider(), "")
+
 
 class ProbeTests(unittest.TestCase):
     def _save_connection(self, key: str = "secret") -> None:
@@ -526,6 +568,24 @@ class ProbeTests(unittest.TestCase):
             with self.assertRaises(Refusal) as caught:
                 probe_search(path=path, runner=lambda *_a, **_k: None)
             self.assertEqual(caught.exception.code, "settings.searchOff")
+
+    def test_search_probe_with_native_mode_needs_no_search_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            seen: dict[str, object] = {}
+
+            class Run:
+                cards = ("a", "b")
+
+            def runner(query: str, *, top_k: int, config: object) -> Run:
+                seen["mode"] = config.mode  # type: ignore[attr-defined]
+                return Run()
+
+            count = probe_search({"mode": "native"}, path=path, runner=runner)
+            self.assertEqual(count, 2)
+            self.assertEqual(seen["mode"], "native")
 
 class _ModelsResponse:
     """One answer from a model-list endpoint, without a network."""
@@ -1209,6 +1269,23 @@ class ProfileSettingsApiTests(unittest.TestCase):
             self.assertEqual(view["llm"]["temperature"], 0.7)
             self.assertEqual(view["sources"]["llm.temperature"], "env")
             self.assertIn("llm.temperature", view["locked"])
+
+    def test_an_openai_profile_reports_native_search_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            created = client.post(
+                "/api/settings/profiles",
+                json={
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "gpt-4o-mini",
+                    "revision": 0,
+                },
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            view = client.get("/api/settings").json()
+            self.assertTrue(view["search"]["nativeAvailable"])
 
     def test_a_profile_save_refuses_a_value_the_document_could_not_hold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

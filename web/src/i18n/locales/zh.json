@@ -1412,6 +1412,10 @@
         "notConfigured": "尚未配置网页搜索。请打开设置，选择搜索服务并填写密钥。",
         "misconfigured": "网页搜索的配置不完整，请检查一下设置。",
         "nativeUnavailable": "已选择原生搜索，但当前版本还没有支持它的模型服务。请在设置中改用自动或仅外部搜索。",
+        "nativeConfigMissing": "原生搜索需要可用的模型连接，请先配置服务地址、密钥和模型。",
+        "nativeRejected": "模型服务拒绝了这次原生搜索，请检查密钥和服务地址。",
+        "nativeUnreachable": "连不上模型服务的搜索能力，请检查网络。",
+        "nativeFailed": "模型服务的搜索能力有响应，但未给出可用的结果。",
         "failed": "本次网页搜索未成功，请稍后重试。"
       },
       "settings": {

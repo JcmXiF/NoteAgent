@@ -399,7 +399,11 @@ export function searchDirty(
 }
 
 export function searchCanProbe(draft: SearchDraft, saved: SearchSettings): boolean {
-  if (draft.provider === "none" || searchProblems(draft).length > 0) return false;
+  if (searchProblems(draft).length > 0) return false;
+  // A native search needs the model connection, not a search provider.
+  if (draft.mode === "native") return saved.nativeAvailable;
+  if (draft.mode === "auto" && saved.nativeAvailable) return true;
+  if (draft.provider === "none") return false;
   if (draft.apiKey.trim()) return true;
   if (draft.clearApiKey) return false;
   return saved.apiKeySet;

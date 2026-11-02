@@ -295,12 +295,7 @@ export function SearchSection({
         <Button
           type="button"
           variant="outline"
-          disabled={
-            !searchCanProbe(draft, install.search) ||
-            (draft.mode === "native" && !install.search.nativeAvailable) ||
-            probing ||
-            saving
-          }
+          disabled={!searchCanProbe(draft, install.search) || probing || saving}
           onClick={() => void trial()}
         >
           {probing ? t("settings.testing") : t("settings.search.test")}
