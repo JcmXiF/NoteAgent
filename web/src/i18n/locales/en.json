@@ -1130,6 +1130,11 @@
       "apiKeyClearing": "Saving removes the stored key.",
       "model": "Model name",
       "modelHint": "The model identifier the service expects, e.g. gpt-4o-mini.",
+      "fetchModels": "Fetch list",
+      "fetchingModels": "Fetching…",
+      "modelDiscoveryHint": "Type a model name directly; fetching a list needs a working service address.",
+      "noModels": "No models were found. Enter the model name yourself.",
+      "modelsFailed": "The model list could not be fetched.",
       "noModel": "No model chosen",
       "saveFailed": "The save did not go through.",
       "provider_openai": "OpenAI",
@@ -1405,7 +1410,7 @@
         "probeRejected": "The model service refused the key. Check the key and the service address.",
         "probeUnreachable": "Could not reach the model service. Check the address and the network.",
         "probeFailed": "The model service answered, but not with a usable reply.",
-        "probeKeyRequired": "This key belongs to the previous service address. Enter the key again to test a new one.",
+        "probeKeyRequired": "This key belongs to the previous service address. Enter it again for a new address.",
         "searchRejected": "The search service refused the key. Check it and try again.",
         "searchUnreachable": "Could not reach the search service. Check the network.",
         "searchFailed": "The search service answered, but the trial search did not come back.",
@@ -1414,7 +1419,8 @@
         "writeBusy": "Another save is in progress. Try again in a moment.",
         "configInvalid": "The settings file cannot be used. It may have been damaged or edited by hand.",
         "configVersion": "The settings file was written by another version of the app and cannot be used.",
-        "profileNameNotFound": "That connection no longer exists. Refresh and try again."
+        "profileNameNotFound": "That connection no longer exists. Refresh and try again.",
+        "modelsUnavailable": "This service did not return a model list. Enter the model name yourself."
       },
       "update": {
         "unreachable": "Could not reach the update source. Check the network and try again.",

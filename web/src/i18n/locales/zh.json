@@ -1130,6 +1130,11 @@
       "apiKeyClearing": "保存后将清除已保存的密钥。",
       "model": "模型名",
       "modelHint": "服务商使用的模型标识，例如 gpt-4o-mini。",
+      "fetchModels": "拉取列表",
+      "fetchingModels": "拉取中…",
+      "modelDiscoveryHint": "可以直接输入模型名；拉取列表需要服务地址可用。",
+      "noModels": "没有找到模型，请手动填写模型名。",
+      "modelsFailed": "没有取到模型列表。",
       "noModel": "未选模型",
       "saveFailed": "保存失败",
       "provider_openai": "OpenAI",
@@ -1405,7 +1410,7 @@
         "probeRejected": "模型服务拒绝了这个密钥，请检查密钥和服务地址。",
         "probeUnreachable": "连不上模型服务，请检查地址和网络。",
         "probeFailed": "模型服务有响应，但未给出可用的答复。",
-        "probeKeyRequired": "这把密钥只属于原来的服务地址，换地址测试需要重新输入。",
+        "probeKeyRequired": "这把密钥只属于原来的服务地址，换地址需要重新输入。",
         "searchRejected": "搜索服务拒绝了这个密钥，请检查后重试。",
         "searchUnreachable": "连不上搜索服务，请检查网络。",
         "searchFailed": "搜索服务有回应，但这次试搜索没有结果。",
@@ -1414,7 +1419,8 @@
         "writeBusy": "另一次保存正在进行，请稍后重试。",
         "configInvalid": "设置文件无法使用，可能已损坏或被手动修改。",
         "configVersion": "设置文件由另一个版本的应用写入，当前版本无法使用。",
-        "profileNameNotFound": "这个连接已不存在，请刷新后重试。"
+        "profileNameNotFound": "这个连接已不存在，请刷新后重试。",
+        "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。"
       },
       "update": {
         "unreachable": "无法连接更新来源，请检查网络后重试。",

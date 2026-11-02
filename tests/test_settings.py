@@ -26,9 +26,11 @@ from noteagent.settings.credentials import SEARCH_KEY, llm_key
 from noteagent.settings.effective import forget_applied
 from noteagent.settings.envfile import update_env_text
 from noteagent.settings.fields import MANAGED_ENV_NAMES
+from noteagent.settings.profiles import create_profile
 from noteagent.settings.install import (
     apply_install,
     install_view,
+    list_models,
     probe_llm,
     probe_search,
 )
@@ -500,6 +502,181 @@ class ProbeTests(unittest.TestCase):
             with self.assertRaises(Refusal) as caught:
                 probe_search(path=path, runner=lambda *_a, **_k: None)
             self.assertEqual(caught.exception.code, "settings.searchOff")
+
+
+class _ModelsResponse:
+    """One answer from a model-list endpoint, without a network."""
+
+    def __init__(self, payload: object = None, status_code: int = 200, text: str = "") -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.text = text
+
+    def json(self) -> object:
+        if self._payload is None:
+            raise ValueError("not JSON")
+        return self._payload
+
+
+class ModelDiscoveryTests(unittest.TestCase):
+    """The one action that turns an endpoint into a list of model names."""
+
+    def test_lists_openai_compatible_models_and_sends_the_key_to_that_host(self) -> None:
+        seen: dict[str, object] = {}
+
+        def getter(url, *, headers, timeout):
+            seen.update(url=url, headers=headers)
+            return _ModelsResponse(
+                {"data": [{"id": "one"}, {"id": "two"}, {"id": "one"}]}
+            )
+
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            models = list_models(
+                {
+                    "baseUrl": "https://api.example.com/v1",
+                    "provider": "openai",
+                    "apiKey": "sk-test",
+                },
+                getter=getter,
+            )
+
+        self.assertEqual(models, ["one", "two"])
+        self.assertEqual(seen["url"], "https://api.example.com/v1/models")
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer sk-test")
+
+    def test_anthropic_gets_its_own_authentication_headers(self) -> None:
+        seen: dict[str, object] = {}
+
+        def getter(url, *, headers, timeout):
+            seen["headers"] = headers
+            return _ModelsResponse({"data": [{"id": "claude"}]})
+
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            models = list_models(
+                {
+                    "baseUrl": "https://api.anthropic.com/v1",
+                    "provider": "anthropic",
+                    "apiKey": "sk-anthropic",
+                },
+                getter=getter,
+            )
+
+        self.assertEqual(models, ["claude"])
+        headers = seen["headers"]
+        self.assertEqual(headers["x-api-key"], "sk-anthropic")
+        self.assertNotIn("Authorization", headers)
+        self.assertIn("anthropic-version", headers)
+
+    def test_a_rejected_or_missing_model_list_explains_itself(self) -> None:
+        cases = (
+            (401, "settings.probeRejected"),
+            (404, "settings.modelsUnavailable"),
+            (500, "settings.probeFailed"),
+        )
+        for status, code in cases:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp, (
+                isolated_env()
+            ), settings_home(tmp):
+
+                def getter(url, *, headers, timeout, status=status):
+                    return _ModelsResponse(status_code=status, text="no")
+
+                with self.assertRaises(Refusal) as caught:
+                    list_models(
+                        {
+                            "baseUrl": "https://api.example.com/v1",
+                            "provider": "openai",
+                            "apiKey": "k",
+                        },
+                        getter=getter,
+                    )
+                self.assertEqual(caught.exception.code, code)
+
+    def test_a_stored_key_is_not_sent_to_another_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            created = create_profile(
+                {
+                    "name": "Main",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "apiKey": "sk-stored",
+                    "revision": 0,
+                },
+                path=path,
+                credentials=credentials,
+            )
+            profile_id = created["profiles"][0]["id"]
+
+            seen: dict[str, object] = {}
+
+            def getter(url, *, headers, timeout):
+                seen["headers"] = headers
+                return _ModelsResponse({"data": [{"id": "m"}]})
+
+            # A different origin is asked without the key, never with it.
+            self.assertEqual(
+                list_models(
+                    {
+                        "baseUrl": "https://evil.example/v1",
+                        "provider": "openai",
+                        "profileId": profile_id,
+                    },
+                    path=path,
+                    credentials=credentials,
+                    getter=getter,
+                ),
+                ["m"],
+            )
+            self.assertNotIn("Authorization", seen["headers"])
+
+            self.assertEqual(
+                list_models(
+                    {
+                        "baseUrl": "https://api.openai.com/v1",
+                        "provider": "openai",
+                        "profileId": profile_id,
+                    },
+                    path=path,
+                    credentials=credentials,
+                    getter=getter,
+                ),
+                ["m"],
+            )
+            self.assertEqual(seen["headers"]["Authorization"], "Bearer sk-stored")
+
+    def test_a_local_endpoint_without_a_key_is_still_asked(self) -> None:
+        seen: dict[str, object] = {}
+
+        def getter(url, *, headers, timeout):
+            seen["headers"] = headers
+            return _ModelsResponse({"data": [{"id": "qwen2.5:7b"}]})
+
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            # A saved cloud connection must not block a keyless local endpoint.
+            create_profile(
+                {
+                    "name": "Cloud",
+                    "provider": "openai",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "m",
+                    "apiKey": "sk-cloud",
+                    "revision": 0,
+                }
+            )
+            models = list_models(
+                {
+                    "baseUrl": "http://127.0.0.1:11434/v1",
+                    "provider": "ollama",
+                },
+                getter=getter,
+            )
+
+        self.assertEqual(models, ["qwen2.5:7b"])
+        self.assertNotIn("Authorization", seen["headers"])
 
 
 class BriefTests(unittest.TestCase):

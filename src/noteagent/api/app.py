@@ -111,7 +111,13 @@ from noteagent.ingest.source_citations import source_citations_payload
 from noteagent.ingest.update_index import rebuild_wiki_index
 from noteagent.llm.config import LlmConfigError
 from noteagent.settings.brief import brief_view, save_brief
-from noteagent.settings.install import apply_install, install_view, probe_llm, probe_search
+from noteagent.settings.install import (
+    apply_install,
+    install_view,
+    list_models,
+    probe_llm,
+    probe_search,
+)
 from noteagent.settings.profiles import (
     activate_profile,
     create_profile,
@@ -248,6 +254,15 @@ class ProfileUpdateBody(BaseModel):
 
 class ProfileActivateBody(BaseModel):
     revision: int = Field(..., ge=0)
+
+
+class SettingsModelsBody(BaseModel):
+    """What to ask for a model list: a draft, or a saved profile's key."""
+
+    baseUrl: str | None = None
+    provider: str | None = None
+    apiKey: str | None = None
+    profileId: str | None = None
 
 
 class BriefBody(BaseModel):
@@ -618,6 +633,10 @@ def create_app() -> FastAPI:
         profile_id: str, body: ProfileActivateBody
     ) -> dict[str, object]:
         return activate_profile(profile_id, revision=body.revision)
+
+    @app.post("/api/settings/models")
+    def settings_models(body: SettingsModelsBody) -> dict[str, object]:
+        return {"models": list_models(body.model_dump(exclude_unset=True))}
 
     @app.post("/api/settings/llm/probe")
     def settings_llm_probe(body: LlmSettingsBody) -> dict[str, object]:

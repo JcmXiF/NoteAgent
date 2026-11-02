@@ -10,6 +10,7 @@ import type {
   InstallSettings,
   ProfileCreatePatch,
   ProfileUpdatePatch,
+  ProviderId,
   SettingsPatch,
 } from "@/lib/install-settings";
 
@@ -57,6 +58,21 @@ export function activateProfile(id: string, revision: number): Promise<InstallSe
     `/settings/profiles/${encodeURIComponent(id)}/activate`,
     { revision },
   );
+}
+
+export type ModelListPatch = {
+  baseUrl?: string;
+  provider?: ProviderId;
+  apiKey?: string;
+  /** Use this saved profile's key, when the address still belongs to it. */
+  profileId?: string;
+};
+
+/** Asks an endpoint for its model names; a suggestion, never a requirement. */
+export function listModels(
+  patch: ModelListPatch,
+): Promise<{ models: string[] }> {
+  return postJson<{ models: string[] }>("/settings/models", patch);
 }
 
 export function probeModel(patch: Record<string, unknown>): Promise<{ ok: true }> {

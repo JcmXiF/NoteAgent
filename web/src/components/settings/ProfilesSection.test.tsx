@@ -17,12 +17,14 @@ vi.mock("@/lib/api/settings", () => ({
   updateProfile: vi.fn(),
   deleteProfile: vi.fn(),
   activateProfile: vi.fn(),
+  listModels: vi.fn(),
 }));
 
 import {
   activateProfile,
   createProfile,
   deleteProfile,
+  listModels,
   updateProfile,
 } from "@/lib/api/settings";
 
@@ -209,6 +211,97 @@ describe("the saved connections", () => {
 
     expect(updateProfile).toHaveBeenCalledWith("p_1", { model: "gpt-4.1", revision: 3 });
     expect(onSaved).toHaveBeenCalledWith(changed);
+  });
+
+  it("fills the endpoint and a suggested model from a preset, and still takes a typed one", async () => {
+    await draw(
+      install({
+        profiles: [
+          profile({ provider: "custom", baseUrl: "https://old.example/v1", model: "old" }),
+        ],
+        revision: 2,
+      }),
+    );
+
+    choose(select("服务商"), "deepseek");
+    expect(input("服务地址").value).toBe("https://api.deepseek.com/v1");
+    expect(input("模型名").value).toBe("deepseek-chat");
+
+    typeInto(input("模型名"), "deepseek-reasoner");
+    expect(input("模型名").value).toBe("deepseek-reasoner");
+  });
+
+  it("lets a new connection use a preset when the active one is environment-owned", async () => {
+    await draw(
+      install({
+        profiles: [profile()],
+        locked: ["llm.baseUrl", "llm.model"],
+        sources: { "llm.baseUrl": "env", "llm.model": "env" },
+        revision: 2,
+      }),
+    );
+
+    await press("新建");
+    choose(select("服务商"), "deepseek");
+
+    expect(input("服务地址").disabled).toBe(false);
+    expect(input("服务地址").value).toBe("https://api.deepseek.com/v1");
+    expect(input("模型名").disabled).toBe(false);
+    expect(input("模型名").value).toBe("deepseek-chat");
+  });
+
+  it("shows a fetched model list as suggestions and fills one on click", async () => {
+    vi.mocked(listModels).mockResolvedValue({ models: ["gpt-4.1", "gpt-4o-mini"] });
+
+    await draw(install());
+    await press("拉取列表");
+
+    expect(listModels).toHaveBeenCalledWith({
+      baseUrl: "https://api.openai.com/v1",
+      provider: "openai",
+      profileId: "p_1",
+    });
+    await press("gpt-4.1");
+    expect(input("模型名").value).toBe("gpt-4.1");
+  });
+
+  it("drops a model list that arrives after the endpoint changed", async () => {
+    let resolveModels: (value: { models: string[] }) => void = () => {};
+    vi.mocked(listModels).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+
+    await draw(install());
+    await press("拉取列表");
+    typeInto(input("服务地址"), "https://other.example/v1");
+    await act(async () => {
+      resolveModels({ models: ["old-model"] });
+    });
+
+    expect(host.textContent).not.toContain("old-model");
+  });
+
+  it("keeps the typed model when the list cannot be fetched, and still saves it", async () => {
+    vi.mocked(listModels).mockRejectedValue(
+      new ApiError("no list", 502, "settings.modelsUnavailable"),
+    );
+
+    await draw(install());
+    typeInto(input("模型名"), "my-model");
+    await press("拉取列表");
+
+    expect(host.textContent).toContain("这个服务没有返回模型列表");
+    expect(input("模型名").value).toBe("my-model");
+
+    const saved = install({ profiles: [profile({ model: "my-model" })], revision: 4 });
+    vi.mocked(updateProfile).mockResolvedValue(saved);
+    await press("保存");
+    expect(updateProfile).toHaveBeenCalledWith(
+      "p_1",
+      expect.objectContaining({ model: "my-model" }),
+    );
   });
 
   it("keeps the active connection's environment-owned fields read-only", async () => {

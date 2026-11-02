@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Plus, Server, Trash2 } from "lucide-react";
+import { Check, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, inputClass } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import {
   activateProfile,
   createProfile,
   deleteProfile,
+  listModels,
   updateProfile,
 } from "@/lib/api/settings";
 import {
@@ -26,6 +27,7 @@ import {
   type ProfileSettings,
   type ProviderId,
 } from "@/lib/install-settings";
+import { PROVIDER_IDS, PROVIDER_PRESETS } from "@/lib/provider-presets";
 import { cn } from "@/lib/utils";
 
 /**
@@ -36,15 +38,6 @@ import { cn } from "@/lib/utils";
  * form never receives a saved key: a blank field means "keep the one in the
  * credential store", and clearing it is a separate, deliberate action.
  */
-
-const PROVIDERS: ProviderId[] = [
-  "openai",
-  "anthropic",
-  "deepseek",
-  "qwen",
-  "ollama",
-  "custom",
-];
 
 const BLANK: ProfileDraft = {
   name: "",
@@ -82,13 +75,20 @@ export function ProfilesSection({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  // A fetched list answers a question about the endpoint it was asked about.
+  const fetchToken = useRef(0);
 
   const selected = profiles.find((item) => item.id === selectedId) ?? null;
   // The environment owns the effective connection. It is shown read-only on
   // the profile every task is using; other stored profiles stay editable,
   // because they do not describe what the process is using right now.
+  // A profile being created is not active yet, so the environment's lock on
+  // the current connection must not leak into its form.
   const lockedActive = (field: string) =>
-    selected?.active === true && isLocked(install.locked, field);
+    !creating && selected?.active === true && isLocked(install.locked, field);
   const dirty = creating
     ? profileCreateDirty(draft)
     : selected
@@ -117,11 +117,60 @@ export function ProfilesSection({
     if (!next) setDraft({ ...BLANK });
   }, [profiles, selectedId, creating, install.activeProfileId]);
 
+  const clearSuggestions = () => {
+    fetchToken.current += 1;
+    setModels([]);
+    setModelError(null);
+    setFetchingModels(false);
+  };
+
   const edit = (patch: Partial<ProfileDraft>) => {
+    if (patch.baseUrl !== undefined || patch.provider !== undefined) {
+      clearSuggestions();
+    } else {
+      setModelError(null);
+    }
     setDraft((current) => ({ ...current, ...patch }));
     setMessage(null);
     setError(null);
     setConflict(false);
+  };
+
+  const editProvider = (provider: ProviderId) => {
+    const preset = PROVIDER_PRESETS[provider];
+    const patch: Partial<ProfileDraft> = { provider };
+    if (provider !== "custom") {
+      // A preset is a starting point: it fills the two fields it knows about,
+      // but never a value the environment owns.
+      if (!lockedActive("llm.baseUrl")) patch.baseUrl = preset.baseUrl;
+      if (!lockedActive("llm.model")) patch.model = preset.model;
+    }
+    edit(patch);
+  };
+
+  const fetchModels = async () => {
+    const token = ++fetchToken.current;
+    setFetchingModels(true);
+    setModelError(null);
+    try {
+      const result = await listModels({
+        baseUrl: draft.baseUrl.trim(),
+        provider: draft.provider,
+        ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+        ...(!creating && selected ? { profileId: selected.id } : {}),
+      });
+      if (token !== fetchToken.current) return;
+      setModels(result.models);
+      if (result.models.length === 0) {
+        setModelError(t("settings.profiles.noModels"));
+      }
+    } catch (err) {
+      if (token !== fetchToken.current) return;
+      setModels([]);
+      setModelError(errorMessage(err, t("settings.profiles.modelsFailed")));
+    } finally {
+      if (token === fetchToken.current) setFetchingModels(false);
+    }
   };
 
   const select = (profile: ProfileSettings) => {
@@ -130,6 +179,7 @@ export function ProfilesSection({
     setDraft(profileDraftFrom(profile));
     setShowKey(false);
     setConfirmingDelete(false);
+    clearSuggestions();
     setMessage(null);
     setError(null);
     setConflict(false);
@@ -140,6 +190,7 @@ export function ProfilesSection({
     setDraft({ ...BLANK });
     setShowKey(false);
     setConfirmingDelete(false);
+    clearSuggestions();
     setMessage(null);
     setError(null);
     setConflict(false);
@@ -157,6 +208,7 @@ export function ProfilesSection({
     } else {
       setDraft({ ...BLANK });
     }
+    clearSuggestions();
     setMessage(null);
     setError(null);
     setConflict(false);
@@ -292,9 +344,9 @@ export function ProfilesSection({
           aria-label={t("settings.profiles.provider")}
           className={cn(inputClass, "h-8 text-sm")}
           value={draft.provider}
-          onChange={(event) => edit({ provider: event.target.value as ProviderId })}
+          onChange={(event) => editProvider(event.target.value as ProviderId)}
         >
-          {PROVIDERS.map((provider) => (
+          {PROVIDER_IDS.map((provider) => (
             <option key={provider} value={provider}>
               {t(`settings.profiles.provider_${provider}`)}
             </option>
@@ -349,16 +401,58 @@ export function ProfilesSection({
       <Field
         label={t("settings.profiles.model")}
         hint={t("settings.profiles.modelHint")}
+        error={modelError}
         locked={lockedActive("llm.model")}
       >
-        <Input
-          aria-label={t("settings.profiles.model")}
-          value={draft.model}
-          disabled={lockedActive("llm.model")}
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(event) => edit({ model: event.target.value })}
-        />
+        <div className="flex gap-1">
+          <Input
+            aria-label={t("settings.profiles.model")}
+            value={draft.model}
+            disabled={lockedActive("llm.model")}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => edit({ model: event.target.value })}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={
+              problems.includes("settings.invalid.baseUrl") ||
+              fetchingModels ||
+              saving ||
+              lockedActive("llm.model")
+            }
+            onClick={() => void fetchModels()}
+          >
+            <RefreshCw className={fetchingModels ? "animate-spin" : undefined} />
+            {fetchingModels
+              ? t("settings.profiles.fetchingModels")
+              : t("settings.profiles.fetchModels")}
+          </Button>
+        </div>
+        {models.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {models.map((model) => (
+              <button
+                key={model}
+                type="button"
+                onClick={() => edit({ model })}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 font-mono text-[11px]",
+                  model === draft.model
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:bg-muted",
+                )}
+              >
+                {model}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {t("settings.profiles.modelDiscoveryHint")}
+          </span>
+        )}
       </Field>
     </>
   );

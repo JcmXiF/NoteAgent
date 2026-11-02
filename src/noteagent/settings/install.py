@@ -68,6 +68,7 @@ from noteagent.settings.store import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_SEARCH_TIMEOUT,
     DEFAULT_TEMPERATURE,
+    PROVIDERS,
     Config,
     ConfigStore,
     Profile,
@@ -78,6 +79,10 @@ from noteagent.util.refusal import Refusal
 
 _PROBE_TIMEOUT = 20.0
 _PROBE_QUERY = "example"
+
+#: Model discovery is a suggestion, so it waits less than a real request.
+_MODELS_TIMEOUT = 15.0
+_MODELS_LIMIT = 200
 
 _LANG = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*")
 _HTTP_STATUS = re.compile(r"HTTP (\d+)")
@@ -99,6 +104,7 @@ __all__ = [
     "clean_secret",
     "clean_temperature",
     "install_view",
+    "list_models",
     "probe_llm",
     "probe_search",
     "settings_store",
@@ -767,14 +773,8 @@ def _llm_config_for(body: Mapping[str, Any]) -> LlmConfig:
     # A stored key belongs to the service it was saved for. If a caller could
     # name any address while keeping that key, this trial call would be a way to
     # send the key wherever the caller likes. A new endpoint needs a new key.
-    saved_base = _current(F_BASE) or ""
-    if not body.get("apiKey") and key and _origin(base) != _origin(saved_base):
-        raise Refusal(
-            "settings.probeKeyRequired",
-            "the stored API key belongs to a different service address; "
-            "enter the key again to test this one",
-            status=409,
-        )
+    if not body.get("apiKey"):
+        _key_fits_origin(key, _current(F_BASE) or "", base)
     if "temperature" in body and body["temperature"] is not None:
         temperature = float(_use(F_TEMPERATURE, clean_temperature(body["temperature"])))
     else:
@@ -822,6 +822,17 @@ def _origin(value: str) -> tuple[str, str, int] | None:
     if port is None:
         port = _DEFAULT_PORTS.get(scheme, 0)
     return scheme, host.lower(), port
+
+
+def _key_fits_origin(key: str, saved_base: str, base: str) -> None:
+    """A stored key may only travel to the origin it was saved for."""
+    if key and _origin(base) != _origin(saved_base):
+        raise Refusal(
+            "settings.probeKeyRequired",
+            "the stored API key belongs to a different service address; "
+            "enter the key again for this one",
+            status=409,
+        )
 
 
 def _search_config_for(body: Mapping[str, Any]) -> SearchConfig:
@@ -957,3 +968,158 @@ def probe_search(
     except SearchError as err:
         raise _probe_refusal(str(err), search=True) from err
     return len(run.cards)
+
+
+# --- model discovery ---------------------------------------------------------
+
+
+def _models_refusal(status: int | None, message: str) -> Refusal:
+    """Why a model list did not arrive, in the words the screen can say."""
+    params = {"status": str(status)} if status is not None else {}
+    if status in (401, 403):
+        return Refusal("settings.probeRejected", message[:300], params=params, status=502)
+    if status == 404:
+        return Refusal("settings.modelsUnavailable", message[:300], params=params, status=502)
+    if status is None:
+        return Refusal("settings.probeUnreachable", message[:300], params=params, status=502)
+    return Refusal("settings.probeFailed", message[:300], params=params, status=502)
+
+
+def _model_ids(payload: object) -> list[str]:
+    """Model names from the shapes compatible endpoints use, in their order."""
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, Mapping):
+        items = payload.get("data") or payload.get("models") or []
+    else:
+        items = []
+    if not isinstance(items, list):
+        return []
+    found: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            ident = item
+        elif isinstance(item, Mapping):
+            ident = item.get("id") or item.get("name") or ""
+        else:
+            continue
+        text = str(ident).strip()
+        if text and text not in found:
+            found.append(text)
+    return found[:_MODELS_LIMIT]
+
+
+def _models_key(
+    body: Mapping[str, Any],
+    context: _Context,
+    profile: Profile | None,
+    base: str,
+) -> str:
+    """The key this request may use, and only for the origin it belongs to."""
+    if body.get("apiKey"):
+        return clean_secret(body["apiKey"], F_LLM_KEY.id)
+
+    key = ""
+    bound_base = ""
+    if profile is not None and context.store.keychain_available():
+        stored = context.store.get_llm_key(profile.id)
+        if stored:
+            key, bound_base = stored, profile.base_url
+    if not key:
+        effective = _current(F_LLM_KEY) or ""
+        if effective:
+            key, bound_base = effective, _current(F_BASE) or ""
+    # A key never travels to another origin; the request itself still may, so a
+    # local endpoint is asked without one instead of being blocked by an
+    # unrelated saved key.
+    if key and _origin(base) != _origin(bound_base):
+        return ""
+    return key
+
+
+def list_models(
+    body: Mapping[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+    getter: Callable[..., Any] | None = None,
+) -> list[str]:
+    """Ask a connection's endpoint which models it offers.
+
+    The key comes from the draft, the selected profile, or the effective
+    configuration, and never travels to an origin it was not saved for. A
+    suggestion list is optional: an endpoint that cannot answer is a refusal
+    the screen words, not a reason to block saving.
+    """
+    context = _context(path, credentials)
+    body = body or {}
+
+    profile: Profile | None = None
+    profile_id = body.get("profileId")
+    if profile_id is not None:
+        if not isinstance(profile_id, str) or not profile_id:
+            raise _invalid("profileId", "profile id is not text")
+        profile = next(
+            (item for item in context.config.profiles if item.id == profile_id),
+            None,
+        )
+        if profile is None:
+            raise Refusal(
+                "settings.profileNameNotFound",
+                f"no connection profile has id {profile_id!r}",
+                params={"id": profile_id},
+                status=404,
+            )
+
+    if body.get("baseUrl") is not None:
+        base = clean_base_url(body["baseUrl"])
+    elif profile is not None:
+        base = profile.base_url
+    else:
+        base = _current(F_BASE) or ""
+    if not base:
+        raise _invalid(F_BASE.id, "a service address is required to list models")
+
+    raw_provider = body.get("provider")
+    if raw_provider is None and profile is not None:
+        raw_provider = profile.provider
+    provider = "custom"
+    if raw_provider is not None:
+        if not isinstance(raw_provider, str):
+            raise _invalid("provider", "the provider is not text")
+        provider = raw_provider.strip().lower()
+        if provider not in PROVIDERS:
+            raise _invalid("provider", "the provider is not one this build knows")
+
+    key = _models_key(body, context, profile, base)
+    headers = {"Accept": "application/json"}
+    if provider == "anthropic":
+        if key:
+            headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    elif key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    url = f"{base.rstrip('/')}/models"
+    try:
+        if getter is not None:
+            response = getter(url, headers=headers, timeout=_MODELS_TIMEOUT)
+        else:
+            with httpx.Client(timeout=_MODELS_TIMEOUT) as client:
+                response = client.get(url, headers=headers)
+    except httpx.HTTPError as err:
+        raise _models_refusal(None, f"Model list request failed: {err}") from err
+    if response.status_code >= 400:
+        raise _models_refusal(
+            response.status_code,
+            f"Model list HTTP {response.status_code}: {response.text[:120]}",
+        )
+    try:
+        payload = response.json()
+    except ValueError as err:
+        raise Refusal(
+            "settings.modelsUnavailable",
+            f"Model list was not JSON: {response.text[:120]}",
+            status=502,
+        ) from err
+    return _model_ids(payload)
