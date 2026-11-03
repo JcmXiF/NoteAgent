@@ -59,7 +59,7 @@ from noteagent.ingest.topic_map import (
 )
 from noteagent.ingest.update_index import iter_wiki_content_pages
 from noteagent.llm.client import LlmClient, language_name
-from noteagent.llm.config import load_llm_config
+from noteagent.llm.config import LlmConfig, load_llm_config
 from noteagent.project.layout import ProjectLayout
 from noteagent.prompts.context import read_optional
 from noteagent.prompts.deep_search import build_blocks_prompt, build_whitelist_prompt
@@ -167,7 +167,12 @@ def act_session(
         )
     elif action == "proposeBlocks":
         session = _propose_blocks(
-            layout, session, script=script, use_llm=use_llm, on_status=on_status, cancel=cancel
+            layout,
+            session,
+            script=script,
+            use_llm=use_llm,
+            on_status=on_status,
+            cancel=cancel,
         )
     elif action == "toggleBlock":
         session = _toggle_block(session, str(body.get("locator") or ""), body.get("accepted"))
@@ -670,8 +675,11 @@ def _propose_whitelist(
         _report(on_status, "deep-search: proposing pages")
         check_cancelled(cancel)
         try:
+            # Read once, here: a profile switched while this action runs must
+            # not change the model the same action finishes with.
+            config = load_llm_config()
             pages, edges, omitted, truncated, notice = _pages_from_llm(
-                layout, session, language=language
+                layout, session, language=language, llm_config=config
             )
         except Exception as err:
             pages, edges, omitted, truncated = _fallback_whitelist(layout, session)
@@ -762,7 +770,11 @@ def _propose_blocks(
         _report(on_status, "deep-search: collecting blocks")
         check_cancelled(cancel)
         try:
-            blocks, truncated, notice = _blocks_from_llm(layout, session)
+            # Read once, here, for the same reason as the page proposal.
+            config = load_llm_config()
+            blocks, truncated, notice = _blocks_from_llm(
+                layout, session, llm_config=config
+            )
         except Exception as err:
             blocks, truncated = _fallback_blocks(layout, session)
             notice = f"model unavailable; fell back to the unclipped blocks ({err})"[:400]
@@ -1206,7 +1218,11 @@ def _derived_for(
 
 
 def _pages_from_llm(
-    layout: ProjectLayout, session: DeepSearchSession, language: str = ""
+    layout: ProjectLayout,
+    session: DeepSearchSession,
+    language: str = "",
+    *,
+    llm_config: LlmConfig,
 ) -> tuple[tuple[WhitelistPage, ...], tuple[OverlayEdge, ...], int, bool, str]:
     graph, graph_cut, shown = graph_summary_text(
         layout, seed_slug=session.seed.slug if session.seed else ""
@@ -1230,7 +1246,7 @@ def _pages_from_llm(
         remainder_skim=skim,
         language=language_name(language),
     )
-    raw = LlmClient(load_llm_config()).chat(prompt.as_messages())
+    raw = LlmClient(llm_config).chat(prompt.as_messages())
     pages, edges, omitted, parsed_cut = _pages_from_payload(
         extract_json_object(raw), existing=shown
     )
@@ -1242,7 +1258,10 @@ def _pages_from_llm(
 
 
 def _blocks_from_llm(
-    layout: ProjectLayout, session: DeepSearchSession
+    layout: ProjectLayout,
+    session: DeepSearchSession,
+    *,
+    llm_config: LlmConfig,
 ) -> tuple[tuple[ProposedBlock, ...], bool, str]:
     table = read_optional(layout.wiki_index, INDEX_CHARS)
     previews, cut = leftover_block_previews(layout)
@@ -1251,7 +1270,7 @@ def _blocks_from_llm(
         wiki_titles=table,
         remainder_previews=previews,
     )
-    raw = LlmClient(load_llm_config()).chat(prompt.as_messages())
+    raw = LlmClient(llm_config).chat(prompt.as_messages())
     blocks, parsed_cut = _blocks_from_payload(extract_json_object(raw))
     truncated = cut or parsed_cut
     notice = "unclipped blocks marked"

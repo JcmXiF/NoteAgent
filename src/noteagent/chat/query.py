@@ -68,7 +68,10 @@ def run_query(
         conversation = save_conversation(layout, conversation, limits=limits)
 
     check_cancelled(cancel)
-    client = LlmClient(llm_config or load_llm_config())
+    # The model calls in this answer use one connection. A profile switched
+    # from the settings screen changes the next question, not this one.
+    config = llm_config or load_llm_config()
+    client = LlmClient(config)
     messages = assemble_messages(layout, conversation, limits)
     tools = openai_tools()
     answer = ""

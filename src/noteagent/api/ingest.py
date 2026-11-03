@@ -8,7 +8,7 @@ from pathlib import Path
 from noteagent.api.sse import iter_job_sse
 from noteagent.ingest.auto_ingest import IngestResult, StatusFn, auto_ingest
 from noteagent.llm.client import LlmError
-from noteagent.llm.config import LlmConfig, load_llm_config
+from noteagent.llm.config import LlmConfig, load_llm_config, snapshot_llm_config
 from noteagent.project.doctor import doctor_payload
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.cancel import JobCancelled
@@ -100,6 +100,13 @@ def run_ingest_job(
     tests only; the HTTP layer never passes them.
     """
     sources = resolve_http_ingest_paths(layout, paths)
+    # One connection for the whole job: every source in this run uses the
+    # configuration that was active when it started. A missing connection is
+    # a job-level failure, not a per-source one.
+    config = snapshot_llm_config(
+        llm_config,
+        needed=analysis_text is None or generation_text is None,
+    )
     logger = RunLogger.for_layout(layout)
     results: list[dict[str, object]] = []
     errors: list[dict[str, str]] = []
@@ -118,7 +125,7 @@ def run_ingest_job(
             result = auto_ingest(
                 layout,
                 target,
-                llm_config=llm_config,
+                llm_config=config,
                 dry_run=dry_run,
                 force=force,
                 on_status=on_status,

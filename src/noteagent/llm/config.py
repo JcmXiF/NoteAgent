@@ -156,6 +156,22 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
     )
 
 
+def snapshot_llm_config(
+    config: LlmConfig | None = None,
+    *,
+    needed: bool = True,
+) -> LlmConfig | None:
+    """The connection a job keeps for its whole run.
+
+    A caller that already holds a snapshot keeps it. ``needed=False`` is for a
+    run whose model stages are injected: it never builds a client, so reading
+    the configuration would only be a way to fail for no reason.
+    """
+    if config is not None or not needed:
+        return config
+    return load_llm_config()
+
+
 # Taken at import, before any module can read a legacy file: a value that came
 # from that file must never be mistaken for one the process was started with.
 capture_process_env()

@@ -27,7 +27,7 @@ from noteagent.wiki.deep_search import (
     refine_proposals,
     round_is_planning,
 )
-from noteagent.llm.config import LlmConfig
+from noteagent.llm.config import LlmConfig, snapshot_llm_config
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.cancel import check_cancelled
 from noteagent.util.refusal import Refusal
@@ -61,6 +61,9 @@ def run_topic_map_job(
     map_text: str | None = None,
     cancel=None,
 ) -> dict[str, Any]:
+    # Captured once, before planning reads the board: a profile switch during
+    # the pass changes the next job, not this one.
+    config = snapshot_llm_config(llm_config, needed=map_text is None)
     store = load_clip_store(layout)
     planning = _collections_for_source(
         collections_for_planning(layout, store),
@@ -72,7 +75,7 @@ def run_topic_map_job(
     topic_map = map_clips(
         layout,
         intent=goal,
-        llm_config=llm_config,
+        llm_config=config,
         map_text=map_text,
         store=replace(store, collections=planning),
         targets=targets,
@@ -130,12 +133,13 @@ def run_ingest_confirmed_job(
     dry_run: bool = False,
     cancel=None,
 ) -> dict[str, Any]:
+    config = snapshot_llm_config(llm_config, needed=generation_text is None)
     logger = RunLogger.for_layout(layout)
     result = ingest_confirmed(
         layout,
         confirmed=confirmed,
         intent=intent or None,
-        llm_config=llm_config,
+        llm_config=config,
         generation_text=generation_text,
         dry_run=dry_run,
         on_status=on_status,
