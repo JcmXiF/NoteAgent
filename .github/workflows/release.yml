@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    # TEMPORARY (ticket 02 dry run): the release workflow lives on a feature
+    # branch before it reaches main, so the branch's own push exercises it.
+    # Removed before the branch is merged.
+    branches: ["ticket/02-release-workflow"]
   workflow_dispatch:
     inputs:
       publish:
@@ -137,30 +141,52 @@ jobs:
             "" \
             "Windows 可能提示未知发布者；请先退出 NoteAgent 再安装。")"
 
+          # The by-tag endpoint hides drafts, so a draft has to be found by
+          # listing releases. The oldest matching draft is updated; a published
+          # release with the same tag is never touched.
+          releases="$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | [(.id|tostring), .tag_name, (.draft|tostring)] | @tsv')"
+
           release_id=""
-          if info="$(gh api "repos/$REPO/releases/tags/$TAG" \
-            --jq '(.id|tostring) + " " + (.draft|tostring)' 2>/dev/null)"; then
-            read -r release_id is_draft <<< "$info"
+          while IFS=$'\t' read -r id tag_name is_draft; do
+            [[ -z "${id:-}" ]] && continue
+            [[ "$tag_name" == "$TAG" ]] || continue
             if [[ "$is_draft" != "true" ]]; then
               echo "::error::release $TAG already exists and is published; refusing to touch it"
               exit 1
             fi
+            if [[ -z "$release_id" || "$id" -lt "$release_id" ]]; then
+              release_id="$id"
+            fi
+          done <<< "$releases"
+
+          if [[ -n "$release_id" ]]; then
             echo "Updating draft release $TAG ($release_id)"
             gh api --method PATCH "repos/$REPO/releases/$release_id" \
               -f name="NoteAgent $VERSION" \
               -f body="$body" > /dev/null
           else
             echo "Creating draft release $TAG"
-            gh api --method POST "repos/$REPO/releases" \
+            release_id="$(gh api --method POST "repos/$REPO/releases" \
               -f tag_name="$TAG" \
               -f name="NoteAgent $VERSION" \
               -f body="$body" \
               -F draft=true \
-              -F prerelease=false > /dev/null
+              -F prerelease=false --jq '.id')"
           fi
 
           echo "Uploading $ASSET"
           gh release upload "$TAG" "$ASSET" --clobber
+
+          # `gh release upload` resolves the tag to one release. Confirm the
+          # file landed on the draft this step updated.
+          asset_name="$(basename "$ASSET")"
+          count="$(gh api "repos/$REPO/releases/$release_id/assets" \
+            --jq "[.[] | select(.name == \"$asset_name\")] | length")"
+          if [[ "$count" != "1" ]]; then
+            echo "::error::asset $asset_name is not attached to release $release_id"
+            exit 1
+          fi
 
       - name: Publish the release
         if: steps.version.outputs.publish == 'true'
