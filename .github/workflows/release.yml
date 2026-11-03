@@ -3,10 +3,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    # TEMPORARY (ticket 02 dry run): the release workflow lives on a feature
-    # branch before it reaches main, so the branch's own push exercises it.
-    # Removed before the branch is merged.
-    branches: ["ticket/02-release-workflow"]
   workflow_dispatch:
     inputs:
       publish:
@@ -94,8 +90,7 @@ jobs:
             exit 1
           fi
 
-          # Tag pushes publish; a manual run publishes only when asked. The
-          # temporary branch trigger never publishes.
+          # Tag pushes publish; a manual run publishes only when asked.
           publish=false
           if [[ "$GITHUB_REF_TYPE" == "tag" || "${INPUT_PUBLISH:-false}" == "true" ]]; then
             publish=true
