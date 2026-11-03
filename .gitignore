@@ -38,4 +38,13 @@ build/
 
 
 # dev
-/docs/
+/docs/*
+# The agent conventions belong to the repository; the design notes do not.
+!/docs/agents/
+.mcp.json
+.claude/settings.local.json
+.claude/worktrees/
+.agentsroom/handoff-transcript-*.txt
+.agentsroom/handoff-summary-*.md
+.agentsroom/fork-context-*.txt
+.agentsroom/transfer-context-*.txt
