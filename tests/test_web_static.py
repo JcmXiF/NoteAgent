@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,13 +70,20 @@ class CachingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._headers(".")["cache-control"], "no-cache")
 
     def test_a_hashed_asset_is_kept_for_good(self) -> None:
-        for path in ("assets/app-1.js", "assets\\app-1.js"):
-            with self.subTest(path=path):
-                # `get_path` uses the platform separator; the rule must not.
-                self.assertEqual(
-                    self._headers(path)["cache-control"],
-                    "public, max-age=31536000, immutable",
-                )
+        self.assertEqual(
+            self._headers("assets/app-1.js")["cache-control"],
+            "public, max-age=31536000, immutable",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt", "a backslash is part of a file name on this platform"
+    )
+    def test_a_windows_separator_in_an_asset_path_is_kept_too(self) -> None:
+        # `get_path` uses the platform separator; the cache rule must not.
+        self.assertEqual(
+            self._headers("assets\\app-1.js")["cache-control"],
+            "public, max-age=31536000, immutable",
+        )
 
     def test_anything_else_gets_no_promise(self) -> None:
         self.assertNotIn("cache-control", self._headers("favicon.svg"))

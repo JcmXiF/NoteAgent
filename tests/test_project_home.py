@@ -25,6 +25,12 @@ from noteagent.project.lifecycle import create_named_project, projects_dir
 from noteagent.project.names import ProjectNameError
 
 
+def canonical(path: Path) -> Path:
+    """The form the project layer returns: resolved, which also expands the
+    Windows 8.3 short names a temporary folder may be reported under."""
+    return Path(path).resolve()
+
+
 class CheckoutTests(unittest.TestCase):
     """Without a home configured, nothing changes for a checkout."""
 
@@ -35,9 +41,9 @@ class CheckoutTests(unittest.TestCase):
                 projects_mod, "REPO_ROOT", repo
             ):
                 self.assertIsNone(home_dir())
-                self.assertEqual(resolve_repo_root(), repo)
-                self.assertEqual(data_home(), repo / "projects")
-                self.assertEqual(projects_dir(repo), repo / "projects")
+                self.assertEqual(resolve_repo_root(), canonical(repo))
+                self.assertEqual(data_home(), canonical(repo / "projects"))
+                self.assertEqual(projects_dir(repo), canonical(repo / "projects"))
 
 
 class HomeTests(unittest.TestCase):
@@ -47,9 +53,9 @@ class HomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "NoteAgent"
             with patch.dict(os.environ, {ENV_HOME: str(home)}):
-                self.assertEqual(resolve_repo_root(), home)
-                self.assertEqual(data_home(), home)
-                self.assertEqual(projects_dir(home), home)
+                self.assertEqual(resolve_repo_root(), canonical(home))
+                self.assertEqual(data_home(), canonical(home))
+                self.assertEqual(projects_dir(home), canonical(home))
 
     def test_a_project_is_created_in_the_home_and_pointed_at_from_there(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,8 +118,8 @@ class HomeTests(unittest.TestCase):
             home = Path(tmp) / "NoteAgent"
             other = Path(tmp) / "elsewhere"
             with patch.dict(os.environ, {ENV_HOME: str(home)}):
-                self.assertEqual(resolve_repo_root(other), other)
-                self.assertEqual(projects_dir(other), other / "projects")
+                self.assertEqual(resolve_repo_root(other), canonical(other))
+                self.assertEqual(projects_dir(other), canonical(other / "projects"))
 
     def test_a_name_that_climbs_out_of_the_home_is_still_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
