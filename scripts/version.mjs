@@ -8,12 +8,19 @@
 //
 // Usage: node scripts/version.mjs check
 //        node scripts/version.mjs check-runtime <path-to-__init__.py>
+//        node scripts/version.mjs check-tag <ref-type> <ref-name>
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+// The app decides which release tags it understands with this parser. Using
+// the same one here means the workflow cannot publish a version the app would
+// refuse to read.
+const { parseVersion } = require("../desktop/version-checker.cjs");
 
 const DESKTOP_PACKAGE = path.join(repoRoot, "desktop", "package.json");
 const PYPROJECT = path.join(repoRoot, "pyproject.toml");
@@ -104,14 +111,34 @@ export function checkRuntimeVersion(runtimeInit, root = repoRoot) {
   return actual;
 }
 
+/**
+ * Decide whether a workflow ref may release the version in desktop/package.json.
+ *
+ * The version has to be plain semver in the parser's own terms, and a tag ref
+ * has to be exactly `v<version>`. Anything else is a release built from a ref
+ * that does not name it.
+ */
+export function checkTagVersion(refType, refName, root = repoRoot) {
+  const version = readDesktopVersion(path.join(root, "desktop", "package.json"));
+  const parsed = parseVersion(version);
+  if (!parsed || version !== parsed.join(".")) {
+    throw new Error(`desktop/package.json version "${version}" is not plain semver`);
+  }
+  if (refType === "tag" && refName !== `v${version}`) {
+    throw new Error(`tag ${refName} does not match desktop/package.json (v${version})`);
+  }
+  return version;
+}
+
 function usage() {
   console.error("Usage: node scripts/version.mjs check");
   console.error("       node scripts/version.mjs check-runtime <path-to-__init__.py>");
+  console.error("       node scripts/version.mjs check-tag <ref-type> <ref-name>");
   process.exit(1);
 }
 
 function main(argv) {
-  const [command, target] = argv.slice(2);
+  const [command, first, second] = argv.slice(2);
   try {
     if (command === "check") {
       const versions = checkVersions();
@@ -119,9 +146,14 @@ function main(argv) {
       return;
     }
     if (command === "check-runtime") {
-      if (!target) usage();
-      const version = checkRuntimeVersion(path.resolve(target));
+      if (!first) usage();
+      const version = checkRuntimeVersion(path.resolve(first));
       console.log(`Runtime core version is ${version}`);
+      return;
+    }
+    if (command === "check-tag") {
+      if (!first || !second) usage();
+      console.log(checkTagVersion(first, second));
       return;
     }
     usage();

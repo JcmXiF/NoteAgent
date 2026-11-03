@@ -244,3 +244,28 @@ test("the check waits ten seconds before giving up", async (t) => {
   assert.equal(result.kind, "error");
   assert.equal(result.reason, "timeout");
 });
+
+test("a response whose body stalls after the headers still times out", async () => {
+  const log = logCollector();
+  let signal;
+  const fetch = (_url, options) => {
+    signal = options.signal;
+    return Promise.resolve({
+      status: 200,
+      ok: true,
+      json: () => new Promise(() => {}),
+    });
+  };
+
+  const result = await checkForUpdates({
+    fetch,
+    appVersion: "0.1.0",
+    logger: log.logger,
+    timeoutMs: 10,
+  });
+
+  assert.equal(result.kind, "error");
+  assert.equal(result.reason, "timeout");
+  assert.ok(log.lines.some((line) => line.includes("timeout")));
+  assert.equal(signal.aborted, true);
+});

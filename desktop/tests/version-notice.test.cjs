@@ -87,7 +87,7 @@ test("choosing Later leaves the browser alone", async () => {
   assert.deepEqual(opened, []);
 });
 
-test("a long release note is shortened to a summary", async () => {
+test("a long release note is cut at 300 characters and keeps the warning", async () => {
   const dialog = fakeDialog(1);
   const notes = "x".repeat(4000);
 
@@ -99,8 +99,35 @@ test("a long release note is shortened to a summary", async () => {
   });
 
   const options = dialog.calls[0];
-  assert.ok(options.detail.length < 1000, "the dialog got the whole changelog");
-  assert.match(options.detail, /…/);
+  const summary = options.detail.split("\n\n")[0];
+  assert.ok(summary.length <= 300, `the summary was ${summary.length} characters`);
+  assert.match(summary, /…$/);
+  assert.match(options.detail, /Windows 可能提示未知发布者/);
+});
+
+test("release headings and markup are turned into plain text", async () => {
+  const dialog = fakeDialog(1);
+  const notes =
+    "## v0.1.0\n\n" +
+    "- **Faster** [startup](https://example.com/startup) and `fewer` crashes.\n" +
+    "* Also _quieter_.\n" +
+    "1. Numbered item.\n";
+
+  await showManualResult({
+    result: available({ notes }),
+    language: "zh",
+    dialog,
+    openExternal: async () => {},
+  });
+
+  const detail = dialog.calls[0].detail;
+  assert.doesNotMatch(detail, /##/);
+  assert.doesNotMatch(detail, /\*\*|`|\[startup\]/);
+  assert.doesNotMatch(detail, /^- /m);
+  assert.match(detail, /Faster startup and fewer crashes\./);
+  assert.match(detail, /Also quieter\./);
+  assert.match(detail, /Numbered item\./);
+  assert.match(detail, /Windows 可能提示未知发布者/);
 });
 
 test("the latest version says so instead of offering a download", async () => {
@@ -269,7 +296,26 @@ test("a short notification still warns about installing", async () => {
   assert.match(Notification.instances[0].options.body, /Windows 可能提示未知发布者/);
 });
 
-test("a long changelog keeps the notification short", async () => {
+test("the notification turns release markup into plain text", async () => {
+  const Notification = fakeNotification();
+  const notes = "## v0.2.0\n\n**Faster** [startup](https://example.com/startup).";
+
+  await showAvailableNotice({
+    result: available({ notes }),
+    language: "en",
+    Notification,
+    dialog: fakeDialog(0),
+    openExternal: async () => {},
+  });
+
+  const body = Notification.instances[0].options.body;
+  assert.doesNotMatch(body, /##/);
+  assert.doesNotMatch(body, /\*\*|\[startup\]/);
+  assert.match(body, /Faster startup\./);
+  assert.match(body, /unknown publisher/);
+});
+
+test("a long changelog is shortened but still warns about installing", async () => {
   const Notification = fakeNotification();
 
   await showAvailableNotice({
@@ -281,8 +327,9 @@ test("a long changelog keeps the notification short", async () => {
   });
 
   const body = Notification.instances[0].options.body;
-  assert.ok(body.length < 300, `notification body was ${body.length} characters`);
-  assert.doesNotMatch(body, /Windows 可能提示未知发布者/);
+  assert.ok(body.length <= 240, `notification body was ${body.length} characters`);
+  assert.match(body, /…/);
+  assert.match(body, /Windows 可能提示未知发布者/);
 });
 
 test("About shows the version that is running", async () => {

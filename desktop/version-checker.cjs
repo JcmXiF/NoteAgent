@@ -56,7 +56,10 @@ async function checkForUpdates({
   }
 
   // A check that hangs must end by itself: nobody is watching a menu click, and
-  // a request left open would hold a slot in the rate limit for no answer.
+  // a request left open would hold a slot in the rate limit for no answer. The
+  // timeout stays armed until the body has been read: a server can send its
+  // headers and stall, and clearing the timer at the headers would let that
+  // response hold the check open forever.
   const controller = new AbortController();
   let timer = null;
   let timedOut = false;
@@ -68,85 +71,102 @@ async function checkForUpdates({
     }, timeoutMs);
   });
 
-  let answer;
   try {
-    const settled = await Promise.race([
-      fetch(RELEASES_LATEST, {
-        headers: {
-          "User-Agent": `NoteAgent/${appVersion}`,
-          Accept: "application/vnd.github+json",
-        },
-        signal: controller.signal,
-      }).then((value) => ({ answer: value })),
-      timeout,
-    ]);
-    if (settled.ended === "timeout") {
-      logger(`update check failed reason=timeout after=${timeoutMs}ms`);
-      return { kind: "error", reason: "timeout" };
+    let answer;
+    try {
+      const settled = await Promise.race([
+        fetch(RELEASES_LATEST, {
+          headers: {
+            "User-Agent": `NoteAgent/${appVersion}`,
+            Accept: "application/vnd.github+json",
+          },
+          signal: controller.signal,
+        }).then((value) => ({ answer: value })),
+        timeout,
+      ]);
+      if (settled.ended === "timeout") {
+        logger(`update check failed reason=timeout after=${timeoutMs}ms`);
+        return { kind: "error", reason: "timeout" };
+      }
+      answer = settled.answer;
+    } catch (err) {
+      // An abort makes the real fetch reject too, so the flag, not the error
+      // type, decides whether this was a timeout or the network.
+      if (timedOut) {
+        logger(`update check failed reason=timeout after=${timeoutMs}ms`);
+        return { kind: "error", reason: "timeout" };
+      }
+      logger(`update check failed reason=network ${err && err.message ? err.message : err}`);
+      return { kind: "error", reason: "network" };
     }
-    answer = settled.answer;
-  } catch (err) {
-    // An abort makes the real fetch reject too, so the flag, not the error
-    // type, decides whether this was a timeout or the network.
-    if (timedOut) {
-      logger(`update check failed reason=timeout after=${timeoutMs}ms`);
-      return { kind: "error", reason: "timeout" };
+
+    // The repository exists but has published nothing yet. That is a normal
+    // answer, not a failure: there is simply no version to compare against.
+    if (answer && answer.status === 404) return none(appVersion);
+
+    // Unauthenticated GitHub asks are rate limited by address. There is no token
+    // to add and no retry to wait for, so the caller only needs to know it was
+    // refused rather than wrong.
+    if (answer && (answer.status === 403 || answer.status === 429)) {
+      logger(`update check failed reason=rate-limited status=${answer.status}`);
+      return { kind: "error", reason: "rate-limited" };
     }
-    logger(`update check failed reason=network ${err && err.message ? err.message : err}`);
-    return { kind: "error", reason: "network" };
+
+    const status = answer && Number.isInteger(answer.status) ? answer.status : 0;
+    const ok = answer && typeof answer.ok === "boolean" ? answer.ok : status >= 200 && status < 300;
+    if (!answer || !ok) {
+      logger(`update check failed reason=bad-response status=${status}`);
+      return { kind: "error", reason: "bad-response" };
+    }
+
+    let release;
+    try {
+      const settled = await Promise.race([
+        Promise.resolve()
+          .then(() => answer.json())
+          .then((value) => ({ release: value })),
+        timeout,
+      ]);
+      if (settled.ended === "timeout") {
+        logger(`update check failed reason=timeout after=${timeoutMs}ms`);
+        return { kind: "error", reason: "timeout" };
+      }
+      release = settled.release;
+    } catch (err) {
+      // The abort also rejects the body read, so the flag decides again.
+      if (timedOut) {
+        logger(`update check failed reason=timeout after=${timeoutMs}ms`);
+        return { kind: "error", reason: "timeout" };
+      }
+      logger(`update check failed reason=bad-response ${err && err.message ? err.message : err}`);
+      return { kind: "error", reason: "bad-response" };
+    }
+
+    const tag = release && release.tag_name;
+    const latest =
+      typeof tag === "string" && tag.startsWith("v") ? parseVersion(tag) : null;
+    if (!latest) {
+      logger(`update check failed reason=bad-tag tag=${tag}`);
+      return { kind: "error", reason: "bad-tag" };
+    }
+    const url = release.html_url;
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      logger(`update check failed reason=bad-response url=${url}`);
+      return { kind: "error", reason: "bad-response" };
+    }
+
+    if (!isNewer(latest, current)) return none(appVersion);
+
+    return {
+      kind: "available",
+      version: tag.slice(1),
+      currentVersion: appVersion,
+      notes: typeof release.body === "string" ? release.body : "",
+      url,
+    };
   } finally {
     clearTimeout(timer);
   }
-
-  // The repository exists but has published nothing yet. That is a normal
-  // answer, not a failure: there is simply no version to compare against.
-  if (answer && answer.status === 404) return none(appVersion);
-
-  // Unauthenticated GitHub asks are rate limited by address. There is no token
-  // to add and no retry to wait for, so the caller only needs to know it was
-  // refused rather than wrong.
-  if (answer && (answer.status === 403 || answer.status === 429)) {
-    logger(`update check failed reason=rate-limited status=${answer.status}`);
-    return { kind: "error", reason: "rate-limited" };
-  }
-
-  const status = answer && Number.isInteger(answer.status) ? answer.status : 0;
-  const ok = answer && typeof answer.ok === "boolean" ? answer.ok : status >= 200 && status < 300;
-  if (!answer || !ok) {
-    logger(`update check failed reason=bad-response status=${status}`);
-    return { kind: "error", reason: "bad-response" };
-  }
-
-  let release;
-  try {
-    release = await answer.json();
-  } catch (err) {
-    logger(`update check failed reason=bad-response ${err && err.message ? err.message : err}`);
-    return { kind: "error", reason: "bad-response" };
-  }
-
-  const tag = release && release.tag_name;
-  const latest =
-    typeof tag === "string" && tag.startsWith("v") ? parseVersion(tag) : null;
-  if (!latest) {
-    logger(`update check failed reason=bad-tag tag=${tag}`);
-    return { kind: "error", reason: "bad-tag" };
-  }
-  const url = release.html_url;
-  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-    logger(`update check failed reason=bad-response url=${url}`);
-    return { kind: "error", reason: "bad-response" };
-  }
-
-  if (!isNewer(latest, current)) return none(appVersion);
-
-  return {
-    kind: "available",
-    version: tag.slice(1),
-    currentVersion: appVersion,
-    notes: typeof release.body === "string" ? release.body : "",
-    url,
-  };
 }
 
-module.exports = { checkForUpdates };
+module.exports = { checkForUpdates, parseVersion };

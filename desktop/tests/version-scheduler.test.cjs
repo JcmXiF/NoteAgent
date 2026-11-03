@@ -222,7 +222,7 @@ test("a timer that fires during a check does not start a second request", async 
   assert.deepEqual(slow.calls, ["check", "check"]);
 });
 
-test("a manual check during an automatic check starts no second request", async () => {
+test("a manual check during an automatic check shares its answer", async () => {
   const timers = fakeTimers();
   const slow = slowCheck();
   const scheduler = createVersionScheduler({
@@ -237,19 +237,44 @@ test("a manual check during an automatic check starts no second request", async 
   timers.advance(30_000);
   await settle();
 
-  const manual = await scheduler.checkNow();
-  assert.equal(manual, null);
+  const manual = scheduler.checkNow();
+  await settle();
   assert.deepEqual(slow.calls, ["check"]);
 
-  slow.finish({ kind: "none" });
-  await settle();
+  slow.finish({ kind: "none", currentVersion: "0.1.0" });
+  assert.deepEqual(await manual, { kind: "none", currentVersion: "0.1.0" });
+  assert.deepEqual(slow.calls, ["check"]);
 
   // Once the first answer is in, a manual check is allowed again.
   const later = scheduler.checkNow();
   await settle();
   assert.deepEqual(slow.calls, ["check", "check"]);
-  slow.finish({ kind: "none" });
-  await later;
+  slow.finish({ kind: "none", currentVersion: "0.1.0" });
+  assert.deepEqual(await later, { kind: "none", currentVersion: "0.1.0" });
+});
+
+test("two manual checks share one request and both receive the answer", async () => {
+  const timers = fakeTimers();
+  const slow = slowCheck();
+  const seen = [];
+  const scheduler = createVersionScheduler({
+    isPackaged: false,
+    timers,
+    check: slow.check,
+    onAvailable: (result) => seen.push(result),
+    onError: (result) => seen.push(result),
+  });
+
+  const first = scheduler.checkNow();
+  const second = scheduler.checkNow();
+  await settle();
+  assert.deepEqual(slow.calls, ["check"]);
+
+  slow.finish({ kind: "available", version: "0.2.0" });
+  assert.deepEqual(await first, { kind: "available", version: "0.2.0" });
+  assert.deepEqual(await second, { kind: "available", version: "0.2.0" });
+  // A manual answer belongs to the caller, not to the automatic notifier.
+  assert.deepEqual(seen, []);
 });
 
 test("an automatic check that comes due during a manual check is skipped", async () => {

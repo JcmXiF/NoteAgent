@@ -10,7 +10,7 @@
 // "Open download page" is the only button that does anything beyond closing.
 // The app never downloads, runs, or installs an update itself.
 
-const NOTES_LIMIT = 500;
+const NOTES_LIMIT = 300;
 // A toast is read in passing, so it gets the opening of the notes rather than
 // the changelog the dialog can show.
 const NOTICE_LINES = 2;
@@ -49,12 +49,28 @@ function textFor(language) {
   return TEXT[language] ?? TEXT.en;
 }
 
+// Release notes arrive as Markdown. The dialog and the toast explain an update,
+// not the changelog's formatting, so headings and markers become plain words
+// before either summary is taken.
+function plainText(notes) {
+  return String(notes || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, "")
+    .replace(/[*_`~]/g, "")
+    .trim();
+}
+
+function excerpt(text, limit) {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+}
+
 // Release notes can be any length. The dialog is a prompt, not a changelog, and
 // the whole body stays one click away on the release page.
 function notesSummary(notes) {
-  const text = String(notes || "").trim();
-  if (text.length <= NOTES_LIMIT) return text;
-  return `${text.slice(0, NOTES_LIMIT).trimEnd()}…`;
+  return excerpt(plainText(notes), NOTES_LIMIT);
 }
 
 function plainDialog(title, message, ok) {
@@ -70,31 +86,30 @@ function plainDialog(title, message, ok) {
 }
 
 /**
- * The first lines of the release notes, and whether anything was left out.
+ * The first lines of the release notes, cut short enough for a toast.
  *
- * A notification has room for a sentence or two. Returning the flag lets the
- * caller leave the warning out when the body is already long, instead of making
- * an already-truncated toast longer still.
+ * A notification has room for a sentence or two. The warning is added after
+ * this and must survive, so the notes are what gets shortened.
  */
 function notificationSummary(notes) {
-  const lines = String(notes || "")
+  const lines = plainText(notes)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, NOTICE_LINES)
     .join("\n");
-  if (lines.length <= NOTICE_LIMIT) return { text: lines, truncated: false };
-  return { text: `${lines.slice(0, NOTICE_LIMIT).trimEnd()}…`, truncated: true };
+  return excerpt(lines, NOTICE_LIMIT);
 }
 
 function notificationBody(notes, text) {
   const summary = notificationSummary(notes);
-  if (!summary.text) return text.warning;
-  const withWarning = `${summary.text}\n\n${text.warning}`;
-  // The warning stays in every dialog. In a notification it is kept only when
-  // the notes are short enough that the whole body still reads at a glance.
-  if (!summary.truncated && withWarning.length <= NOTICE_BODY_LIMIT) return withWarning;
-  return summary.text;
+  if (!summary) return text.warning;
+  const separator = "\n\n";
+  // The warning is fixed text and appears in every prompt, so the notes get
+  // whatever room is left. When there is no room, the warning is the body.
+  const room = NOTICE_BODY_LIMIT - text.warning.length - separator.length;
+  const kept = room > 0 ? excerpt(summary, room) : "";
+  return kept ? `${kept}${separator}${text.warning}` : text.warning;
 }
 
 async function openDownload(openExternal, url) {

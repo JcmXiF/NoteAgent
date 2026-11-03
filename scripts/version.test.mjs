@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkRuntimeVersion,
+  checkTagVersion,
   checkVersions,
   readCoreVersion,
   readVersions,
@@ -141,4 +142,47 @@ test("the check command accepts the repository's versions", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Versions agree at \d+\.\d+\.\d+/);
+});
+
+test("check-tag accepts a plain version for any ref", (t) => {
+  const root = makeTree({ desktop: "0.2.3" });
+  cleanUp(t, root);
+
+  assert.equal(checkTagVersion("branch", "feature/anything", root), "0.2.3");
+  assert.equal(checkTagVersion("workflow_dispatch", "main", root), "0.2.3");
+});
+
+test("check-tag rejects a version the app would also reject", (t) => {
+  for (const desktop of ["01.2.3", "1.2", "1.2.3.4", "not-a-version", "v1.2.3"]) {
+    const root = makeTree({ desktop });
+    cleanUp(t, root);
+    assert.throws(
+      () => checkTagVersion("branch", "main", root),
+      /not plain semver/,
+      `${desktop} was accepted`,
+    );
+  }
+});
+
+test("check-tag requires a tag ref to name the package version", (t) => {
+  const root = makeTree({ desktop: "0.2.3" });
+  cleanUp(t, root);
+
+  assert.equal(checkTagVersion("tag", "v0.2.3", root), "0.2.3");
+  assert.throws(
+    () => checkTagVersion("tag", "v0.2.2", root),
+    /tag v0\.2\.2 does not match .*\(v0\.2\.3\)/,
+  );
+});
+
+test("the check-tag command prints the repository version", () => {
+  const version = readVersions(repoRoot).desktop;
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/version.mjs", "check-tag", "branch", "some-branch"],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), version);
 });

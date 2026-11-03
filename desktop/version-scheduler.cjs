@@ -20,8 +20,6 @@ function createVersionScheduler({
   onAvailable,
   onError,
   timers = { setTimeout, clearTimeout },
-  startupDelayMs = STARTUP_DELAY_MS,
-  intervalMs = INTERVAL_MS,
 }) {
   let started = false;
   let timer = null;
@@ -73,7 +71,7 @@ function createVersionScheduler({
     timer = timers.setTimeout(() => {
       timer = null;
       void runAutomatically();
-      if (started) schedule(intervalMs);
+      if (started) schedule(INTERVAL_MS);
     }, delayMs);
   }
 
@@ -81,7 +79,7 @@ function createVersionScheduler({
     start() {
       if (started || !isPackaged) return;
       started = true;
-      schedule(startupDelayMs);
+      schedule(STARTUP_DELAY_MS);
     },
     stop() {
       started = false;
@@ -92,10 +90,12 @@ function createVersionScheduler({
     },
     // A manual check takes the same slot as an automatic one. It is available in
     // a checkout too, which is the only way to try the path during development.
+    // When a check is already on its way, the manual caller shares its answer
+    // instead of getting nothing: the person asked and is owed a dialog. The
+    // automatic path still skips, so one answer is not reported twice.
     async checkNow() {
-      const run = startCheck();
-      if (!run) return null;
-      return await run;
+      if (inFlight) return await inFlight;
+      return await startCheck();
     },
   };
 }

@@ -470,6 +470,17 @@ function showMessageBox(options) {
 
 const SHELL_DIALOG = { showMessageBox };
 
+// The notice module needs the same three things whether an update was found
+// automatically or asked for; one place builds them so the two paths cannot
+// drift apart.
+function noticeContext() {
+  return {
+    language: LANGUAGE,
+    dialog: SHELL_DIALOG,
+    openExternal: (url) => shell.openExternal(url),
+  };
+}
+
 function runUpdateCheck() {
   return checkForUpdates({
     fetch: githubFetch,
@@ -491,10 +502,8 @@ function logUpdateResult(result) {
 function showAutomaticUpdate(result) {
   return showAvailableNotice({
     result,
-    language: LANGUAGE,
     Notification,
-    dialog: SHELL_DIALOG,
-    openExternal: (url) => shell.openExternal(url),
+    ...noticeContext(),
   });
 }
 
@@ -521,23 +530,14 @@ function stopVersionChecks() {
 
 // A manual check always ends in a dialog: the person asked a question and is
 // owed an answer, including when the answer is that the check failed. It takes
-// the same slot as the timer, so a click during an automatic check cannot send
-// a second request.
+// the same slot as the timer, and reuses a check already on its way, so a click
+// during an automatic check sends no second request and still gets its dialog.
 async function checkForUpdatesManually() {
   const result = versionScheduler
     ? await versionScheduler.checkNow()
     : await runUpdateCheck();
-  if (!result) {
-    log("update check skipped reason=in-flight");
-    return;
-  }
   logUpdateResult(result);
-  await showManualResult({
-    result,
-    language: LANGUAGE,
-    dialog: SHELL_DIALOG,
-    openExternal: (url) => shell.openExternal(url),
-  });
+  await showManualResult({ result, ...noticeContext() });
 }
 
 function buildMenu() {
@@ -558,8 +558,7 @@ function buildMenu() {
     showAbout: () =>
       void showAbout({
         appVersion: app.getVersion(),
-        language: LANGUAGE,
-        dialog: SHELL_DIALOG,
+        ...noticeContext(),
       }),
   };
   return Menu.buildFromTemplate(menuTemplate(LANGUAGE, actions));
