@@ -1084,6 +1084,7 @@
       "model": "Connections",
       "generation": "Generation",
       "search": "Search",
+      "deepCheck": "Deep check",
       "effective": "Effective config",
       "project": "Project",
       "diagnostics": "Diagnostics",
@@ -1148,6 +1149,23 @@
       "title": "Generation",
       "intro": "Temperature, reply limit and wait limit apply to every connection. Saving tests the current connection.",
       "notConfigured": "Save a usable model connection before testing."
+    },
+    "deepCheck": {
+      "title": "Deep check",
+      "intro": "Confirms the model can call the tools chat relies on, and, when native search is in use, that it actually answers.",
+      "costWarning": "This check makes real requests to the model service and may incur provider cost.",
+      "savedOnly": "It checks the saved settings and saves nothing.",
+      "run": "Run deep check",
+      "running": "Checking…",
+      "notConfigured": "Fill in the service address, key and model under Connections first.",
+      "passed": "All checks passed.",
+      "hasFailures": "A check did not pass.",
+      "verified": "Verified",
+      "checkFailed": "This check did not pass.",
+      "requestFailed": "The deep check did not finish.",
+      "toolCalling": "Tool calling",
+      "nativeSearch": "Native search",
+      "unknown": "Other check"
     },
     "source": {
       "env": "Environment",
@@ -1436,7 +1454,8 @@
         "configInvalid": "The settings file cannot be used. It may have been damaged or edited by hand.",
         "configVersion": "The settings file was written by another version of the app and cannot be used.",
         "profileNameNotFound": "That connection no longer exists. Refresh and try again.",
-        "modelsUnavailable": "This service did not return a model list. Enter the model name yourself."
+        "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
+        "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
       },
       "update": {
         "unreachable": "Could not reach the update source. Check the network and try again.",

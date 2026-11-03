@@ -1084,6 +1084,7 @@
       "model": "模型连接",
       "generation": "生成",
       "search": "搜索",
+      "deepCheck": "深度检查",
       "effective": "有效配置",
       "project": "项目说明",
       "diagnostics": "诊断",
@@ -1148,6 +1149,23 @@
       "title": "生成",
       "intro": "温度、单次回答上限和等待上限对所有连接生效；保存时会测试当前连接。",
       "notConfigured": "先保存一个可用的模型连接，才能测试。"
+    },
+    "deepCheck": {
+      "title": "深度检查",
+      "intro": "确认模型能调用聊天所用的工具；使用原生搜索时，也确认它真的能返回结果。",
+      "costWarning": "这项检查会向模型服务发起真实请求，可能产生费用。",
+      "savedOnly": "检查使用已保存的设置，不会保存任何改动。",
+      "run": "运行深度检查",
+      "running": "检查中…",
+      "notConfigured": "请先在「模型连接」里填好服务地址、密钥和模型。",
+      "passed": "全部检查通过。",
+      "hasFailures": "有检查未通过。",
+      "verified": "已验证",
+      "checkFailed": "这项检查没有通过。",
+      "requestFailed": "深度检查没有完成。",
+      "toolCalling": "工具调用",
+      "nativeSearch": "原生搜索",
+      "unknown": "其他检查"
     },
     "source": {
       "env": "环境变量",
@@ -1436,7 +1454,8 @@
         "configInvalid": "设置文件无法使用，可能已损坏或被手动修改。",
         "configVersion": "设置文件由另一个版本的应用写入，当前版本无法使用。",
         "profileNameNotFound": "这个连接已不存在，请刷新后重试。",
-        "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。"
+        "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
+        "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
       },
       "update": {
         "unreachable": "无法连接更新来源，请检查网络后重试。",

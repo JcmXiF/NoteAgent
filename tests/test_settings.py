@@ -19,6 +19,7 @@ from unittest.mock import patch
 import httpx
 
 from noteagent.acquire.search_config import (
+    NativeSearchRejected,
     SearchConfig,
     SearchError,
     active_llm_provider,
@@ -33,6 +34,7 @@ from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
 from noteagent.settings.install import (
     apply_install,
+    deep_check,
     install_view,
     list_models,
     probe_llm,
@@ -103,6 +105,16 @@ class EnvTextTests(unittest.TestCase):
 
 
 class InstallSettingsTests(unittest.TestCase):
+    def test_reading_the_settings_makes_no_network_call(self) -> None:
+        """Startup reads the document and the credential store, and nothing else."""
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            with patch(
+                "noteagent.settings.install.httpx.Client",
+                side_effect=AssertionError("settings must not call the network"),
+            ):
+                view = install_view()
+            self.assertIn("profiles", view)
+
     def test_a_save_writes_the_document_and_the_credential_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
             path,
@@ -622,6 +634,233 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(count, 2)
             self.assertEqual(seen["mode"], "native")
 
+class _CheckResponse:
+    """One answer from a model endpoint, without a network."""
+
+    def __init__(
+        self, payload: object = None, status_code: int = 200, text: str = ""
+    ) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.text = text
+
+    def json(self) -> object:
+        if self._payload is None:
+            raise ValueError("not JSON")
+        return self._payload
+
+
+TOOL_CALL_ANSWER = {
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"query": "preflight", "scope": "wiki"}',
+                        },
+                    }
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+    ]
+}
+
+
+class DeepCheckTests(unittest.TestCase):
+    """The explicit check: tool calling now, native search when it is in use."""
+
+    def _save(self, *, mode: str = "native") -> None:
+        apply_install(
+            {
+                "llm": {
+                    "baseUrl": "https://api.openai.com/v1",
+                    "apiKey": "sk-openai",
+                    "model": "gpt-4o-mini",
+                },
+                "search": {"mode": mode},
+            }
+        )
+
+    def test_a_passing_check_names_what_it_verified_and_saves_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            self._save()
+            before = path.read_text(encoding="utf-8")
+            revision = install_view(path=path)["revision"]
+            seen: dict[str, object] = {}
+
+            class Run:
+                cards = ("a", "b")
+
+            def runner(query: str, *, top_k: int, config: SearchConfig) -> Run:
+                seen["query"] = query
+                seen["mode"] = config.mode
+                seen["provider"] = config.native.provider if config.native else None
+                return Run()
+
+            result = deep_check(
+                path=path,
+                poster=lambda _url, **_kwargs: _CheckResponse(TOOL_CALL_ANSWER),
+                runner=runner,
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                [check["name"] for check in result["checks"]],
+                ["toolCalling", "nativeSearch"],
+            )
+            self.assertTrue(all(check["ok"] for check in result["checks"]))
+            self.assertEqual(seen["mode"], "native")
+            self.assertEqual(seen["provider"], "openai")
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+            self.assertEqual(install_view(path=path)["revision"], revision)
+
+    def test_a_tool_call_failure_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            self._save(mode="external")
+            result = deep_check(
+                path=path,
+                poster=lambda _url, **_kwargs: _CheckResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {"content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+                ),
+                runner=lambda *_args, **_kwargs: self.fail(
+                    "external mode must not check native search"
+                ),
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(len(result["checks"]), 1)
+            check = result["checks"][0]
+            self.assertEqual(check["name"], "toolCalling")
+            self.assertFalse(check["ok"])
+            self.assertEqual(check["code"], "settings.toolCallingUnsupported")
+
+    def test_a_rejected_tool_call_request_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            self._save(mode="external")
+            result = deep_check(
+                path=path,
+                poster=lambda _url, **_kwargs: _CheckResponse(
+                    status_code=401, text="unauthorized"
+                ),
+                runner=lambda *_args, **_kwargs: self.fail(
+                    "external mode must not check native search"
+                ),
+            )
+
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertEqual(
+                result["checks"][0]["code"], "settings.probeRejected"
+            )
+
+    def test_a_native_search_failure_is_named_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            self._save()
+
+            def runner(*_args: object, **_kwargs: object) -> object:
+                raise NativeSearchRejected("native search HTTP 401: no")
+
+            result = deep_check(
+                path=path,
+                poster=lambda _url, **_kwargs: _CheckResponse(TOOL_CALL_ANSWER),
+                runner=runner,
+            )
+
+            self.assertFalse(result["ok"])
+            checks = {check["name"]: check for check in result["checks"]}
+            self.assertTrue(checks["toolCalling"]["ok"])
+            self.assertFalse(checks["nativeSearch"]["ok"])
+            self.assertEqual(
+                checks["nativeSearch"]["code"], "provider.nativeRejected"
+            )
+
+    def test_a_tool_result_turn_failure_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            self._save(mode="external")
+            calls = {"count": 0}
+
+            def poster(_url: str, **_kwargs: object) -> _CheckResponse:
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return _CheckResponse(TOOL_CALL_ANSWER)
+                return _CheckResponse(status_code=400, text="tool result rejected")
+
+            result = deep_check(
+                path=path,
+                poster=poster,
+                runner=lambda *_args, **_kwargs: self.fail(
+                    "external mode must not check native search"
+                ),
+            )
+
+            self.assertEqual(calls["count"], 2)
+            self.assertFalse(result["checks"][0]["ok"])
+            self.assertEqual(
+                result["checks"][0]["code"], "settings.toolCallingUnsupported"
+            )
+
+    def test_an_environment_only_openai_connection_checks_native(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            os.environ["NOTEAGENT_LLM_BASE_URL"] = "https://api.openai.com/v1"
+            os.environ["NOTEAGENT_LLM_API_KEY"] = "sk-openai"
+            os.environ["NOTEAGENT_LLM_MODEL"] = "gpt-4o-mini"
+            os.environ["NOTEAGENT_SEARCH_MODE"] = "native"
+            reset_process_env_keys()
+            seen: dict[str, object] = {}
+
+            class Run:
+                cards = ()
+
+            def runner(query: str, *, top_k: int, config: SearchConfig) -> Run:
+                seen["provider"] = (
+                    config.native.provider if config.native else None
+                )
+                return Run()
+
+            result = deep_check(
+                path=path,
+                poster=lambda _url, **_kwargs: _CheckResponse(TOOL_CALL_ANSWER),
+                runner=runner,
+            )
+
+            self.assertIn(
+                "nativeSearch",
+                [check["name"] for check in result["checks"]],
+            )
+            self.assertEqual(seen["provider"], "openai")
+
+
 class _ModelsResponse:
     """One answer from a model-list endpoint, without a network."""
 
@@ -835,6 +1074,26 @@ except ImportError:  # pragma: no cover
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class SettingsApiTests(unittest.TestCase):
+    def test_the_deep_check_route_returns_its_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            answer = {
+                "ok": False,
+                "checks": [
+                    {
+                        "name": "toolCalling",
+                        "ok": False,
+                        "code": "settings.toolCallingUnsupported",
+                    }
+                ],
+            }
+            with patch("noteagent.api.app.deep_check", return_value=answer) as checked:
+                response = client.post("/api/settings/deep-check", json={})
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), answer)
+            checked.assert_called_once()
+
     def test_put_round_trip_and_brief(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
             path,

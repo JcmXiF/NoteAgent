@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deepCheckLabelKey,
   generationDirty,
   generationDraftFrom,
   generationPatch,
@@ -149,6 +150,14 @@ describe("the connection form", () => {
       model: "gpt-4o-mini",
       revision: 0,
     });
+  });
+});
+
+describe("the deep check result", () => {
+  it("names each capability and keeps an unknown one visible", () => {
+    expect(deepCheckLabelKey("toolCalling")).toBe("settings.deepCheck.toolCalling");
+    expect(deepCheckLabelKey("nativeSearch")).toBe("settings.deepCheck.nativeSearch");
+    expect(deepCheckLabelKey("somethingNew")).toBe("settings.deepCheck.unknown");
   });
 });
 

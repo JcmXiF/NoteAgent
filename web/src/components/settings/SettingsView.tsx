@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { DeepCheckSection } from "@/components/settings/DeepCheckSection";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { EffectiveConfigSection } from "@/components/settings/EffectiveConfigSection";
 import { GenerationSection } from "@/components/settings/GenerationSection";
@@ -26,7 +27,7 @@ import { useLayoutStore } from "@/stores/layout-store";
 const GROUPS = [
   {
     scope: "settings.scope.install",
-    ids: ["model", "generation", "search", "effective", "diagnostics"],
+    ids: ["model", "generation", "search", "deepCheck", "effective", "diagnostics"],
   },
   { scope: "settings.scope.project", ids: ["project"] },
   { scope: "settings.scope.window", ids: ["appearance"] },
@@ -202,6 +203,13 @@ export function SettingsView() {
               <SearchSection install={install} onSaved={setInstall} onDirty={onSearchDirty} />
             </Pane>
           ) : section === "search" ? (
+            waiting
+          ) : null}
+          {install ? (
+            <Pane visible={section === "deepCheck"}>
+              <DeepCheckSection install={install} />
+            </Pane>
+          ) : section === "deepCheck" ? (
             waiting
           ) : null}
           {install ? (

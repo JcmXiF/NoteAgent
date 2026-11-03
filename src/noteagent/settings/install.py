@@ -13,6 +13,7 @@ screen does not have to change at the same time.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -34,6 +35,8 @@ from noteagent.acquire.search_config import (
     SearchError,
     build_native_config,
     native_search_available,
+    native_support,
+    provider_for_host,
 )
 from noteagent.acquire.types import ProviderNotConfiguredError
 from noteagent.llm.config import (
@@ -79,7 +82,7 @@ from noteagent.settings.store import (
     default_config_path,
     format_number,
 )
-from noteagent.util.refusal import Refusal
+from noteagent.util.refusal import CodedError, Refusal
 
 _PROBE_TIMEOUT = 20.0
 _PROBE_QUERY = "example"
@@ -906,10 +909,13 @@ def _search_config_for(body: Mapping[str, Any], context: _Context) -> SearchConf
             f"Use one of: {', '.join(sorted(KNOWN_PROVIDERS))}."
         )
     profile = context.config.active_profile
-    provider_id = profile.provider if profile else ""
+    base_url = _current(F_BASE) or ""
+    # A profile says which provider it is. An environment-only connection has
+    # no profile, so its host decides, exactly as ``load_search_config`` does.
+    provider_id = profile.provider if profile else provider_for_host(base_url)
     native = build_native_config(
         provider_id,
-        _current(F_BASE) or "",
+        base_url,
         _current(F_LLM_KEY) or "",
         _current(F_MODEL) or "",
         _read_float(F_LLM_TIMEOUT, DEFAULT_LLM_TIMEOUT, []),
@@ -952,6 +958,21 @@ def _probe_refusal(message: str, *, search: bool) -> Refusal:
     return Refusal("settings.probeFailed", message[:300], params=params, status=502)
 
 
+def _post_probe(
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    payload: Mapping[str, object],
+    timeout: float,
+    poster: Callable[..., Any] | None = None,
+) -> httpx.Response:
+    """One POST, through the injected poster or a client of our own."""
+    if poster is not None:
+        return poster(url, headers=headers, json=payload, timeout=timeout)
+    with httpx.Client(timeout=timeout) as client:
+        return client.post(url, headers=headers, json=payload)
+
+
 def probe_llm(
     body: Mapping[str, Any] | None = None,
     *,
@@ -979,11 +1000,13 @@ def probe_llm(
         "Content-Type": "application/json",
     }
     try:
-        if poster is not None:
-            response = poster(config.chat_completions_url, headers=headers, json=payload, timeout=timeout)
-        else:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(config.chat_completions_url, headers=headers, json=payload)
+        response = _post_probe(
+            config.chat_completions_url,
+            headers=headers,
+            payload=payload,
+            timeout=timeout,
+            poster=poster,
+        )
     except httpx.HTTPError as err:
         raise _probe_refusal(f"LLM probe failed: {err}", search=False) from err
     if response.status_code >= 400:
@@ -1022,6 +1045,297 @@ def probe_search(
     except SearchError as err:
         raise _probe_refusal(str(err), search=True) from err
     return len(run.cards)
+
+
+# --- deep check --------------------------------------------------------------
+
+#: One short request that must produce a tool call.
+_TOOL_CHECK_PROMPT = (
+    "Call the search tool with query 'preflight' and scope 'wiki'. "
+    "Do not answer in prose."
+)
+
+
+class ToolCallingUnsupported(CodedError):
+    """The model service did not complete a tool call."""
+
+    code = "settings.toolCallingUnsupported"
+    status = 502
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCall:
+    """One tool call the model asked for, with arguments that parsed."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+def _check_failed(name: str, code: str, detail: str) -> dict[str, object]:
+    """One failed capability, with the code the screen already has a sentence for."""
+    return {"name": name, "ok": False, "code": code, "detail": detail[:300]}
+
+
+def _tool_calls(payload: Mapping[str, object]) -> list[_ToolCall]:
+    """The well-formed tool calls in one OpenAI-compatible answer."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        return []
+    message = choice.get("message")
+    if not isinstance(message, Mapping):
+        return []
+    raw = message.get("tool_calls")
+    if not isinstance(raw, list):
+        return []
+    calls: list[_ToolCall] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            continue
+        function = item.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str) or not arguments.strip():
+            arguments = "{}"
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        call_id = item.get("id")
+        if not isinstance(call_id, str) or not call_id.strip():
+            call_id = f"call-{index + 1}"
+        calls.append(
+            _ToolCall(
+                id=call_id.strip(),
+                name=name.strip(),
+                arguments=arguments,
+            )
+        )
+    return calls
+
+
+def _is_search_call(call: _ToolCall) -> bool:
+    """A call the chat loop could actually use: the search tool, with a query."""
+    if call.name != "search":
+        return False
+    try:
+        arguments = json.loads(call.arguments)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(arguments, dict) and bool(
+        str(arguments.get("query") or "").strip()
+    )
+
+
+def _post_tool_turn(
+    config: LlmConfig,
+    payload: Mapping[str, object],
+    *,
+    poster: Callable[..., Any] | None,
+    label: str,
+) -> tuple[Mapping[str, object] | None, dict[str, object] | None]:
+    """POST one tool turn; an answer, or the failed check that names why not."""
+    headers = {
+        "Authorization": f"Bearer {config.api_key}",
+        "Content-Type": "application/json",
+    }
+    timeout = min(config.timeout_seconds, _PROBE_TIMEOUT)
+    try:
+        response = _post_probe(
+            config.chat_completions_url,
+            headers=headers,
+            payload=payload,
+            timeout=timeout,
+            poster=poster,
+        )
+    except httpx.HTTPError as err:
+        return None, _check_failed(
+            "toolCalling", "settings.probeUnreachable", f"{label} failed: {err}"
+        )
+    if response.status_code == 400:
+        return None, _check_failed(
+            "toolCalling",
+            ToolCallingUnsupported.code,
+            f"{label} HTTP 400: {response.text[:120]}",
+        )
+    if response.status_code >= 400:
+        refusal = _probe_refusal(
+            f"LLM probe HTTP {response.status_code}: {response.text[:120]}",
+            search=False,
+        )
+        return None, _check_failed("toolCalling", refusal.code, str(refusal))
+    try:
+        answer = response.json()
+    except ValueError:
+        return None, _check_failed(
+            "toolCalling",
+            "settings.probeFailed",
+            f"{label} was not JSON: {response.text[:120]}",
+        )
+    if not isinstance(answer, Mapping):
+        return None, _check_failed(
+            "toolCalling", "settings.probeFailed", f"{label} returned no object"
+        )
+    return answer, None
+
+
+def _tool_call_check(
+    config: LlmConfig,
+    *,
+    poster: Callable[..., Any] | None = None,
+) -> dict[str, object]:
+    """Ask for a tool call, then answer after its result, as chat does."""
+    # Imported here: the settings module is loaded at startup, and the tool
+    # catalogue is not part of starting the app.
+    from noteagent.chat.tools import openai_tools
+
+    tools = openai_tools()
+    common = {
+        "model": config.model,
+        "tools": tools,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "stream": False,
+    }
+    first = {
+        **common,
+        "messages": [{"role": "user", "content": _TOOL_CHECK_PROMPT}],
+        # Force the call: a capable model must not fail because it answered prose.
+        "tool_choice": {"type": "function", "function": {"name": "search"}},
+    }
+    answer, failure = _post_tool_turn(
+        config, first, poster=poster, label="tool check"
+    )
+    if failure is not None:
+        return failure
+    calls = [call for call in _tool_calls(answer) if _is_search_call(call)]
+    if not calls:
+        return _check_failed(
+            "toolCalling",
+            ToolCallingUnsupported.code,
+            "the model did not call the search tool with a query",
+        )
+
+    followup = {
+        **common,
+        "messages": [
+            {"role": "user", "content": _TOOL_CHECK_PROMPT},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        },
+                    }
+                    for call in calls
+                ],
+            },
+            *[
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "name": call.name,
+                    "content": "preflight ok",
+                }
+                for call in calls
+            ],
+        ],
+        # The loop offers tools every round but lets the model answer.
+        "tool_choice": "auto",
+    }
+    answer, failure = _post_tool_turn(
+        config, followup, poster=poster, label="tool result turn"
+    )
+    if failure is not None:
+        return failure
+    choices = answer.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return _check_failed(
+            "toolCalling",
+            "settings.probeFailed",
+            "the tool result turn returned no answer",
+        )
+    message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
+    content = message.get("content") if isinstance(message, Mapping) else None
+    if not (isinstance(content, str) and content.strip()) and not _tool_calls(answer):
+        return _check_failed(
+            "toolCalling",
+            "settings.probeFailed",
+            "the tool result turn returned an empty answer",
+        )
+    return {
+        "name": "toolCalling",
+        "ok": True,
+        "detail": ", ".join(call.name for call in calls),
+    }
+
+
+def _should_check_native(config: SearchConfig) -> bool:
+    """Whether the app would actually try native search with this configuration."""
+    if config.mode == "native":
+        return True
+    return config.mode == "auto" and native_support(config) == "ready"
+
+
+def _native_search_check(
+    config: SearchConfig,
+    *,
+    runner: Callable[..., Any] | None = None,
+) -> dict[str, object]:
+    """Run one native search, forcing native mode so a fallback cannot hide it."""
+    native = replace(config, mode="native")
+    try:
+        if runner is not None:
+            run = runner(_PROBE_QUERY, top_k=3, config=native)
+        else:
+            run = run_web_search(
+                _PROBE_QUERY,
+                top_k=3,
+                config=native,
+                caller="settings-deep-check",
+            )
+    except CodedError as err:
+        return _check_failed("nativeSearch", err.code, str(err))
+    except Exception as err:  # a diagnostic names an unexpected failure too
+        return _check_failed(
+            "nativeSearch", "provider.nativeFailed", f"native search failed: {err}"
+        )
+    return {"name": "nativeSearch", "ok": True, "detail": f"{len(run.cards)} cards"}
+
+
+def deep_check(
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+    poster: Callable[..., Any] | None = None,
+    runner: Callable[..., Any] | None = None,
+) -> dict[str, object]:
+    """Check tool calling, and native search when the app would use it.
+
+    The saved configuration is what is checked, not a draft: this is a
+    diagnostic, and one that wrote would be a change the reader did not ask for.
+    """
+    context = _context(path, credentials)
+    llm_config = _llm_config_for({})
+    search_config = _search_config_for({}, context)
+    checks = [_tool_call_check(llm_config, poster=poster)]
+    if _should_check_native(search_config):
+        checks.append(_native_search_check(search_config, runner=runner))
+    return {"ok": all(check["ok"] for check in checks), "checks": checks}
 
 
 # --- model discovery ---------------------------------------------------------

@@ -113,6 +113,7 @@ from noteagent.llm.config import LlmConfigError
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.install import (
     apply_install,
+    deep_check,
     install_view,
     list_models,
     probe_llm,
@@ -648,6 +649,10 @@ def create_app() -> FastAPI:
     def settings_search_probe(body: SearchSettingsBody) -> dict[str, object]:
         count = probe_search(body.model_dump(exclude_unset=True))
         return {"ok": True, "count": count}
+
+    @app.post("/api/settings/deep-check")
+    def settings_deep_check() -> dict[str, object]:
+        return deep_check()
 
     @app.get("/api/projects")
     def projects() -> dict[str, object]:

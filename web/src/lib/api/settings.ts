@@ -7,6 +7,7 @@
 
 import { deleteJson, getJson, postJson, putJson } from "@/lib/api/client";
 import type {
+  DeepCheckResult,
   InstallSettings,
   ProfileCreatePatch,
   ProfileUpdatePatch,
@@ -83,6 +84,11 @@ export function probeSearch(
   patch: Record<string, unknown>,
 ): Promise<{ ok: true; count: number }> {
   return postJson<{ ok: true; count: number }>("/settings/search/probe", patch);
+}
+
+/** The explicit check: tool calling, then native search when it is in use. */
+export function runDeepCheck(): Promise<DeepCheckResult> {
+  return postJson<DeepCheckResult>("/settings/deep-check", {});
 }
 
 export function fetchBrief(project: string): Promise<ProjectBrief> {

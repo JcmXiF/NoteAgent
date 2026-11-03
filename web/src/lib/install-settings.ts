@@ -142,6 +142,36 @@ export type SettingsPatch = {
   revision?: number;
 };
 
+/** The capabilities the explicit deep check reports on. */
+export type DeepCheckName = "toolCalling" | "nativeSearch";
+
+export type DeepCheckItem = {
+  /** A capability name; a newer core may report one this build does not know. */
+  name: string;
+  ok: boolean;
+  /** A stable code with a sentence in the catalogs, when the check failed. */
+  code?: string;
+  /** Technical detail for the log; the screen shows the code's sentence. */
+  detail?: string;
+};
+
+export type DeepCheckResult = {
+  ok: boolean;
+  checks: DeepCheckItem[];
+};
+
+const DEEP_CHECK_LABELS: Record<DeepCheckName, string> = {
+  toolCalling: "settings.deepCheck.toolCalling",
+  nativeSearch: "settings.deepCheck.nativeSearch",
+};
+
+/** The catalog key for a capability, including one a newer core reports. */
+export function deepCheckLabelKey(name: string): string {
+  return (
+    DEEP_CHECK_LABELS[name as DeepCheckName] ?? "settings.deepCheck.unknown"
+  );
+}
+
 const LANG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 
 export function isLocked(locked: readonly string[], field: string): boolean {
