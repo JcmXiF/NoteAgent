@@ -30,9 +30,8 @@ def web_search(
     cfg = config if config is not None else load_search_config()
     if not cfg.configured:
         raise ProviderNotConfiguredError(
-            "web_search is not configured. Set NOTEAGENT_SEARCH_PROVIDER "
-            "to brave or serper, and NOTEAGENT_SEARCH_API_KEY "
-            "(the app's settings, or the .env it writes)."
+            "web_search is not configured. Choose Brave or Serper in the "
+            "app's settings and enter its key."
         )
     count = max(1, min(int(top_k), 20))
     if cfg.provider == "brave":

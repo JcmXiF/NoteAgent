@@ -10,7 +10,6 @@ files:
   - main.cjs
   - "*.cjs"
   - snapshot.js
-  - env-template.txt
   - package.json
 
 # The Python runtime travels beside the shell rather than inside it: it contains

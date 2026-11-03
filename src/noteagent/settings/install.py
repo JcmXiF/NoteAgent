@@ -3,8 +3,8 @@
 The document lives in the per-user configuration directory (``store.py``) and
 the API keys live in the operating system credential store
 (``credentials.py``). Environment variables already present when the process
-started still win, and are reported as such. This layer reads no ``.env``
-file: it is the configuration document plus the credential store.
+started still win, and are reported as such. This layer reads the configuration
+document plus the credential store.
 
 The screen's existing answer shape is kept. Profiles, the revision and the
 source of each value are added beside it, so a client built before the profile

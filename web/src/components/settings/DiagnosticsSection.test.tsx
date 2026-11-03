@@ -75,6 +75,12 @@ function report(over: Partial<Diagnostics> = {}): Diagnostics {
     projectCount: 2,
     activeProject: "alpha",
     logs: null,
+    configuration: {
+      path: "C:\\Users\\me\\AppData\\Roaming\\NoteAgent\\config.json",
+      schemaVersion: 1,
+      revision: 7,
+      keychainAvailable: true,
+    },
     supervised: false,
     restarts: 0,
     lastExit: null,
@@ -103,6 +109,13 @@ async function press(name: string) {
   });
 }
 
+function row(label: string): string {
+  const term = [...host.querySelectorAll("dt")].find(
+    (item) => item.textContent?.trim() === label,
+  );
+  return term?.nextElementSibling?.textContent?.trim() ?? "";
+}
+
 describe("what this copy of the app says about itself", () => {
   it("shows the version, how long it has been running, and where the notes are", async () => {
     vi.mocked(fetchDiagnostics).mockResolvedValue(report());
@@ -118,6 +131,25 @@ describe("what this copy of the app says about itself", () => {
     // A checkout keeps no log of its own, and the screen says so rather than
     // offering a button that would open nothing.
     expect(text).toContain("此安装不单独保留日志。");
+  });
+
+  it("shows the configuration document, its version and the credential store", async () => {
+    vi.mocked(fetchDiagnostics).mockResolvedValue(
+      report({
+        configuration: {
+          path: "C:\\Users\\me\\AppData\\Roaming\\NoteAgent\\config.json",
+          schemaVersion: 1,
+          revision: 7,
+          keychainAvailable: false,
+        },
+      }),
+    );
+    await draw();
+
+    expect(row("配置文件")).toContain("config.json");
+    expect(row("配置版本")).toBe("1");
+    expect(row("修订号")).toBe("7");
+    expect(row("凭据存储")).toBe("不可用");
   });
 
   it("says how often the service was started again, and when it last died", async () => {

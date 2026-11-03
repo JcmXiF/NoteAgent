@@ -10,7 +10,7 @@
 //
 // A folder entry exists for each home, because the settings screen edits the
 // configuration file without opening it: the menu is how someone gets to the
-// files at all — the notes, that `.env`, and the logs.
+// files at all — the notes, the configuration document, and the logs.
 
 const LABELS = {
   zh: {

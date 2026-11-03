@@ -35,15 +35,16 @@ function shellLogPath(env = process.env) {
   return path.join(logsDir(env), "shell.log");
 }
 
-function envFilePath(env = process.env) {
-  return path.join(configHome(env), ".env");
+function configFilePath(env = process.env) {
+  const override = String(env.NOTEAGENT_CONFIG_DIR || "").trim();
+  return path.join(override || configHome(env), "config.json");
 }
 
 module.exports = {
+  configFilePath,
   configHome,
   coreLogPath,
   dataHome,
-  envFilePath,
   logsDir,
   shellLogPath,
 };

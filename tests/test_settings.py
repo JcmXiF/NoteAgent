@@ -29,7 +29,6 @@ from noteagent.project.init import init_project
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.credentials import SEARCH_KEY, llm_key
 from noteagent.settings.effective import forget_applied
-from noteagent.settings.envfile import update_env_text
 from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
 from noteagent.settings.install import (
@@ -78,30 +77,6 @@ def settings_home(tmp: str, *, available: bool = True):
 
 def saved_key(credentials: FakeCredentials, profile_id: str = "p_1") -> str | None:
     return credentials.values.get(llm_key(profile_id))
-
-
-class EnvTextTests(unittest.TestCase):
-    """The legacy file editor is still used by the command line."""
-
-    def test_keeps_comments_and_unrelated_keys(self) -> None:
-        text = update_env_text(
-            "# keep me\nOTHER=1\nNOTEAGENT_LLM_MODEL=old\n",
-            {"NOTEAGENT_LLM_MODEL": "new", "NOTEAGENT_LLM_API_KEY": "ab c"},
-        )
-        self.assertIn("# keep me\n", text)
-        self.assertIn("OTHER=1\n", text)
-        self.assertIn("NOTEAGENT_LLM_MODEL=new\n", text)
-        self.assertNotIn("old", text)
-        self.assertIn('NOTEAGENT_LLM_API_KEY="ab c"\n', text)
-
-    def test_delete_removes_only_that_line(self) -> None:
-        text = update_env_text(
-            "NOTEAGENT_LLM_MODEL=m\n# stay\nNOTEAGENT_LLM_API_KEY=secret\n",
-            {"NOTEAGENT_LLM_API_KEY": None},
-        )
-        self.assertIn("NOTEAGENT_LLM_MODEL=m\n", text)
-        self.assertIn("# stay\n", text)
-        self.assertNotIn("API_KEY", text)
 
 
 class InstallSettingsTests(unittest.TestCase):

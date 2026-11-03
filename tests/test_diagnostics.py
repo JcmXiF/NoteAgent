@@ -140,6 +140,31 @@ class DiagnosticsPayloadTests(unittest.TestCase):
                 },
             )
 
+    def test_a_damaged_document_still_names_the_path_and_the_store(self) -> None:
+        class Unavailable:
+            def available(self) -> bool:
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(
+                    diag,
+                    "install_view",
+                    side_effect=Refusal("settings.configInvalid", "bad document"),
+                ),
+                patch.object(diag, "list_projects", lambda: []),
+                patch.object(diag, "resolve_repo_root", lambda: Path(tmp)),
+                patch.object(diag, "keyring_store", lambda: Unavailable()),
+            ):
+                payload = diag.diagnostics_payload(env={})
+
+        self.assertIn("noProject", payload["warnings"])
+        self.assertIn("noModel", payload["warnings"])
+        self.assertTrue(payload["configuration"]["path"].endswith("config.json"))
+        self.assertIsNone(payload["configuration"]["schemaVersion"])
+        self.assertIsNone(payload["configuration"]["revision"])
+        self.assertFalse(payload["configuration"]["keychainAvailable"])
+
     def test_a_checkout_has_no_restart_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             payload = self._payload(Path(tmp), env={})

@@ -42,10 +42,12 @@ conda env create -f environment.yml
 conda activate noteagent
 pip install -e ".[api]"
 
-# 2. Configuration — the settings file lives at the repository root. Copy the
-#    template for the key names, or skip this and fill them in from the app's
-#    settings, which writes the same file.
-cp desktop/env-template.txt .env
+# 2. Configuration — open the app's settings (the gear in the icon rail) and
+#    fill in the model connection. The settings document lives in
+#    %APPDATA%\NoteAgent\config.json; keys go to the operating system's
+#    credential store. A variable already set in the environment wins.
+#    For a headless checkout, the same NOTEAGENT_LLM_* and NOTEAGENT_SEARCH_*
+#    variables can be set in the shell instead.
 
 # 3. Create a wiki project and drop your material into its raw/
 noteagent project init projects/my-wiki --set-active
@@ -57,9 +59,29 @@ noteagent serve                      # http://127.0.0.1:8765
 cd web && npm install && npm run dev    # http://127.0.0.1:5174
 ```
 
-The gear at the bottom of the icon rail edits the same settings file: the model and web search
-for this computer, and a short description of what the current project is for. Saving takes
-effect without a restart. A variable already set in the environment is shown but left alone.
+The gear at the bottom of the icon rail edits those settings: the model and web search for this
+computer, and a short description of what the current project is for. Saving takes effect without
+a restart. A variable already set in the environment is shown but left alone.
+
+### Configuration reference
+
+The settings screen writes a versioned document at `%APPDATA%\NoteAgent\config.json`; keys go to
+the operating system credential store under the service name `noteagent`. A value set in the
+process environment wins over the document, which is how a script or CI chooses an endpoint
+without touching the saved settings.
+
+| Variable | Meaning |
+|---|---|
+| `NOTEAGENT_LLM_BASE_URL`, `NOTEAGENT_LLM_API_KEY`, `NOTEAGENT_LLM_MODEL` | The model connection |
+| `NOTEAGENT_LLM_TEMPERATURE`, `NOTEAGENT_LLM_MAX_TOKENS`, `NOTEAGENT_LLM_TIMEOUT` | Generation parameters |
+| `NOTEAGENT_SEARCH_PROVIDER`, `NOTEAGENT_SEARCH_API_KEY` | `brave`, `serper`, or `none` |
+| `NOTEAGENT_SEARCH_MODE` | `auto`, `native`, or `external` |
+| `NOTEAGENT_SEARCH_TIMEOUT`, `NOTEAGENT_SEARCH_COUNTRY`, `NOTEAGENT_SEARCH_LANG`, `NOTEAGENT_SEARCH_UI_LANG` | Search locale and limits |
+| `NOTEAGENT_EXTRACT_MEDIA` | Extract images from PDF and HTML sources |
+| `NOTEAGENT_HOME` | Where projects and notes live |
+| `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
+| `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
+| `NOTEAGENT_UPDATE_URL` | Where "check for updates" looks; unset means it never asks |
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
@@ -103,7 +125,8 @@ The installer lands in `build/installer/`. The packaged app keeps its files apar
 
 | What | Where |
 |---|---|
-| Keys (`.env`) | `%APPDATA%\NoteAgent\.env` — a commented template is written on first run |
+| Settings | `%APPDATA%\NoteAgent\config.json` — written by the settings screen |
+| Keys | The operating system credential store, under the service name `noteagent` |
 | Logs | `%APPDATA%\NoteAgent\logs\core.log` and `shell.log` |
 | Notes and projects | `%USERPROFILE%\NoteAgent\<project>\` — visible and directly openable |
 

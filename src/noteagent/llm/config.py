@@ -1,16 +1,15 @@
 """Where the model endpoint and its settings come from.
 
-Settings are environment variables, optionally seeded from a ``.env`` file found
-beside the working directory or above it. The file never overrides a variable
-that is already set, so a shell can point at one endpoint while a checkout's
-``.env`` names another without the two fighting.
+Settings are process environment variables. The settings layer reads the saved
+document and the credential store, then applies them to this process; anything
+already set when the process started wins. No file beside the working directory
+is read.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 from noteagent.util.refusal import CodedError
 
@@ -39,9 +38,9 @@ class LlmConfig:
         return f"{self.base_url.rstrip('/')}/chat/completions"
 
 
-# Names already in the process when the settings file is first read. The file
+# Names already in the process when the settings layer first ran. The document
 # never overrides those, and the settings screen must not pretend it can either.
-# Recorded once: a value the screen writes for this run is not an outside override.
+# Recorded once: a value the screen applies for this run is not an outside override.
 _process_env_keys: set[str] | None = None
 
 
@@ -54,8 +53,8 @@ def reset_process_env_keys() -> None:
 def capture_process_env() -> frozenset[str]:
     """Record the ``NOTEAGENT_*`` names the process was started with.
 
-    Unlike ``process_env_keys`` this reads no file: the settings layer needs the
-    snapshot before it decides whether a legacy ``.env`` is part of the answer.
+    The settings layer must not treat a value it applies for this run as an
+    outside override, so the snapshot is taken before it writes anything.
     """
     global _process_env_keys
     if _process_env_keys is None:
@@ -64,55 +63,14 @@ def capture_process_env() -> frozenset[str]:
 
 
 def process_env_keys() -> frozenset[str]:
-    """``NOTEAGENT_*`` names set before the settings file was applied."""
+    """``NOTEAGENT_*`` names set before the settings document was applied."""
     if _process_env_keys is None:
-        load_dotenv()
+        capture_process_env()
     return frozenset(_process_env_keys or ())
 
 
-def _read_dotenv(path: Path) -> dict[str, str]:
-    """Read a local ``.env`` into a dict, skipping keys already in the environment."""
-    if not path.is_file():
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip("'").strip('"')
-        if key and key not in os.environ:
-            values[key] = value
-    return values
-
-
-def load_dotenv(start: Path | str | None = None, *, walk: bool = True) -> None:
-    """Load a ``.env`` into ``os.environ`` without overwriting existing vars.
-
-    With ``walk``, the nearest file at or above *start* wins and a nested file
-    does not merge with its parent. Without it, only *start* itself is read,
-    which is how a settings write targets one file without adopting another.
-    """
-    global _process_env_keys
-    if _process_env_keys is None:
-        _process_env_keys = {key for key in os.environ if key.startswith("NOTEAGENT_")}
-
-    current = Path(start or Path.cwd()).expanduser().resolve()
-    if current.is_file():
-        current = current.parent
-    candidates = [current, *current.parents] if walk else [current]
-    for candidate in candidates:
-        dotenv = candidate / ".env"
-        if dotenv.is_file():
-            for key, value in _read_dotenv(dotenv).items():
-                os.environ.setdefault(key, value)
-            return
-
-
 def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
-    """Load LLM config from the environment, after an optional ``.env``.
+    """Load LLM config from the applied environment.
 
     Environment variables:
       NOTEAGENT_LLM_BASE_URL   e.g. https://api.openai.com/v1
@@ -121,9 +79,10 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
       NOTEAGENT_LLM_TEMPERATURE (optional, default 0.1)
       NOTEAGENT_LLM_MAX_TOKENS  (optional, default 4096)
       NOTEAGENT_LLM_TIMEOUT     (optional, seconds, default 120)
-    """
-    load_dotenv()
 
+    The settings layer applies the saved document to these names; this function
+    never reads a file of its own.
+    """
     base_url = os.environ.get("NOTEAGENT_LLM_BASE_URL", "").strip()
     api_key = os.environ.get("NOTEAGENT_LLM_API_KEY", "").strip()
     model = os.environ.get("NOTEAGENT_LLM_MODEL", "").strip()
@@ -139,7 +98,7 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
         raise LlmConfigError(
             "Missing LLM config: "
             + ", ".join(missing)
-            + ". Set them in the environment or a project-root .env file."
+            + ". Set them in the app's settings, or in the process environment."
         )
 
     temperature = float(os.environ.get("NOTEAGENT_LLM_TEMPERATURE", "0.1"))
@@ -172,6 +131,6 @@ def snapshot_llm_config(
     return load_llm_config()
 
 
-# Taken at import, before any module can read a legacy file: a value that came
-# from that file must never be mistaken for one the process was started with.
+# Taken at import, before the settings layer applies the document: a value it
+# applies for this run must never be mistaken for one the process was started with.
 capture_process_env()

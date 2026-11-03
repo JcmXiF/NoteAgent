@@ -819,24 +819,18 @@ class SearchModeTests(unittest.TestCase):
         self.assertEqual(card_to_dict(run.cards[0])["source"], "brave")
 
     def test_the_mode_is_read_from_the_environment(self) -> None:
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "NOTEAGENT_SEARCH_PROVIDER": "brave",
-                    "NOTEAGENT_SEARCH_API_KEY": "tok",
-                    "NOTEAGENT_SEARCH_MODE": "external",
-                },
-            ),
-            patch("noteagent.acquire.search_config.load_dotenv"),
+        with patch.dict(
+            os.environ,
+            {
+                "NOTEAGENT_SEARCH_PROVIDER": "brave",
+                "NOTEAGENT_SEARCH_API_KEY": "tok",
+                "NOTEAGENT_SEARCH_MODE": "external",
+            },
         ):
             self.assertEqual(load_search_config().mode, "external")
 
     def test_an_unknown_mode_is_refused(self) -> None:
-        with (
-            patch.dict(os.environ, {"NOTEAGENT_SEARCH_MODE": "sideways"}),
-            patch("noteagent.acquire.search_config.load_dotenv"),
-        ):
+        with patch.dict(os.environ, {"NOTEAGENT_SEARCH_MODE": "sideways"}):
             with self.assertRaises(SearchConfigError):
                 load_search_config()
 

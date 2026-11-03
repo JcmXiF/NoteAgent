@@ -1,4 +1,4 @@
-"""Acquire tools: each module is one capability. Providers are configured in `.env`."""
+"""Acquire tools: each module is one capability, configured by the settings document."""
 
 from noteagent.acquire.search_config import SearchConfig, load_search_config
 from noteagent.acquire.tools.web_fetch import (

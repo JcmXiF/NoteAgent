@@ -17,7 +17,7 @@ from noteagent.io.read_source import (
     read_source,
 )
 from noteagent.llm.client import LlmClient, LlmError
-from noteagent.llm.config import LlmConfigError, load_llm_config
+from noteagent.llm.config import load_llm_config
 from noteagent.project.config import (
     ProjectNotConfiguredError,
     resolve_active_project,
@@ -40,7 +40,15 @@ from noteagent.ingest.write_file_blocks import format_write_result, write_file_b
 from noteagent.project.doctor import doctor_project, format_doctor_report
 from noteagent.project.migrate import format_migration_result, migrate_project
 from noteagent.project.reset import format_reset_result, reset_wiki_content
+from noteagent.util.refusal import CodedError
 from noteagent.util.run_log import RunLogger
+
+
+def _apply_saved_settings() -> None:
+    """Make the saved document this process's settings, as the server does."""
+    from noteagent.settings.install import install_view
+
+    install_view()
 
 
 def _configure_stdio() -> None:
@@ -502,13 +510,14 @@ def cmd_analyze(layout: ProjectLayout, path: Path, *, dry_run: bool) -> int:
         return 0
 
     try:
+        _apply_saved_settings()
         config = load_llm_config()
         client = LlmClient(config)
         print(f"# analyzing {doc.identity}", file=sys.stderr)
         print(f"# model={config.model} endpoint={config.base_url}", file=sys.stderr)
         client.chat(prompt.as_messages(), on_token=lambda token: print(token, end="", flush=True))
         print()
-    except (LlmConfigError, LlmError) as err:
+    except (CodedError, LlmError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
     return 0
@@ -609,8 +618,9 @@ def cmd_ingest(
         print(token, end="", flush=True, file=sys.stderr)
 
     try:
+        _apply_saved_settings()
         config = load_llm_config()
-    except LlmConfigError as err:
+    except CodedError as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
 
@@ -711,6 +721,7 @@ def cmd_serve(*, host: str, port: int, action: str = "start") -> int:
         print(message)
         if code != 0:
             return code
+    # The API's lifespan applies the saved document before any job can start.
     from noteagent.api.__main__ import main as api_main
 
     return api_main(["--host", host, "--port", str(port)])
@@ -772,14 +783,13 @@ def cmd_acquire_search(
         SearchModeUnavailable,
     )
     from noteagent.acquire.types import ProviderNotConfiguredError
-    from noteagent.settings.install import install_view
 
     # Make the document this process's settings, as the server does at startup.
     # A damaged document must not make a CLI search impossible; the environment
     # it was started with is still usable.
     try:
-        install_view()
-    except Exception:
+        _apply_saved_settings()
+    except CodedError:
         pass
 
     logger = _acquire_logger(project, enabled=run_log)
@@ -809,11 +819,12 @@ def cmd_acquire_search(
 
 def cmd_acquire_status() -> int:
     """Print search provider status without exposing the API key."""
-    from noteagent.acquire.search_config import SearchConfigError, load_search_config
+    from noteagent.acquire.search_config import load_search_config
 
     try:
+        _apply_saved_settings()
         cfg = load_search_config()
-    except SearchConfigError as err:
+    except CodedError as err:
         print(f"Error: {err}", file=sys.stderr)
         return 2
     print(f"provider: {cfg.provider if cfg.configured else 'none'}")

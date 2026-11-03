@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
 
-from noteagent.llm.config import load_dotenv
 from noteagent.settings.credentials import keyring_store
 from noteagent.settings.store import SEARCH_MODES, ConfigStore, default_config_path
 from noteagent.util.refusal import CodedError
@@ -175,7 +174,7 @@ def active_llm_provider() -> str:
 
 def load_search_config() -> SearchConfig:
     """
-    Load search settings from the environment (after optional ``.env``).
+    Load search settings from the applied environment.
 
         NOTEAGENT_SEARCH_PROVIDER   none | brave | serper
         NOTEAGENT_SEARCH_API_KEY
@@ -189,8 +188,9 @@ def load_search_config() -> SearchConfig:
 
     The active model connection is read too: its provider decides whether a
     native adapter exists, and its endpoint, key and model feed that adapter.
+    The settings layer applies the saved document to these names; no file is
+    read here.
     """
-    load_dotenv()
     provider = os.environ.get("NOTEAGENT_SEARCH_PROVIDER", "none").strip().lower() or "none"
     if provider not in KNOWN_PROVIDERS:
         raise SearchConfigError(

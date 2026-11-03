@@ -27,8 +27,10 @@ import httpx
 from noteagent import __version__
 from noteagent.api.projects import list_projects, projects_dir, resolve_repo_root
 from noteagent.api.serve_control import read_record
+from noteagent.settings.credentials import keyring_store
 from noteagent.settings.install import install_view
-from noteagent.util.refusal import Refusal
+from noteagent.settings.store import default_config_path
+from noteagent.util.refusal import CodedError, Refusal
 
 #: When the server process began. Read at import, because this module is imported
 #: by the app factory, which is the first thing the process does.
@@ -152,6 +154,14 @@ def _address() -> dict[str, Any] | None:
     }
 
 
+def _keychain_available() -> bool:
+    """The credential store's own answer, without needing a readable document."""
+    try:
+        return keyring_store().available()
+    except Exception:
+        return False
+
+
 def diagnostics_payload(
     *,
     now: float | None = None,
@@ -163,7 +173,13 @@ def diagnostics_payload(
     began = PROCESS_STARTED if started is None else started
     source = _env(env)
 
-    install = install_view()
+    # A damaged document is exactly when this screen is needed, so it must not
+    # be the reason the screen cannot answer. The path and the credential store
+    # are still knowable without it.
+    try:
+        install = install_view()
+    except (CodedError, OSError):
+        install = None
     projects = list_projects()
     logs = log_dir(source)
     state = supervisor_state(logs)
@@ -182,7 +198,7 @@ def diagnostics_payload(
     warnings: list[str] = []
     if not projects:
         warnings.append("noProject")
-    if not install["llm"]["configured"]:
+    if install is None or not install["llm"]["configured"]:
         warnings.append("noModel")
     if logs is not None and not (core_log is not None and core_log.is_file()):
         warnings.append("noLog")
@@ -204,10 +220,18 @@ def diagnostics_payload(
         ),
         # The document this process reads, and whether its secrets have a home.
         "configuration": {
-            "path": install.get("configPath"),
-            "schemaVersion": install.get("schemaVersion"),
-            "revision": install.get("revision"),
-            "keychainAvailable": install.get("keychainAvailable"),
+            "path": (
+                install.get("configPath")
+                if install is not None
+                else str(default_config_path())
+            ),
+            "schemaVersion": install.get("schemaVersion") if install else None,
+            "revision": install.get("revision") if install else None,
+            "keychainAvailable": (
+                install.get("keychainAvailable")
+                if install is not None
+                else _keychain_available()
+            ),
         },
         "logs": log_info,
         "supervised": _flag(source, ENV_SUPERVISED),

@@ -37,6 +37,13 @@ export type Diagnostics = {
   projectCount: number;
   activeProject: string | null;
   logs: DiagnosticsLogFile | null;
+  /** The document this process reads, and whether its secrets have a home. */
+  configuration: {
+    path: string;
+    schemaVersion: number;
+    revision: number;
+    keychainAvailable: boolean;
+  };
   /** True when the desktop shell started this service and restarts it if it dies. */
   supervised: boolean;
   restarts: number;
