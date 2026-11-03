@@ -23,7 +23,17 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Notification,
+  dialog,
+  ipcMain,
+  net,
+  session,
+  shell,
+} = require("electron");
 const { createGuestShell } = require("./guest-shell.cjs");
 const { textFor } = require("./guest-text.cjs");
 const { CoreMissingError, coreLaunch, modeFor } = require("./core-runtime.cjs");
@@ -33,6 +43,13 @@ const { languageFromLocale } = require("./locale.cjs");
 const { menuTemplate } = require("./menu.cjs");
 const { bootScreen, failureScreen } = require("./screens.cjs");
 const { makeIsUiOrigin } = require("./ui-origin.cjs");
+const { checkForUpdates } = require("./version-checker.cjs");
+const {
+  showAbout,
+  showAvailableNotice,
+  showManualResult,
+} = require("./version-notice.cjs");
+const { createVersionScheduler } = require("./version-scheduler.cjs");
 const { openLogFd, rotateOnStart, tailLines, writeLine } = require("./logs.cjs");
 const paths = require("./paths.cjs");
 
@@ -46,9 +63,13 @@ const DEV_UI_URL = "http://127.0.0.1:5174";
 const GUEST_PARTITION = "persist:noteagent-guest";
 const SNAPSHOT = fs.readFileSync(path.join(__dirname, "snapshot.js"), "utf8");
 const WINDOW_BG = "#d8e2ea";
+// The installer's shortcut carries this ID, and Windows needs the running app to
+// answer to the same one before it will show a notification as NoteAgent.
+const APP_USER_MODEL_ID = "com.noteagent.desktop";
 
 let uiWindow = null;
 let guestShell = null;
+let versionScheduler = null;
 let coreChild = null;
 // The address the running core answers on, kept so a reload can use the core that
 // is already up instead of starting a second one.
@@ -431,6 +452,94 @@ function attachUiNavigationGuard(win) {
   });
 }
 
+// Electron's network stack follows the system proxy, which is what a corporate
+// machine expects; Node's fetch is the fallback when the shell runs without it.
+function githubFetch(url, options) {
+  if (net && typeof net.fetch === "function") return net.fetch(url, options);
+  return fetch(url, options);
+}
+
+// The dialog belongs to the window when there is one, so it stays attached to
+// the app instead of floating over another program.
+function showMessageBox(options) {
+  if (uiWindow && !uiWindow.isDestroyed()) {
+    return dialog.showMessageBox(uiWindow, options);
+  }
+  return dialog.showMessageBox(options);
+}
+
+const SHELL_DIALOG = { showMessageBox };
+
+function runUpdateCheck() {
+  return checkForUpdates({
+    fetch: githubFetch,
+    appVersion: app.getVersion(),
+    logger: log,
+  });
+}
+
+function logUpdateResult(result) {
+  const reason = result.reason ? ` reason=${result.reason}` : "";
+  const detail = result.message ? ` ${result.message}` : "";
+  log(`update check result=${result.kind}${reason}${detail}`);
+}
+
+// A new release found without being asked for is a notification, not a dialog:
+// nobody is waiting on the answer, so it must not take over the screen. Clicking
+// it opens the release page; a platform without notifications falls back to the
+// dialog a manual check would have shown.
+function showAutomaticUpdate(result) {
+  return showAvailableNotice({
+    result,
+    language: LANGUAGE,
+    Notification,
+    dialog: SHELL_DIALOG,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
+// Automatic failures stay in the shell log. The checker already wrote down why;
+// a person who did not ask for the check should not be interrupted by it.
+function startVersionChecks() {
+  versionScheduler = createVersionScheduler({
+    isPackaged: app.isPackaged,
+    check: runUpdateCheck,
+    onAvailable: (result) => {
+      log(`update check result=available version=${result.version}`);
+      return showAutomaticUpdate(result);
+    },
+    onError: (result) => {
+      logUpdateResult(result);
+    },
+  });
+  versionScheduler.start();
+}
+
+function stopVersionChecks() {
+  if (versionScheduler) versionScheduler.stop();
+}
+
+// A manual check always ends in a dialog: the person asked a question and is
+// owed an answer, including when the answer is that the check failed. It takes
+// the same slot as the timer, so a click during an automatic check cannot send
+// a second request.
+async function checkForUpdatesManually() {
+  const result = versionScheduler
+    ? await versionScheduler.checkNow()
+    : await runUpdateCheck();
+  if (!result) {
+    log("update check skipped reason=in-flight");
+    return;
+  }
+  logUpdateResult(result);
+  await showManualResult({
+    result,
+    language: LANGUAGE,
+    dialog: SHELL_DIALOG,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
 function buildMenu() {
   const actions = {
     reloadInterface: () => {
@@ -443,6 +552,15 @@ function buildMenu() {
     openSettings: () => void shell.openPath(paths.configHome()),
     openLogs: () => void shell.openPath(paths.logsDir()),
     openBrowse: () => sendToUi("desktop:show-browse"),
+    // The version is read when the entry is chosen, not when the menu is built:
+    // building the menu must not depend on the app being ready.
+    checkForUpdates: () => void checkForUpdatesManually(),
+    showAbout: () =>
+      void showAbout({
+        appVersion: app.getVersion(),
+        language: LANGUAGE,
+        dialog: SHELL_DIALOG,
+      }),
   };
   return Menu.buildFromTemplate(menuTemplate(LANGUAGE, actions));
 }
@@ -512,6 +630,15 @@ function ensureHomes() {
   rotateOnStart(SHELL_LOG);
 }
 
+// Windows ties a notification to an AppUserModelID, and the installer's shortcut
+// carries the one from electron-builder.yml. Setting it once the app is ready
+// keeps a toast attributed to NoteAgent rather than to Electron.
+function ensureWindowsAppId() {
+  if (process.platform !== "win32") return;
+  if (typeof app.setAppUserModelId !== "function") return;
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+}
+
 app.setName("NoteAgent");
 if (process.platform === "win32") {
   app.disableHardwareAcceleration();
@@ -530,6 +657,7 @@ if (!hasLock) {
 
   app.whenReady().then(() => {
     ensureHomes();
+    ensureWindowsAppId();
     log(`mode=${MODE} language=${LANGUAGE}`);
 
     const partitioned = guestSession();
@@ -554,6 +682,9 @@ if (!hasLock) {
     registerIpc();
     createUiWindow();
     guestShell.attachHost(uiWindow);
+    // The schedule starts once there is a window to report through. A checkout
+    // does not schedule anything; the menu's check still works for trying it.
+    startVersionChecks();
   });
 }
 
@@ -565,4 +696,5 @@ app.on("window-all-closed", () => {
 // exit is read as this app ending, not as a crash worth starting it again for.
 app.on("before-quit", () => {
   stopCore();
+  stopVersionChecks();
 });
