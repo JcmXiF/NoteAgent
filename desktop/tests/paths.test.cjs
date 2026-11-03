@@ -6,10 +6,10 @@ const os = require("node:os");
 const path = require("node:path");
 
 const {
+  configFilePath,
   configHome,
   coreLogPath,
   dataHome,
-  envFilePath,
   logsDir,
   shellLogPath,
 } = require("../paths.cjs");
@@ -21,7 +21,11 @@ test("settings and logs live under the roaming profile", () => {
   assert.equal(logsDir(ENV), path.join(ENV.APPDATA, "NoteAgent", "logs"));
   assert.equal(coreLogPath(ENV), path.join(ENV.APPDATA, "NoteAgent", "logs", "core.log"));
   assert.equal(shellLogPath(ENV), path.join(ENV.APPDATA, "NoteAgent", "logs", "shell.log"));
-  assert.equal(envFilePath(ENV), path.join(ENV.APPDATA, "NoteAgent", ".env"));
+  assert.equal(configFilePath(ENV), path.join(ENV.APPDATA, "NoteAgent", "config.json"));
+  assert.equal(
+    configFilePath({ ...ENV, NOTEAGENT_CONFIG_DIR: path.join("D:", "portable") }),
+    path.join("D:", "portable", "config.json"),
+  );
 });
 
 test("notes live in a folder a person can find", () => {

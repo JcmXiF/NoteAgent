@@ -13,7 +13,7 @@ from noteagent.api.projects import logger_for_project
 
 
 def card_to_dict(card: CandidateCard) -> dict[str, str]:
-    return {
+    data = {
         "title": card.title,
         "url": card.url,
         "site": card.site,
@@ -23,6 +23,10 @@ def card_to_dict(card: CandidateCard) -> dict[str, str]:
         "via": card.via,
         "why": card.why,
     }
+    # A card from somewhere other than a search has no source to report.
+    if card.source:
+        data["source"] = card.source
+    return data
 
 
 def run_search_payload(

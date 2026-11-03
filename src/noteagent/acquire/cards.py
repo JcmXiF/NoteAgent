@@ -30,6 +30,7 @@ def cards_from_hits(
     *,
     query: str,
     limit: int | None = None,
+    source: str = "",
 ) -> list[CandidateCard]:
     """
     Map engine hits to cards. Does not LLM-rank; the human picks raw sources.
@@ -47,6 +48,7 @@ def cards_from_hits(
                 snippet=hit.snippet,
                 why=f"web_search:{query}",
                 via="web_search",
+                source=source,
                 site_name=site_name,
                 favicon=favicon_for_host(site, hit.favicon),
             )

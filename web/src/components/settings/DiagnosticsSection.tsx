@@ -221,6 +221,23 @@ export function DiagnosticsSection({
                 {copyButton(data.dataRoot)}
               </span>
             </Row>
+            <Row label={t("settings.diagnostics.configurationLabel")} mono>
+              <span className="flex flex-wrap items-center gap-2">
+                {data.configuration.path}
+                {copyButton(data.configuration.path)}
+              </span>
+            </Row>
+            <Row label={t("settings.diagnostics.schemaLabel")}>
+              {data.configuration.schemaVersion}
+            </Row>
+            <Row label={t("settings.diagnostics.revisionLabel")}>
+              {data.configuration.revision}
+            </Row>
+            <Row label={t("settings.diagnostics.keychainLabel")}>
+              {data.configuration.keychainAvailable
+                ? t("settings.diagnostics.keychainAvailable")
+                : t("settings.diagnostics.keychainUnavailable")}
+            </Row>
           </dl>
 
           {data.warnings.length > 0 ? (

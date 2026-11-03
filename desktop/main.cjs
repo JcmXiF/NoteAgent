@@ -35,7 +35,6 @@ const { bootScreen, failureScreen } = require("./screens.cjs");
 const { makeIsUiOrigin } = require("./ui-origin.cjs");
 const { openLogFd, rotateOnStart, tailLines, writeLine } = require("./logs.cjs");
 const paths = require("./paths.cjs");
-const { ensureSettingsFile } = require("./settings-file.cjs");
 
 const MODE = modeFor({ isPackaged: app.isPackaged });
 
@@ -326,19 +325,40 @@ async function coreExited(child, code) {
   }, step.delayMs);
 }
 
+function configSummary(configPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    return {
+      readable: true,
+      schemaVersion: Number.isInteger(parsed.schemaVersion) ? parsed.schemaVersion : null,
+      revision: Number.isInteger(parsed.revision) ? parsed.revision : null,
+    };
+  } catch {
+    return { readable: false, schemaVersion: null, revision: null };
+  }
+}
+
 async function showFailure(reason, generation) {
   if (!uiWindow || uiWindow.isDestroyed()) return;
   if (generation !== startGeneration) return;
-  const configPath = paths.envFilePath();
+  const configPath = paths.configFilePath();
   const configMissing = !fs.existsSync(configPath);
+  const summary = configMissing
+    ? { readable: null, schemaVersion: null, revision: null }
+    : configSummary(configPath);
   await uiWindow.loadURL(
     failureScreen({
       language: LANGUAGE,
       reason,
       logPath: CORE_LOG,
       logTail: tailLines(CORE_LOG),
-      configPath,
-      configMissing,
+      config: {
+        path: configPath,
+        missing: configMissing,
+        readable: summary.readable,
+        schemaVersion: summary.schemaVersion,
+        revision: summary.revision,
+      },
     }),
   );
 }
@@ -490,14 +510,6 @@ function ensureHomes() {
     }
   }
   rotateOnStart(SHELL_LOG);
-  // A checkout reads the repository's own settings file; only an installed app
-  // needs one created for it.
-  if (MODE === "prod") {
-    ensureSettingsFile({
-      target: paths.envFilePath(),
-      template: path.join(__dirname, "env-template.txt"),
-    });
-  }
 }
 
 app.setName("NoteAgent");

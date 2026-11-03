@@ -74,24 +74,50 @@ test("a log line cannot inject markup into the failure page", () => {
   assert.match(html, /&lt;script&gt;/);
 });
 
-test("a settings path is only shown when there is no settings file yet", () => {
-  const withHint = decoded(
+test("shows the configuration path, its figures, and what the shell cannot know", () => {
+  const html = decoded(
     failureScreen({
       language: "en",
-      configPath: "C:\\cfg\\.env",
-      configMissing: true,
-    }),
-  );
-  const withoutHint = decoded(
-    failureScreen({
-      language: "en",
-      configPath: "C:\\cfg\\.env",
-      configMissing: false,
+      config: {
+        path: "C:\\cfg\\config.json",
+        missing: false,
+        readable: true,
+        schemaVersion: 1,
+        revision: 7,
+      },
     }),
   );
 
-  assert.match(withHint, /C:\\cfg\\\.env/);
-  assert.doesNotMatch(withoutHint, /C:\\cfg\\\.env/);
+  assert.match(html, /C:\\cfg\\config\.json/);
+  assert.match(html, /Schema version: 1/);
+  assert.match(html, /Revision: 7/);
+  assert.match(html, /Not available on this screen/);
+
+  const missing = decoded(
+    failureScreen({
+      language: "en",
+      config: {
+        path: "C:\\cfg\\config.json",
+        missing: true,
+      },
+    }),
+  );
+  assert.match(missing, /not created yet/);
+  assert.doesNotMatch(missing, /Schema version:/);
+  assert.doesNotMatch(missing, /Revision:/);
+
+  const unreadable = decoded(
+    failureScreen({
+      language: "en",
+      config: {
+        path: "C:\\cfg\\config.json",
+        missing: false,
+        readable: false,
+      },
+    }),
+  );
+  assert.match(unreadable, /This file cannot be read/);
+  assert.doesNotMatch(unreadable, /Schema version:/);
 });
 
 test("escaping covers the characters that can end an attribute", () => {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from noteagent.ingest.frontmatter import parse_page
@@ -65,6 +66,9 @@ class PageSaveTests(unittest.TestCase):
                 "wiki/concepts/kl.md",
                 "# KL\n\nnew",
                 base_revision=str(view["revision"]),
+                # The stamp is the program's clock; pin it so the assertion is
+                # about the frontmatter, not about the day the suite runs.
+                now=datetime(2026, 10, 20, 12, 0),
             )
 
             self.assertTrue(result["changed"])

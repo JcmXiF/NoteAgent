@@ -1,6 +1,21 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { ValueSource } from "@/lib/install-settings";
+
+const SOURCE_TONES = {
+  env: "warning",
+  config: "neutral",
+  keychain: "primary",
+  default: "outline",
+} as const;
+
+/** Where a value came from, in the reader's language. */
+export function SourceBadge({ source }: { source: ValueSource }) {
+  const { t } = useTranslation();
+  return <Badge tone={SOURCE_TONES[source]}>{t(`settings.source.${source}`)}</Badge>;
+}
 
 export function SettingsSection({
   title,
@@ -55,7 +70,12 @@ export function Field({
   const { t } = useTranslation();
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-sm font-medium">{label}</span>
+      <span className="flex items-center gap-2">
+        <span className="text-sm font-medium">{label}</span>
+        {/* A locked value is owned by the process environment, and that is the
+            only source the screen can show here. */}
+        {locked ? <SourceBadge source="env" /> : null}
+      </span>
       {children}
       {locked ? (
         <span className="text-xs leading-relaxed text-muted-foreground">{t("settings.locked")}</span>

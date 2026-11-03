@@ -69,7 +69,10 @@ export const UNREACHED_STATUS = 0;
 const UNREACHED_STATUSES = new Set([502, 503, 504]);
 
 /** The sentence a code names, or an empty string when this build has none. */
-function sentenceForCode(code: string, params: Record<string, string>): string {
+export function sentenceForCode(
+  code: string,
+  params: Record<string, string> = {},
+): string {
   const key = `error.code.${code}`;
   if (!i18n.exists(key)) return "";
   const said = i18n.t(key, { ...params });

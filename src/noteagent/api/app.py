@@ -111,7 +111,20 @@ from noteagent.ingest.source_citations import source_citations_payload
 from noteagent.ingest.update_index import rebuild_wiki_index
 from noteagent.llm.config import LlmConfigError
 from noteagent.settings.brief import brief_view, save_brief
-from noteagent.settings.install import apply_install, install_view, probe_llm, probe_search
+from noteagent.settings.install import (
+    apply_install,
+    deep_check,
+    install_view,
+    list_models,
+    probe_llm,
+    probe_search,
+)
+from noteagent.settings.profiles import (
+    activate_profile,
+    create_profile,
+    delete_profile,
+    update_profile,
+)
 from noteagent.project.lifecycle import ProjectConfirmError, project_contents
 from noteagent.project.names import ProjectNameError
 from noteagent.project.trash import list_trash, restore_trash
@@ -199,6 +212,7 @@ class LlmSettingsBody(BaseModel):
 
 class SearchSettingsBody(BaseModel):
     provider: str | None = None
+    mode: str | None = None
     apiKey: str | None = None
     clearApiKey: bool = False
     timeoutSeconds: float | None = None
@@ -211,6 +225,46 @@ class InstallSettingsBody(BaseModel):
     llm: LlmSettingsBody | None = None
     search: SearchSettingsBody | None = None
     extractMedia: bool | None = None
+    #: The revision the form was built from. A save that read an older document
+    #: is refused instead of overwriting a change it never saw.
+    revision: int | None = Field(default=None, ge=0)
+
+
+class ProfileCreateBody(BaseModel):
+    """A new connection. The core words what is missing or unusable."""
+
+    name: str | None = None
+    provider: str | None = None
+    baseUrl: str | None = None
+    model: str | None = None
+    apiKey: str | None = None
+    #: The revision the form was built from; a stale one is refused with 409.
+    revision: int = Field(..., ge=0)
+
+
+class ProfileUpdateBody(BaseModel):
+    """A field left out keeps what the profile already had."""
+
+    name: str | None = None
+    provider: str | None = None
+    baseUrl: str | None = None
+    model: str | None = None
+    apiKey: str | None = None
+    clearApiKey: bool = False
+    revision: int = Field(..., ge=0)
+
+
+class ProfileActivateBody(BaseModel):
+    revision: int = Field(..., ge=0)
+
+
+class SettingsModelsBody(BaseModel):
+    """What to ask for a model list: a draft, or a saved profile's key."""
+
+    baseUrl: str | None = None
+    provider: str | None = None
+    apiKey: str | None = None
+    profileId: str | None = None
 
 
 class BriefBody(BaseModel):
@@ -488,6 +542,14 @@ _INBOX_POLL_S = 8.0
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
+    # The runtime reads the model connection from the process environment, so
+    # the document is applied once before any job can start. A document the
+    # settings screen has to report must not stop the app from opening.
+    try:
+        install_view()
+    except (CodedError, OSError):
+        pass
+
     stop = asyncio.Event()
 
     async def _poll_inbox() -> None:
@@ -551,6 +613,33 @@ def create_app() -> FastAPI:
     def settings_put(body: InstallSettingsBody) -> dict[str, object]:
         return apply_install(body.model_dump(exclude_unset=True))
 
+    @app.post("/api/settings/profiles")
+    def settings_profile_create(body: ProfileCreateBody) -> dict[str, object]:
+        return create_profile(body.model_dump(exclude_unset=True))
+
+    @app.put("/api/settings/profiles/{profile_id}")
+    def settings_profile_update(
+        profile_id: str, body: ProfileUpdateBody
+    ) -> dict[str, object]:
+        return update_profile(profile_id, body.model_dump(exclude_unset=True))
+
+    @app.delete("/api/settings/profiles/{profile_id}")
+    def settings_profile_delete(
+        profile_id: str,
+        revision: int = Query(..., ge=0),
+    ) -> dict[str, object]:
+        return delete_profile(profile_id, revision=revision)
+
+    @app.post("/api/settings/profiles/{profile_id}/activate")
+    def settings_profile_activate(
+        profile_id: str, body: ProfileActivateBody
+    ) -> dict[str, object]:
+        return activate_profile(profile_id, revision=body.revision)
+
+    @app.post("/api/settings/models")
+    def settings_models(body: SettingsModelsBody) -> dict[str, object]:
+        return {"models": list_models(body.model_dump(exclude_unset=True))}
+
     @app.post("/api/settings/llm/probe")
     def settings_llm_probe(body: LlmSettingsBody) -> dict[str, object]:
         probe_llm(body.model_dump(exclude_unset=True))
@@ -560,6 +649,10 @@ def create_app() -> FastAPI:
     def settings_search_probe(body: SearchSettingsBody) -> dict[str, object]:
         count = probe_search(body.model_dump(exclude_unset=True))
         return {"ok": True, "count": count}
+
+    @app.post("/api/settings/deep-check")
+    def settings_deep_check() -> dict[str, object]:
+        return deep_check()
 
     @app.get("/api/projects")
     def projects() -> dict[str, object]:

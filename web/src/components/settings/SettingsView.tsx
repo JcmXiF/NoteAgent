@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,8 +10,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { DeepCheckSection } from "@/components/settings/DeepCheckSection";
 import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
-import { ModelSection } from "@/components/settings/ModelSection";
+import { EffectiveConfigSection } from "@/components/settings/EffectiveConfigSection";
+import { GenerationSection } from "@/components/settings/GenerationSection";
+import { ProfilesSection } from "@/components/settings/ProfilesSection";
 import { ProjectSection } from "@/components/settings/ProjectSection";
 import { SearchSection } from "@/components/settings/SearchSection";
 import { fetchSettings } from "@/lib/api/settings";
@@ -22,12 +25,20 @@ import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/layout-store";
 
 const GROUPS = [
-  { scope: "settings.scope.install", ids: ["model", "search", "diagnostics"] },
+  {
+    scope: "settings.scope.install",
+    ids: ["model", "generation", "search", "deepCheck", "effective", "diagnostics"],
+  },
   { scope: "settings.scope.project", ids: ["project"] },
   { scope: "settings.scope.window", ids: ["appearance"] },
 ] as const;
 
 type SectionId = (typeof GROUPS)[number]["ids"][number];
+
+/** Every section stays mounted; leaving one must not lose a draft in it. */
+function Pane({ visible, children }: { visible: boolean; children: ReactNode }) {
+  return <div className={cn(visible ? undefined : "hidden")}>{children}</div>;
+}
 
 /**
  * Settings replace the workspace rather than sitting beside a page.
@@ -47,10 +58,20 @@ export function SettingsView() {
   const [section, setSection] = useState<SectionId>("model");
   const [install, setInstall] = useState<InstallSettings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [dirty, setDirty] = useState({ model: false, search: false, project: false });
+  const [dirty, setDirty] = useState({
+    model: false,
+    generation: false,
+    search: false,
+    project: false,
+  });
 
   const onModelDirty = useCallback((value: boolean) => {
     setDirty((current) => (current.model === value ? current : { ...current, model: value }));
+  }, []);
+  const onGenerationDirty = useCallback((value: boolean) => {
+    setDirty((current) =>
+      current.generation === value ? current : { ...current, generation: value },
+    );
   }, []);
   const onSearchDirty = useCallback((value: boolean) => {
     setDirty((current) => (current.search === value ? current : { ...current, search: value }));
@@ -59,7 +80,13 @@ export function SettingsView() {
     setDirty((current) => (current.project === value ? current : { ...current, project: value }));
   }, []);
 
-  const unsaved = dirty.model || dirty.search || dirty.project;
+  const unsaved = Object.values(dirty).some(Boolean);
+  const changedBySection: Partial<Record<SectionId, boolean>> = {
+    model: dirty.model,
+    generation: dirty.generation,
+    search: dirty.search,
+    project: dirty.project,
+  };
   useEffect(() => {
     setSettingsDirty(unsaved);
   }, [unsaved, setSettingsDirty]);
@@ -107,10 +134,7 @@ export function SettingsView() {
               {t(group.scope)}
             </div>
             {group.ids.map((id) => {
-              const changed =
-                (id === "model" && dirty.model) ||
-                (id === "search" && dirty.search) ||
-                (id === "project" && dirty.project);
+              const changed = changedBySection[id] ?? false;
               return (
                 <button
                   key={id}
@@ -144,30 +168,66 @@ export function SettingsView() {
       </nav>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-xl flex-col px-6 py-6">
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col px-6 py-6",
+            section === "model" ? "max-w-4xl" : "max-w-xl",
+          )}
+        >
           {install ? (
-            <div className={cn(section !== "model" && "hidden")}>
-              <ModelSection install={install} onSaved={setInstall} onDirty={onModelDirty} />
-            </div>
+            <Pane visible={section === "model"}>
+              <ProfilesSection
+                install={install}
+                onSaved={setInstall}
+                onDirty={onModelDirty}
+                onReload={load}
+              />
+            </Pane>
           ) : section === "model" ? (
             waiting
           ) : null}
           {install ? (
-            <div className={cn(section !== "search" && "hidden")}>
+            <Pane visible={section === "generation"}>
+              <GenerationSection
+                install={install}
+                onSaved={setInstall}
+                onDirty={onGenerationDirty}
+                onReload={load}
+              />
+            </Pane>
+          ) : section === "generation" ? (
+            waiting
+          ) : null}
+          {install ? (
+            <Pane visible={section === "search"}>
               <SearchSection install={install} onSaved={setInstall} onDirty={onSearchDirty} />
-            </div>
+            </Pane>
           ) : section === "search" ? (
             waiting
           ) : null}
-          <div className={cn(section !== "project" && "hidden")}>
+          {install ? (
+            <Pane visible={section === "deepCheck"}>
+              <DeepCheckSection install={install} />
+            </Pane>
+          ) : section === "deepCheck" ? (
+            waiting
+          ) : null}
+          {install ? (
+            <Pane visible={section === "effective"}>
+              <EffectiveConfigSection install={install} />
+            </Pane>
+          ) : section === "effective" ? (
+            waiting
+          ) : null}
+          <Pane visible={section === "project"}>
             <ProjectSection onDirty={onProjectDirty} />
-          </div>
-          <div className={cn(section !== "diagnostics" && "hidden")}>
+          </Pane>
+          <Pane visible={section === "diagnostics"}>
             <DiagnosticsSection onOpenSettings={setSection} />
-          </div>
-          <div className={cn(section !== "appearance" && "hidden")}>
+          </Pane>
+          <Pane visible={section === "appearance"}>
             <AppearanceSection />
-          </div>
+          </Pane>
         </div>
       </div>
 

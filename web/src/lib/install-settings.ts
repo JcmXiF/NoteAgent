@@ -18,8 +18,70 @@ export type LlmSettings = {
 
 export type SearchProvider = "none" | "brave" | "serper";
 
+/** How a search is resolved: native first when possible, or external only. */
+export type SearchMode = "auto" | "native" | "external";
+
+/** Where a resolved value came from, as the core reports it. */
+export type ValueSource = "env" | "config" | "keychain" | "default";
+
+/** A source the core named, or the default when it named none this build knows. */
+export function valueSource(
+  sources: Record<string, string>,
+  field: string,
+): ValueSource {
+  const source = sources[field];
+  return source === "env" || source === "config" || source === "keychain"
+    ? source
+    : "default";
+}
+
+/** The canonical ids the core accepts for a connection profile. */
+export type ProviderId = "openai" | "anthropic" | "deepseek" | "qwen" | "ollama" | "custom";
+
+export type ProfileSettings = {
+  id: string;
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  active: boolean;
+  /** A key is stored for this profile; the key itself is never sent back. */
+  apiKeySet: boolean;
+};
+
+export type ProfileDraft = {
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  clearApiKey: boolean;
+};
+
+export type ProfileCreatePatch = {
+  name: string;
+  provider: ProviderId;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  revision: number;
+};
+
+export type ProfileUpdatePatch = {
+  revision: number;
+  name?: string;
+  provider?: ProviderId;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
 export type SearchSettings = {
   provider: SearchProvider;
+  mode: SearchMode;
+  /** Whether this build has a native adapter, as the core reports it. */
+  nativeAvailable: boolean;
   apiKeySet: boolean;
   timeoutSeconds: number;
   country: string;
@@ -35,13 +97,26 @@ export type InstallSettings = {
   extractMedia: boolean;
   locked: string[];
   invalid: string[];
+  /** The document revision this answer was read from. A save carries it back. */
+  revision: number;
+  profiles: ProfileSettings[];
+  activeProfileId: string | null;
+  /** False when the OS credential store cannot be used: keys can be neither read nor saved. */
+  keychainAvailable: boolean;
+  /** Where each value came from, keyed by the field id the core reports. */
+  sources: Record<string, string>;
+  configPath: string;
+  schemaVersion: number;
 };
 
-export type LlmDraft = {
-  baseUrl: string;
-  apiKey: string;
-  clearApiKey: boolean;
-  model: string;
+/** The generation values shared by every connection. */
+export type Generation = {
+  temperature: number;
+  maxTokens: number;
+  timeoutSeconds: number;
+};
+
+export type GenerationDraft = {
   temperature: string;
   maxTokens: string;
   timeoutSeconds: string;
@@ -49,6 +124,7 @@ export type LlmDraft = {
 
 export type SearchDraft = {
   provider: SearchProvider;
+  mode: SearchMode;
   apiKey: string;
   clearApiKey: boolean;
   timeoutSeconds: string;
@@ -62,7 +138,39 @@ export type SettingsPatch = {
   llm?: Record<string, unknown>;
   search?: Record<string, unknown>;
   extractMedia?: boolean;
+  /** The revision the form was built from; a stale one is refused with 409. */
+  revision?: number;
 };
+
+/** The capabilities the explicit deep check reports on. */
+export type DeepCheckName = "toolCalling" | "nativeSearch";
+
+export type DeepCheckItem = {
+  /** A capability name; a newer core may report one this build does not know. */
+  name: string;
+  ok: boolean;
+  /** A stable code with a sentence in the catalogs, when the check failed. */
+  code?: string;
+  /** Technical detail for the log; the screen shows the code's sentence. */
+  detail?: string;
+};
+
+export type DeepCheckResult = {
+  ok: boolean;
+  checks: DeepCheckItem[];
+};
+
+const DEEP_CHECK_LABELS: Record<DeepCheckName, string> = {
+  toolCalling: "settings.deepCheck.toolCalling",
+  nativeSearch: "settings.deepCheck.nativeSearch",
+};
+
+/** The catalog key for a capability, including one a newer core reports. */
+export function deepCheckLabelKey(name: string): string {
+  return (
+    DEEP_CHECK_LABELS[name as DeepCheckName] ?? "settings.deepCheck.unknown"
+  );
+}
 
 const LANG = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 
@@ -70,21 +178,83 @@ export function isLocked(locked: readonly string[], field: string): boolean {
   return locked.includes(field);
 }
 
-export function llmDraftFrom(llm: LlmSettings): LlmDraft {
+export function profileDraftFrom(profile: ProfileSettings): ProfileDraft {
   return {
-    baseUrl: llm.baseUrl,
+    name: profile.name,
+    provider: profile.provider,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
     apiKey: "",
     clearApiKey: false,
-    model: llm.model,
-    temperature: String(llm.temperature),
-    maxTokens: String(llm.maxTokens),
-    timeoutSeconds: String(llm.timeoutSeconds),
   };
+}
+
+function trimmedBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+/** The fields a draft changed. A blank key is absent, so the saved one stays. */
+function changedProfileFields(
+  draft: ProfileDraft,
+  profile: ProfileSettings,
+): Omit<ProfileUpdatePatch, "revision"> {
+  const changes: Omit<ProfileUpdatePatch, "revision"> = {};
+  if (draft.name.trim() !== profile.name) changes.name = draft.name.trim();
+  if (draft.provider !== profile.provider) changes.provider = draft.provider;
+  if (trimmedBaseUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
+  if (draft.model.trim() !== profile.model) changes.model = draft.model.trim();
+  if (draft.apiKey.trim()) changes.apiKey = draft.apiKey.trim();
+  else if (draft.clearApiKey) changes.clearApiKey = true;
+  return changes;
+}
+
+/** Whether the form holds something worth sending; a saved key is not in it. */
+export function profileDirty(draft: ProfileDraft, profile: ProfileSettings): boolean {
+  return Object.keys(changedProfileFields(draft, profile)).length > 0;
+}
+
+export function profileCreateDirty(draft: ProfileDraft): boolean {
+  return Boolean(
+    draft.name.trim() || draft.baseUrl.trim() || draft.model.trim() || draft.apiKey.trim(),
+  );
+}
+
+/** i18n keys for values the core would refuse on a profile save. */
+export function profileProblems(draft: ProfileDraft): string[] {
+  const problems: string[] = [];
+  if (!draft.name.trim()) problems.push("settings.invalid.name");
+  if (!validBaseUrl(draft.baseUrl)) problems.push("settings.invalid.baseUrl");
+  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
+  return problems;
+}
+
+export function profileCreatePatch(
+  draft: ProfileDraft,
+  revision: number,
+): ProfileCreatePatch {
+  return {
+    name: draft.name.trim(),
+    provider: draft.provider,
+    baseUrl: draft.baseUrl.trim(),
+    model: draft.model.trim(),
+    ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+    revision,
+  };
+}
+
+/** The revision makes a stale save a 409 instead of a silent overwrite. */
+export function profilePatch(
+  draft: ProfileDraft,
+  profile: ProfileSettings,
+  revision: number,
+): ProfileUpdatePatch {
+  return { revision, ...changedProfileFields(draft, profile) };
 }
 
 export function searchDraftFrom(search: SearchSettings, extractMedia: boolean): SearchDraft {
   return {
     provider: search.provider,
+    mode: search.mode,
     apiKey: "",
     clearApiKey: false,
     timeoutSeconds: String(search.timeoutSeconds),
@@ -93,6 +263,86 @@ export function searchDraftFrom(search: SearchSettings, extractMedia: boolean): 
     uiLang: search.uiLang,
     extractMedia,
   };
+}
+
+export function generationDraftFrom(generation: Generation): GenerationDraft {
+  return {
+    temperature: String(generation.temperature),
+    maxTokens: String(generation.maxTokens),
+    timeoutSeconds: String(generation.timeoutSeconds),
+  };
+}
+
+export function generationDirty(draft: GenerationDraft, saved: Generation): boolean {
+  return (
+    numberDirty(draft.temperature, saved.temperature) ||
+    integerDirty(draft.maxTokens, saved.maxTokens) ||
+    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds)
+  );
+}
+
+const GENERATION_FIELDS = [
+  {
+    key: "temperature",
+    min: 0,
+    max: 2,
+    integer: false,
+    problem: "settings.invalid.temperature",
+  },
+  {
+    key: "maxTokens",
+    min: 1,
+    max: 128_000,
+    integer: true,
+    problem: "settings.invalid.maxTokens",
+  },
+  {
+    key: "timeoutSeconds",
+    min: 5,
+    max: 600,
+    integer: false,
+    problem: "settings.invalid.timeout",
+  },
+] as const;
+
+type GenerationField = (typeof GENERATION_FIELDS)[number];
+
+function generationInRange(text: string, field: GenerationField): boolean {
+  return field.integer
+    ? integerInRange(text, field.min, field.max)
+    : numberInRange(text, field.min, field.max);
+}
+
+function generationChanged(
+  text: string,
+  saved: number,
+  field: GenerationField,
+): boolean {
+  return field.integer ? integerDirty(text, saved) : numberDirty(text, saved);
+}
+
+/** i18n keys for values the core would refuse on a generation save. */
+export function generationProblems(draft: GenerationDraft): string[] {
+  return GENERATION_FIELDS.filter(
+    (field) => !generationInRange(draft[field.key], field),
+  ).map((field) => field.problem);
+}
+
+/** Only the parameters that differ and are valid. */
+export function generationPatch(
+  draft: GenerationDraft,
+  saved: Generation,
+): Record<string, number> | null {
+  const patch: Record<string, number> = {};
+  for (const field of GENERATION_FIELDS) {
+    if (
+      generationChanged(draft[field.key], saved[field.key], field) &&
+      generationInRange(draft[field.key], field)
+    ) {
+      patch[field.key] = Number(draft[field.key].trim());
+    }
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 function validBaseUrl(value: string): boolean {
@@ -104,11 +354,6 @@ function validBaseUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function validModel(value: string): boolean {
-  const text = value.trim();
-  return Boolean(text) && text.length <= 200 && !/[\r\n]/.test(text);
 }
 
 function validSecret(value: string): boolean {
@@ -141,18 +386,6 @@ function validCountry(value: string): boolean {
   return text === "" || /^[A-Za-z]{2}$/.test(text);
 }
 
-/** i18n keys for fields the core would refuse. */
-export function llmProblems(draft: LlmDraft): string[] {
-  const problems: string[] = [];
-  if (!validBaseUrl(draft.baseUrl)) problems.push("settings.invalid.baseUrl");
-  if (!validModel(draft.model)) problems.push("settings.invalid.model");
-  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
-  if (!numberInRange(draft.temperature, 0, 2)) problems.push("settings.invalid.temperature");
-  if (!integerInRange(draft.maxTokens, 1, 128_000)) problems.push("settings.invalid.maxTokens");
-  if (!numberInRange(draft.timeoutSeconds, 5, 600)) problems.push("settings.invalid.timeout");
-  return problems;
-}
-
 export function searchProblems(draft: SearchDraft): string[] {
   const problems: string[] = [];
   if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
@@ -177,18 +410,6 @@ export function integerDirty(text: string, saved: number): boolean {
   return Number(text.trim()) !== saved;
 }
 
-export function llmDirty(draft: LlmDraft, saved: LlmSettings): boolean {
-  return (
-    draft.baseUrl.trim() !== saved.baseUrl ||
-    draft.model.trim() !== saved.model ||
-    draft.clearApiKey ||
-    Boolean(draft.apiKey.trim()) ||
-    numberDirty(draft.temperature, saved.temperature) ||
-    integerDirty(draft.maxTokens, saved.maxTokens) ||
-    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds)
-  );
-}
-
 export function searchDirty(
   draft: SearchDraft,
   saved: SearchSettings,
@@ -196,6 +417,7 @@ export function searchDirty(
 ): boolean {
   return (
     draft.provider !== saved.provider ||
+    draft.mode !== saved.mode ||
     draft.clearApiKey ||
     Boolean(draft.apiKey.trim()) ||
     numberDirty(draft.timeoutSeconds, saved.timeoutSeconds) ||
@@ -206,40 +428,15 @@ export function searchDirty(
   );
 }
 
-export function llmCanProbe(draft: LlmDraft, saved: LlmSettings): boolean {
-  if (llmProblems(draft).length > 0) return false;
-  if (draft.apiKey.trim()) return true;
-  if (draft.clearApiKey) return false;
-  return saved.apiKeySet;
-}
-
 export function searchCanProbe(draft: SearchDraft, saved: SearchSettings): boolean {
-  if (draft.provider === "none" || searchProblems(draft).length > 0) return false;
+  if (searchProblems(draft).length > 0) return false;
+  // A native search needs the model connection, not a search provider.
+  if (draft.mode === "native") return saved.nativeAvailable;
+  if (draft.mode === "auto" && saved.nativeAvailable) return true;
+  if (draft.provider === "none") return false;
   if (draft.apiKey.trim()) return true;
   if (draft.clearApiKey) return false;
   return saved.apiKeySet;
-}
-
-/** Only the fields that differ. A blank key is not sent, so the saved one stays. */
-export function llmPatch(draft: LlmDraft, saved: LlmSettings): Record<string, unknown> | null {
-  const llm: Record<string, unknown> = {};
-  if (draft.baseUrl.trim() !== saved.baseUrl) llm.baseUrl = draft.baseUrl.trim();
-  if (draft.model.trim() !== saved.model) llm.model = draft.model.trim();
-  if (draft.apiKey.trim()) llm.apiKey = draft.apiKey.trim();
-  else if (draft.clearApiKey) llm.clearApiKey = true;
-  if (numberDirty(draft.temperature, saved.temperature) && numberInRange(draft.temperature, 0, 2)) {
-    llm.temperature = Number(draft.temperature.trim());
-  }
-  if (integerDirty(draft.maxTokens, saved.maxTokens) && integerInRange(draft.maxTokens, 1, 128_000)) {
-    llm.maxTokens = Number(draft.maxTokens.trim());
-  }
-  if (
-    numberDirty(draft.timeoutSeconds, saved.timeoutSeconds) &&
-    numberInRange(draft.timeoutSeconds, 5, 600)
-  ) {
-    llm.timeoutSeconds = Number(draft.timeoutSeconds.trim());
-  }
-  return Object.keys(llm).length > 0 ? llm : null;
 }
 
 export function searchPatch(
@@ -250,6 +447,7 @@ export function searchPatch(
   const patch: SettingsPatch = {};
   const search: Record<string, unknown> = {};
   if (draft.provider !== saved.provider) search.provider = draft.provider;
+  if (draft.mode !== saved.mode) search.mode = draft.mode;
   if (draft.apiKey.trim()) search.apiKey = draft.apiKey.trim();
   else if (draft.clearApiKey) search.clearApiKey = true;
   if (

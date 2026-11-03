@@ -55,6 +55,8 @@ export type ResourceCard = {
   favicon: string;
   snippet: string;
   via: string;
+  /** Which search provider produced the result; absent for non-search cards. */
+  source?: string;
   why: string;
   intake?: string;
 };

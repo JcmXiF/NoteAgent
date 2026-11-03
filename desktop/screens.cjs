@@ -5,9 +5,9 @@
 //
 // They are local documents rather than the interface, because at both moments the
 // interface is exactly what is missing. The wording is product wording: no file
-// names, no commands, no stages. The one exception is the log location on the
-// failure screen, which is there because it is the only way a person can find out
-// what happened.
+// names, no commands, no stages. The failure screen is the exception: the log
+// location and the configuration facts are there because they are the only way a
+// person can find out what happened.
 
 const TEXT = {
   zh: {
@@ -17,6 +17,12 @@ const TEXT = {
     retry: "再试一次",
     logLabel: "日志",
     configLabel: "配置",
+    configMissing: "尚未创建",
+    configUnreadable: "这个文件无法读取",
+    schemaLabel: "配置版本",
+    revisionLabel: "修订号",
+    keychainLabel: "凭据存储",
+    keychainUnknown: "无法在此确认",
     reasons: {
       "core-missing": "本地引擎没有随应用一起安装。重新安装应用通常可以解决。",
       "core-exited": "本地引擎启动后立即停止。",
@@ -33,6 +39,12 @@ const TEXT = {
     retry: "Try again",
     logLabel: "Log",
     configLabel: "Settings",
+    configMissing: "not created yet",
+    configUnreadable: "This file cannot be read",
+    schemaLabel: "Schema version",
+    revisionLabel: "Revision",
+    keychainLabel: "Credential store",
+    keychainUnknown: "Not available on this screen",
     reasons: {
       "core-missing": "The local engine is not installed with this app. Reinstalling usually fixes it.",
       "core-exited": "The local engine stopped right after it started.",
@@ -110,9 +122,15 @@ function failureScreen({
   reason = "unknown",
   logPath = "",
   logTail = [],
-  configPath = "",
-  configMissing = false,
+  config = {},
 } = {}) {
+  const {
+    path: configPath = "",
+    missing: configMissing = false,
+    readable: configReadable = null,
+    schemaVersion = null,
+    revision = null,
+  } = config;
   const text = TEXT[language] ?? TEXT.en;
   const sentence = text.reasons[reason] || text.reasons.unknown;
   const tail = Array.isArray(logTail) && logTail.length
@@ -122,10 +140,24 @@ function failureScreen({
     ? `<p class="detail">${escapeHtml(text.logLabel)}: ` +
       `<span class="path">${escapeHtml(logPath)}</span></p>`
     : "";
-  const config = configMissing && configPath
+  const configLine = configPath
     ? `<p class="detail">${escapeHtml(text.configLabel)}: ` +
-      `<span class="path">${escapeHtml(configPath)}</span></p>`
+      `<span class="path">${escapeHtml(configPath)}</span>` +
+      (configMissing ? ` (${escapeHtml(text.configMissing)})` : "") +
+      `</p>`
     : "";
+  const unreadable = configReadable === false
+    ? `<p class="detail">${escapeHtml(text.configUnreadable)}</p>`
+    : "";
+  const schema = Number.isInteger(schemaVersion)
+    ? `<p class="detail">${escapeHtml(text.schemaLabel)}: ${schemaVersion}</p>`
+    : "";
+  const docRevision = Number.isInteger(revision)
+    ? `<p class="detail">${escapeHtml(text.revisionLabel)}: ${revision}</p>`
+    : "";
+  const keychain =
+    `<p class="detail">${escapeHtml(text.keychainLabel)}: ` +
+    `${escapeHtml(text.keychainUnknown)}</p>`;
   return asDataUrl(
     asDocument(
       text.failed,
@@ -133,7 +165,11 @@ function failureScreen({
       `<h1>${escapeHtml(text.failed)}</h1>
 <p class="detail">${escapeHtml(sentence)}</p>
 ${log}
-${config}
+${configLine}
+${unreadable}
+${schema}
+${docRevision}
+${keychain}
 ${tail}
 <button type="button" id="retry">${escapeHtml(text.retry)}</button>
 <script>

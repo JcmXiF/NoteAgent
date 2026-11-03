@@ -5,8 +5,15 @@
  * leaves the field blank keeps the one already stored.
  */
 
-import { getJson, postJson, putJson } from "@/lib/api/client";
-import type { InstallSettings, SettingsPatch } from "@/lib/install-settings";
+import { deleteJson, getJson, postJson, putJson } from "@/lib/api/client";
+import type {
+  DeepCheckResult,
+  InstallSettings,
+  ProfileCreatePatch,
+  ProfileUpdatePatch,
+  ProviderId,
+  SettingsPatch,
+} from "@/lib/install-settings";
 
 export type ProjectBrief = {
   text: string;
@@ -23,6 +30,52 @@ export function saveSettings(patch: SettingsPatch): Promise<InstallSettings> {
   return putJson<InstallSettings>("/settings", patch);
 }
 
+/** A new connection; the payload leaves a blank key out rather than sending it. */
+export function createProfile(
+  patch: ProfileCreatePatch,
+): Promise<InstallSettings> {
+  return postJson<InstallSettings>("/settings/profiles", patch);
+}
+
+/** The fields a draft actually changed; the revision makes a stale save a 409. */
+export function updateProfile(
+  id: string,
+  patch: ProfileUpdatePatch,
+): Promise<InstallSettings> {
+  return putJson<InstallSettings>(
+    `/settings/profiles/${encodeURIComponent(id)}`,
+    patch,
+  );
+}
+
+export function deleteProfile(id: string, revision: number): Promise<InstallSettings> {
+  return deleteJson<InstallSettings>(
+    `/settings/profiles/${encodeURIComponent(id)}?revision=${revision}`,
+  );
+}
+
+export function activateProfile(id: string, revision: number): Promise<InstallSettings> {
+  return postJson<InstallSettings>(
+    `/settings/profiles/${encodeURIComponent(id)}/activate`,
+    { revision },
+  );
+}
+
+export type ModelListPatch = {
+  baseUrl?: string;
+  provider?: ProviderId;
+  apiKey?: string;
+  /** Use this saved profile's key, when the address still belongs to it. */
+  profileId?: string;
+};
+
+/** Asks an endpoint for its model names; a suggestion, never a requirement. */
+export function listModels(
+  patch: ModelListPatch,
+): Promise<{ models: string[] }> {
+  return postJson<{ models: string[] }>("/settings/models", patch);
+}
+
 export function probeModel(patch: Record<string, unknown>): Promise<{ ok: true }> {
   return postJson<{ ok: true }>("/settings/llm/probe", patch);
 }
@@ -31,6 +84,11 @@ export function probeSearch(
   patch: Record<string, unknown>,
 ): Promise<{ ok: true; count: number }> {
   return postJson<{ ok: true; count: number }>("/settings/search/probe", patch);
+}
+
+/** The explicit check: tool calling, then native search when it is in use. */
+export function runDeepCheck(): Promise<DeepCheckResult> {
+  return postJson<DeepCheckResult>("/settings/deep-check", {});
 }
 
 export function fetchBrief(project: string): Promise<ProjectBrief> {
