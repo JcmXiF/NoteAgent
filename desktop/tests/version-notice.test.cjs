@@ -3,7 +3,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { showAbout, showManualResult } = require("../version-notice.cjs");
+const {
+  showAbout,
+  showAvailableNotice,
+  showManualResult,
+} = require("../version-notice.cjs");
 
 const DOWNLOAD_URL = "https://github.com/JcmXiF/NoteAgent/releases/tag/v0.2.0";
 
@@ -141,6 +145,144 @@ test("a failed check shows a short message and opens nothing", async () => {
     assert.deepEqual(options.buttons, [ok]);
     assert.deepEqual(opened, []);
   }
+});
+
+function fakeNotification({ supported = true } = {}) {
+  const instances = [];
+  class FakeNotification {
+    static isSupported() {
+      return supported;
+    }
+
+    constructor(options) {
+      this.options = options;
+      this.handlers = {};
+      this.shown = false;
+      instances.push(this);
+    }
+
+    on(event, handler) {
+      (this.handlers[event] ??= []).push(handler);
+    }
+
+    show() {
+      this.shown = true;
+    }
+
+    click() {
+      for (const handler of this.handlers.click ?? []) handler();
+    }
+  }
+  FakeNotification.instances = instances;
+  return FakeNotification;
+}
+
+test("an automatic update appears as a native notification", async () => {
+  const Notification = fakeNotification();
+  const dialog = fakeDialog(0);
+  const opened = [];
+
+  await showAvailableNotice({
+    result: available(),
+    language: "zh",
+    Notification,
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  assert.equal(Notification.instances.length, 1);
+  const notification = Notification.instances[0];
+  assert.match(notification.options.title, /0\.2\.0/);
+  assert.match(notification.options.body, /Faster startup and fewer crashes\./);
+  assert.equal(notification.shown, true);
+  assert.equal(dialog.calls.length, 0);
+
+  notification.click();
+  assert.deepEqual(opened, [DOWNLOAD_URL]);
+});
+
+test("without native notifications the update falls back to a dialog", async () => {
+  const Notification = fakeNotification({ supported: false });
+  const dialog = fakeDialog(0);
+  const opened = [];
+
+  await showAvailableNotice({
+    result: available(),
+    language: "zh",
+    Notification,
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  assert.equal(Notification.instances.length, 0);
+  assert.equal(dialog.calls.length, 1);
+  assert.deepEqual(dialog.calls[0].buttons, ["打开下载页", "稍后"]);
+  assert.deepEqual(opened, [DOWNLOAD_URL]);
+});
+
+test("a shell with no Notification at all falls back to the dialog", async () => {
+  const dialog = fakeDialog(1);
+  const opened = [];
+
+  await showAvailableNotice({
+    result: available(),
+    language: "en",
+    Notification: undefined,
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  assert.equal(dialog.calls.length, 1);
+  assert.deepEqual(dialog.calls[0].buttons, ["Open download page", "Later"]);
+  assert.deepEqual(opened, []);
+});
+
+test("the notification body keeps the notes to a couple of lines", async () => {
+  const Notification = fakeNotification();
+  const notes = "First line.\nSecond line.\nA third line nobody reads in a toast.";
+
+  await showAvailableNotice({
+    result: available({ notes }),
+    language: "en",
+    Notification,
+    dialog: fakeDialog(0),
+    openExternal: async () => {},
+  });
+
+  const body = Notification.instances[0].options.body;
+  assert.match(body, /First line\./);
+  assert.match(body, /Second line\./);
+  assert.doesNotMatch(body, /three|third/i);
+});
+
+test("a short notification still warns about installing", async () => {
+  const Notification = fakeNotification();
+
+  await showAvailableNotice({
+    result: available(),
+    language: "zh",
+    Notification,
+    dialog: fakeDialog(0),
+    openExternal: async () => {},
+  });
+
+  assert.match(Notification.instances[0].options.body, /Windows 可能提示未知发布者/);
+});
+
+test("a long changelog keeps the notification short", async () => {
+  const Notification = fakeNotification();
+
+  await showAvailableNotice({
+    result: available({ notes: "x".repeat(4000) }),
+    language: "zh",
+    Notification,
+    dialog: fakeDialog(0),
+    openExternal: async () => {},
+  });
+
+  const body = Notification.instances[0].options.body;
+  assert.ok(body.length < 300, `notification body was ${body.length} characters`);
+  assert.doesNotMatch(body, /Windows 可能提示未知发布者/);
 });
 
 test("About shows the version that is running", async () => {

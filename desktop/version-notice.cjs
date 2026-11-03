@@ -11,6 +11,11 @@
 // The app never downloads, runs, or installs an update itself.
 
 const NOTES_LIMIT = 500;
+// A toast is read in passing, so it gets the opening of the notes rather than
+// the changelog the dialog can show.
+const NOTICE_LINES = 2;
+const NOTICE_LIMIT = 160;
+const NOTICE_BODY_LIMIT = 240;
 
 const TEXT = {
   zh: {
@@ -64,6 +69,77 @@ function plainDialog(title, message, ok) {
   };
 }
 
+/**
+ * The first lines of the release notes, and whether anything was left out.
+ *
+ * A notification has room for a sentence or two. Returning the flag lets the
+ * caller leave the warning out when the body is already long, instead of making
+ * an already-truncated toast longer still.
+ */
+function notificationSummary(notes) {
+  const lines = String(notes || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, NOTICE_LINES)
+    .join("\n");
+  if (lines.length <= NOTICE_LIMIT) return { text: lines, truncated: false };
+  return { text: `${lines.slice(0, NOTICE_LIMIT).trimEnd()}…`, truncated: true };
+}
+
+function notificationBody(notes, text) {
+  const summary = notificationSummary(notes);
+  if (!summary.text) return text.warning;
+  const withWarning = `${summary.text}\n\n${text.warning}`;
+  // The warning stays in every dialog. In a notification it is kept only when
+  // the notes are short enough that the whole body still reads at a glance.
+  if (!summary.truncated && withWarning.length <= NOTICE_BODY_LIMIT) return withWarning;
+  return summary.text;
+}
+
+async function openDownload(openExternal, url) {
+  try {
+    await openExternal(url);
+  } catch {
+    // The browser is outside this app's control; a dialog already told the
+    // user what happened, and a failure to open one cannot improve on it.
+  }
+}
+
+/**
+ * An automatic check that found something: a native notification when the
+ * platform has them, the same dialog a manual check would show when it does not.
+ *
+ * Clicking the notification opens the release page and nothing else. The shell
+ * never downloads or runs an installer.
+ */
+async function showAvailableNotice({
+  result,
+  language,
+  Notification,
+  dialog,
+  openExternal,
+}) {
+  const text = textFor(language);
+  if (
+    Notification &&
+    typeof Notification.isSupported === "function" &&
+    Notification.isSupported()
+  ) {
+    const notification = new Notification({
+      title: text.available(result.version),
+      body: notificationBody(result.notes, text),
+    });
+    notification.on("click", () => {
+      void openDownload(openExternal, result.url);
+    });
+    notification.show();
+    return;
+  }
+
+  await showManualResult({ result, language, dialog, openExternal });
+}
+
 async function showManualResult({ result, language, dialog, openExternal }) {
   const text = textFor(language);
 
@@ -91,12 +167,7 @@ async function showManualResult({ result, language, dialog, openExternal }) {
   });
 
   if (answer && answer.response === 0) {
-    try {
-      await openExternal(result.url);
-    } catch {
-      // The browser is outside this app's control; a dialog already told the
-      // user what happened, and a failure to open one cannot improve on it.
-    }
+    await openDownload(openExternal, result.url);
   }
 }
 
@@ -110,4 +181,4 @@ async function showAbout({ appVersion, language, dialog }) {
   );
 }
 
-module.exports = { showAbout, showManualResult };
+module.exports = { showAbout, showAvailableNotice, showManualResult };
