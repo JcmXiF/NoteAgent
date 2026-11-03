@@ -53,6 +53,10 @@ def difference_rows(text: str) -> dict[str, str]:
     return rows
 
 
+@unittest.skipUnless(
+    NOTE.is_file(),
+    "docs/provenance.md is kept local; a CI checkout does not contain it",
+)
 class ProvenanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = NOTE.read_text(encoding="utf-8")
