@@ -25,6 +25,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
+import { checkRuntimeVersion, readDesktopVersion, stampCoreVersion } from "./version.mjs";
+
 // The last 3.12 release python.org publishes Windows binaries for; later 3.12
 // releases are source-only. The ABI is cp312 either way.
 const PYTHON_VERSION = "3.12.10";
@@ -204,6 +206,15 @@ async function main() {
   writeFileSync(path.join(buildRoot, "wheels.txt"), wheels.join("\n") + "\n", "utf8");
 
   copySources();
+
+  // The core reports the app's version to the interface, and the app's version
+  // is desktop/package.json. The stamp goes on the copy only: building must not
+  // rewrite the checkout it runs from.
+  const runtimeInit = path.join(coreRoot, "src", "noteagent", "__init__.py");
+  const appVersion = readDesktopVersion(path.join(repoRoot, "desktop", "package.json"));
+  stampCoreVersion(runtimeInit, appVersion);
+  const runtimeVersion = checkRuntimeVersion(runtimeInit);
+  console.log(`core version: ${runtimeVersion} (from desktop/package.json)`);
 
   // Every package the core imports directly. `pptx` pulls Pillow in on import,
   // so a separate `PIL` line would only repeat that.

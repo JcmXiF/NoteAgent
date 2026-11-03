@@ -70,6 +70,9 @@ jobs:
         working-directory: desktop
         run: npm test
 
+      - name: Test the release scripts
+        run: node --test scripts/*.test.mjs
+
       - name: Resolve version
         id: version
         shell: bash
@@ -101,8 +104,14 @@ jobs:
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "version=$version tag=v$version publish=$publish"
 
+      - name: Check the source versions
+        run: node scripts/version.mjs check
+
       - name: Build the installer
         run: node scripts/package.mjs
+
+      - name: Check the built runtime version
+        run: node scripts/version.mjs check-runtime build/runtime/core/src/noteagent/__init__.py
 
       - name: Check the installer exists
         shell: bash
@@ -116,6 +125,24 @@ jobs:
           fi
           ls -l "$ASSET"
 
+      - name: Compose the release notes
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The body is the CHANGELOG section for this version plus the fixed
+          # install notice. A version without a section fails here, before any
+          # draft is created or changed.
+          node scripts/release-notes.mjs "$VERSION" > release-notes.md
+          {
+            echo
+            echo "Windows 可能提示未知发布者；请选择「更多信息」→「仍要运行」后再继续。"
+            echo "安装前请先退出 NoteAgent。"
+          } >> release-notes.md
+          cat release-notes.md
+
       - name: Create or update the draft release
         shell: bash
         env:
@@ -127,14 +154,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Placeholder: ticket 04 replaces this with the matching CHANGELOG.md
-          # section.
-          body="$(printf '%s\n' \
-            "## NoteAgent $VERSION" \
-            "" \
-            "Release notes will come from CHANGELOG.md (wired in ticket 04)." \
-            "" \
-            "Windows 可能提示未知发布者；请先退出 NoteAgent 再安装。")"
+          # Composed above from CHANGELOG.md and the fixed install notice. A
+          # version without a section never reaches this step.
+          body="$(cat release-notes.md)"
 
           # The by-tag endpoint hides drafts, so a draft has to be found by
           # listing releases. The oldest matching draft is updated; a published
