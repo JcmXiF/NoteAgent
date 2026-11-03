@@ -1,0 +1,159 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const { showAbout, showManualResult } = require("../version-notice.cjs");
+
+const DOWNLOAD_URL = "https://github.com/JcmXiF/NoteAgent/releases/tag/v0.2.0";
+
+function fakeDialog(response = 0) {
+  const calls = [];
+  return {
+    calls,
+    showMessageBox: async (options) => {
+      calls.push(options);
+      return { response };
+    },
+  };
+}
+
+function available(overrides = {}) {
+  return {
+    kind: "available",
+    version: "0.2.0",
+    currentVersion: "0.1.0",
+    notes: "Faster startup and fewer crashes.",
+    url: DOWNLOAD_URL,
+    ...overrides,
+  };
+}
+
+test("an available update shows its version, notes and a download button", async () => {
+  const dialog = fakeDialog(0);
+  const opened = [];
+
+  await showManualResult({
+    result: available(),
+    language: "zh",
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  assert.equal(dialog.calls.length, 1);
+  const options = dialog.calls[0];
+  assert.match(options.message, /0\.2\.0/);
+  assert.match(options.detail, /Faster startup and fewer crashes\./);
+  assert.match(options.detail, /Windows 可能提示未知发布者/);
+  assert.deepEqual(options.buttons, ["打开下载页", "稍后"]);
+  assert.deepEqual(opened, [DOWNLOAD_URL]);
+});
+
+test("the English dialog carries the same warning", async () => {
+  const dialog = fakeDialog(0);
+  const opened = [];
+
+  await showManualResult({
+    result: available(),
+    language: "en",
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  const options = dialog.calls[0];
+  assert.match(options.message, /0\.2\.0/);
+  assert.match(options.detail, /Faster startup and fewer crashes\./);
+  assert.match(options.detail, /unknown publisher/);
+  assert.match(options.detail, /quit NoteAgent before installing/i);
+  assert.deepEqual(options.buttons, ["Open download page", "Later"]);
+  assert.deepEqual(opened, [DOWNLOAD_URL]);
+});
+
+test("choosing Later leaves the browser alone", async () => {
+  const dialog = fakeDialog(1);
+  const opened = [];
+
+  await showManualResult({
+    result: available(),
+    language: "en",
+    dialog,
+    openExternal: async (url) => opened.push(url),
+  });
+
+  assert.deepEqual(opened, []);
+});
+
+test("a long release note is shortened to a summary", async () => {
+  const dialog = fakeDialog(1);
+  const notes = "x".repeat(4000);
+
+  await showManualResult({
+    result: available({ notes }),
+    language: "zh",
+    dialog,
+    openExternal: async () => {},
+  });
+
+  const options = dialog.calls[0];
+  assert.ok(options.detail.length < 1000, "the dialog got the whole changelog");
+  assert.match(options.detail, /…/);
+});
+
+test("the latest version says so instead of offering a download", async () => {
+  for (const [language, expected, ok] of [
+    ["zh", "已是最新版本 v0.1.0", "确定"],
+    ["en", "Already the latest version v0.1.0", "OK"],
+  ]) {
+    const dialog = fakeDialog(0);
+    const opened = [];
+
+    await showManualResult({
+      result: { kind: "none", currentVersion: "0.1.0" },
+      language,
+      dialog,
+      openExternal: async (url) => opened.push(url),
+    });
+
+    const options = dialog.calls[0];
+    assert.equal(options.message, expected);
+    assert.deepEqual(options.buttons, [ok]);
+    assert.deepEqual(opened, []);
+  }
+});
+
+test("a failed check shows a short message and opens nothing", async () => {
+  for (const [language, expected, ok] of [
+    ["zh", "无法检查更新（网络或 API 错误），请稍后再试。", "确定"],
+    ["en", "Couldn't check for updates (network or API error). Try again later.", "OK"],
+  ]) {
+    const dialog = fakeDialog(0);
+    const opened = [];
+
+    await showManualResult({
+      result: { kind: "error", reason: "network" },
+      language,
+      dialog,
+      openExternal: async (url) => opened.push(url),
+    });
+
+    const options = dialog.calls[0];
+    assert.equal(options.message, expected);
+    assert.deepEqual(options.buttons, [ok]);
+    assert.deepEqual(opened, []);
+  }
+});
+
+test("About shows the version that is running", async () => {
+  for (const [language, title] of [
+    ["zh", "关于 NoteAgent"],
+    ["en", "About NoteAgent"],
+  ]) {
+    const dialog = fakeDialog(0);
+
+    await showAbout({ appVersion: "0.1.0", language, dialog });
+
+    const options = dialog.calls[0];
+    assert.equal(options.title, title);
+    assert.match(options.message, /NoteAgent v0\.1\.0/);
+  }
+});

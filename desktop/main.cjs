@@ -23,7 +23,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, net, session, shell } = require("electron");
 const { createGuestShell } = require("./guest-shell.cjs");
 const { textFor } = require("./guest-text.cjs");
 const { CoreMissingError, coreLaunch, modeFor } = require("./core-runtime.cjs");
@@ -33,6 +33,8 @@ const { languageFromLocale } = require("./locale.cjs");
 const { menuTemplate } = require("./menu.cjs");
 const { bootScreen, failureScreen } = require("./screens.cjs");
 const { makeIsUiOrigin } = require("./ui-origin.cjs");
+const { checkForUpdates } = require("./version-checker.cjs");
+const { showAbout, showManualResult } = require("./version-notice.cjs");
 const { openLogFd, rotateOnStart, tailLines, writeLine } = require("./logs.cjs");
 const paths = require("./paths.cjs");
 
@@ -431,6 +433,47 @@ function attachUiNavigationGuard(win) {
   });
 }
 
+// Electron's network stack follows the system proxy, which is what a corporate
+// machine expects; Node's fetch is the fallback when the shell runs without it.
+function githubFetch(url, options) {
+  if (net && typeof net.fetch === "function") return net.fetch(url, options);
+  return fetch(url, options);
+}
+
+// The dialog belongs to the window when there is one, so it stays attached to
+// the app instead of floating over another program.
+function showMessageBox(options) {
+  if (uiWindow && !uiWindow.isDestroyed()) {
+    return dialog.showMessageBox(uiWindow, options);
+  }
+  return dialog.showMessageBox(options);
+}
+
+const SHELL_DIALOG = { showMessageBox };
+
+// A manual check always ends in a dialog: the person asked a question and is
+// owed an answer, including when the answer is that the check failed.
+async function checkForUpdatesManually() {
+  let result;
+  try {
+    result = await checkForUpdates({
+      fetch: githubFetch,
+      appVersion: app.getVersion(),
+      logger: log,
+    });
+  } catch (err) {
+    log(`update check failed reason=unexpected ${err && err.message ? err.message : err}`);
+    result = { kind: "error", reason: "unexpected" };
+  }
+  log(`update check result=${result.kind}${result.reason ? ` reason=${result.reason}` : ""}`);
+  await showManualResult({
+    result,
+    language: LANGUAGE,
+    dialog: SHELL_DIALOG,
+    openExternal: (url) => shell.openExternal(url),
+  });
+}
+
 function buildMenu() {
   const actions = {
     reloadInterface: () => {
@@ -443,6 +486,15 @@ function buildMenu() {
     openSettings: () => void shell.openPath(paths.configHome()),
     openLogs: () => void shell.openPath(paths.logsDir()),
     openBrowse: () => sendToUi("desktop:show-browse"),
+    // The version is read when the entry is chosen, not when the menu is built:
+    // building the menu must not depend on the app being ready.
+    checkForUpdates: () => void checkForUpdatesManually(),
+    showAbout: () =>
+      void showAbout({
+        appVersion: app.getVersion(),
+        language: LANGUAGE,
+        dialog: SHELL_DIALOG,
+      }),
   };
   return Menu.buildFromTemplate(menuTemplate(LANGUAGE, actions));
 }
