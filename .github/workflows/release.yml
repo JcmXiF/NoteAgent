@@ -3,10 +3,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    # TEMPORARY (ticket 02 dry run): the release workflow lives on a feature
-    # branch before it reaches main, so the branch's own push exercises it.
-    # Removed before the branch is merged.
-    branches: ["ticket/02-release-workflow"]
   workflow_dispatch:
     inputs:
       publish:
