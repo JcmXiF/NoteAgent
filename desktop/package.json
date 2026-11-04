@@ -1,7 +1,7 @@
 {
   "name": "noteagent-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop window for NoteAgent: startup screens and a browser for signing in to pages you keep.",
   "author": "JcmXIF",
   "main": "main.cjs",
