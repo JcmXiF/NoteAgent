@@ -1,0 +1,229 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release instead of leaving it as a draft
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# A push that is replaced by a newer one has nothing left to release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Electron 44 requires Node >=22.12, and `node --test` expands the
+          # test-file glob from Node 22 on.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the core
+        run: pip install -e ".[api]"
+
+      - name: Test the core
+        run: python -m unittest discover -s tests
+
+      - name: Install the interface
+        working-directory: web
+        run: npm ci
+
+      - name: Check the interface
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm test
+          npm run lint
+          npm run build
+
+      - name: Install the shell
+        working-directory: desktop
+        # No --ignore-scripts: packaging needs the Electron binary that the
+        # install script downloads.
+        run: npm ci
+
+      - name: Test the shell
+        working-directory: desktop
+        run: npm test
+
+      - name: Test the release scripts
+        run: node --test scripts/*.test.mjs
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # The same parser the app uses decides which versions are releasable;
+          # a tag ref must be exactly v<version>.
+          version="$(node scripts/version.mjs check-tag "$REF_TYPE" "$REF_NAME")"
+
+          # Tag pushes publish; a manual run publishes only when asked.
+          publish=false
+          if [[ "$REF_TYPE" == "tag" || "${INPUT_PUBLISH:-false}" == "true" ]]; then
+            publish=true
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "version=$version tag=v$version publish=$publish"
+
+      - name: Check the source versions
+        run: node scripts/version.mjs check
+
+      - name: Build the installer
+        run: node scripts/package.mjs
+
+      - name: Check the built runtime version
+        run: node scripts/version.mjs check-runtime build/runtime/core/src/noteagent/__init__.py
+
+      - name: Check the installer exists
+        shell: bash
+        env:
+          ASSET: build/installer/NoteAgent-${{ steps.version.outputs.version }}-x64.exe
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$ASSET" ]]; then
+            echo "::error::expected the installer at $ASSET"
+            exit 1
+          fi
+          ls -l "$ASSET"
+
+      - name: Compose the release notes
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The body is the CHANGELOG section for this version plus the fixed
+          # install notice. A version without a section fails here, before any
+          # draft is created or changed.
+          node scripts/release-notes.mjs "$VERSION" > release-notes.md
+          {
+            echo
+            echo "Windows 可能提示未知发布者；请选择「更多信息」→「仍要运行」后再继续。"
+            echo "安装前请先退出 NoteAgent。"
+          } >> release-notes.md
+          cat release-notes.md
+
+      - name: Create or update the draft release
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ASSET: build/installer/NoteAgent-${{ steps.version.outputs.version }}-x64.exe
+        run: |
+          set -euo pipefail
+
+          # Composed above from CHANGELOG.md and the fixed install notice. A
+          # version without a section never reaches this step.
+          body="$(cat release-notes.md)"
+
+          # The by-tag endpoint hides drafts, so a draft has to be found by
+          # listing releases. The oldest matching draft is updated; a published
+          # release with the same tag is never touched.
+          releases="$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | [(.id|tostring), .tag_name, (.draft|tostring)] | @tsv')"
+
+          release_id=""
+          while IFS=$'\t' read -r id tag_name is_draft; do
+            [[ -z "${id:-}" ]] && continue
+            [[ "$tag_name" == "$TAG" ]] || continue
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::release $TAG already exists and is published; refusing to touch it"
+              exit 1
+            fi
+            if [[ -z "$release_id" || "$id" -lt "$release_id" ]]; then
+              release_id="$id"
+            fi
+          done <<< "$releases"
+
+          if [[ -n "$release_id" ]]; then
+            echo "Updating draft release $TAG ($release_id)"
+            # The tag name is repeated here: editing a draft whose tag does
+            # not exist yet otherwise rewrites it to an `untagged-` name.
+            gh api --method PATCH "repos/$REPO/releases/$release_id" \
+              -f tag_name="$TAG" \
+              -f name="NoteAgent $VERSION" \
+              -f body="$body" > /dev/null
+          else
+            echo "Creating draft release $TAG"
+            release_id="$(gh api --method POST "repos/$REPO/releases" \
+              -f tag_name="$TAG" \
+              -f name="NoteAgent $VERSION" \
+              -f body="$body" \
+              -F draft=true \
+              -F prerelease=false --jq '.id')"
+          fi
+
+          # Upload against the release id, not the tag: a tag lookup could
+          # land on a different draft if more than one carries the tag.
+          asset_name="$(basename "$ASSET")"
+          existing_asset="$(gh api "repos/$REPO/releases/$release_id/assets?per_page=100" \
+            --jq ".[] | select(.name == \"$asset_name\") | .id" | head -n 1)"
+          if [[ -n "$existing_asset" ]]; then
+            echo "Replacing existing asset $asset_name ($existing_asset)"
+            gh api --method DELETE "repos/$REPO/releases/assets/$existing_asset" > /dev/null
+          fi
+
+          upload_url="$(gh api "repos/$REPO/releases/$release_id" \
+            --jq '.upload_url' | sed 's/{.*//')"
+          echo "Uploading $ASSET to $TAG ($release_id)"
+          gh api --method POST \
+            -H "Content-Type: application/octet-stream" \
+            --input "$ASSET" \
+            "$upload_url?name=$asset_name" > /dev/null
+
+          count="$(gh api "repos/$REPO/releases/$release_id/assets?per_page=100" \
+            --jq "[.[] | select(.name == \"$asset_name\")] | length")"
+          if [[ "$count" != "1" ]]; then
+            echo "::error::asset $asset_name is not attached to release $release_id"
+            exit 1
+          fi
+
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+        # A by-tag lookup does not see drafts, so publish by the id that was
+        # just created or updated.
+        run: gh api --method PATCH "repos/$REPO/releases/$RELEASE_ID" -F draft=false

@@ -27,6 +27,9 @@ const LABELS = {
     forceReload: "强制重新加载",
     devTools: "开发者工具",
     fullscreen: "全屏",
+    help: "帮助",
+    checkUpdates: "检查更新…",
+    about: "关于 NoteAgent",
   },
   en: {
     notebook: "Notebook",
@@ -42,6 +45,9 @@ const LABELS = {
     forceReload: "Force reload",
     devTools: "Developer tools",
     fullscreen: "Full screen",
+    help: "Help",
+    checkUpdates: "Check for updates…",
+    about: "About NoteAgent",
   },
 };
 
@@ -80,6 +86,16 @@ function menuTemplate(language, actions) {
         { role: "toggleDevTools", label: text.devTools },
         { type: "separator" },
         { role: "togglefullscreen", label: text.fullscreen },
+      ],
+    },
+    // Help is last because that is where Windows applications keep it. About
+    // gives a bug report its version; the check is the one update path a
+    // person can ask for.
+    {
+      label: text.help,
+      submenu: [
+        { label: text.checkUpdates, click: actions.checkForUpdates },
+        { label: text.about, click: actions.showAbout },
       ],
     },
   ];

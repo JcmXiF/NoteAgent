@@ -15,6 +15,8 @@ function actions() {
     openSettings: noop,
     openLogs: noop,
     openBrowse: noop,
+    checkForUpdates: noop,
+    showAbout: noop,
   };
 }
 
@@ -39,11 +41,25 @@ test("the menu offers the folders the app cannot open for you", () => {
   const text = labels("en");
   const flat = JSON.stringify(menuTemplate("en", actions()));
 
-  for (const name of [text.notebook, text.file, text.browse, text.view]) {
+  for (const name of [text.notebook, text.file, text.browse, text.view, text.help]) {
     assert.ok(flat.includes(name), `missing top-level entry ${name}`);
   }
   for (const name of [text.openNotes, text.openSettings, text.openLogs]) {
     assert.ok(flat.includes(name), `missing folder entry ${name}`);
+  }
+});
+
+test("Help ends the menu with a manual check and the version", () => {
+  for (const language of ["zh", "en"]) {
+    const text = labels(language);
+    const template = menuTemplate(language, actions());
+    const last = template[template.length - 1];
+
+    assert.equal(last.label, text.help);
+    assert.deepEqual(
+      last.submenu.map((item) => item.label),
+      [text.checkUpdates, text.about],
+    );
   }
 });
 
