@@ -1291,15 +1291,6 @@
         "noLog": "已开启自动重启，但未找到服务日志。",
         "goModel": "去配置模型"
       },
-      "check": {
-        "button": "检查更新",
-        "checking": "正在检查…",
-        "unconfigured": "此安装未配置更新来源。当前版本为 {{version}}。",
-        "available": "可用新版本 {{latest}}，当前为 {{current}}。",
-        "upToDate": "当前已是最新版本（{{version}}）。",
-        "download": "打开下载页",
-        "failed": "检查更新未完成。"
-      },
       "uptime": {
         "seconds": "{{count}} 秒",
         "minutes": "{{count}} 分钟",
@@ -1462,11 +1453,6 @@
         "profileNameNotFound": "这个连接已不存在，请刷新后重试。",
         "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
         "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
-      },
-      "update": {
-        "unreachable": "无法连接更新来源，请检查网络后重试。",
-        "badManifest": "更新来源的响应无法解析，可能尚未准备好。",
-        "badSource": "更新来源地址无效，需以 http:// 或 https:// 开头。"
       }
     }
   }

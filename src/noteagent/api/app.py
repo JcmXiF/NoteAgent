@@ -40,7 +40,6 @@ from noteagent.api.clips import get_clips_payload, put_clips_payload
 from noteagent.api.deep_search import iter_act_sse
 from noteagent.api.diagnostics import (
     MAX_TAIL_LINES,
-    check_update,
     diagnostics_payload,
     log_payload,
 )
@@ -600,10 +599,6 @@ def create_app() -> FastAPI:
         lines: int = Query(80, ge=1, le=MAX_TAIL_LINES),
     ) -> dict[str, object]:
         return log_payload(lines=lines)
-
-    @app.post("/api/diagnostics/update")
-    def diagnostics_update() -> dict[str, object]:
-        return check_update()
 
     @app.get("/api/settings")
     def settings_get() -> dict[str, object]:

@@ -81,7 +81,6 @@ without touching the saved settings.
 | `NOTEAGENT_HOME` | Where projects and notes live |
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
-| `NOTEAGENT_UPDATE_URL` | Where "check for updates" looks; unset means it never asks |
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
