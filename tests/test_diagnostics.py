@@ -183,7 +183,6 @@ class DiagnosticsPayloadTests(unittest.TestCase):
             env = {
                 diag.ENV_LOG_DIR: str(logs),
                 diag.ENV_SUPERVISED: "1",
-                diag.ENV_UPDATE_URL: "https://example.test/latest.json",
             }
             payload = self._payload(Path(tmp), env=env)
             self.assertTrue(payload["supervised"])
@@ -231,117 +230,6 @@ class LogPayloadTests(unittest.TestCase):
             self.assertEqual(len(payload["lines"]), diag.MAX_TAIL_LINES)
 
 
-class VersionTests(unittest.TestCase):
-    def test_a_plain_version(self) -> None:
-        self.assertEqual(diag.version_key("0.1.0"), (0, 1, 0))
-
-    def test_a_leading_v_and_a_short_form(self) -> None:
-        self.assertEqual(diag.version_key("v0.2"), (0, 2))
-
-    def test_a_pre_release_suffix_is_dropped(self) -> None:
-        self.assertEqual(diag.version_key("1.2.3-beta.1"), (1, 2, 3))
-        self.assertEqual(diag.version_key("1.2.3+build.7"), (1, 2, 3))
-
-    def test_anything_else_is_not_a_version(self) -> None:
-        for value in ("", "newest", "1..2", "1.2.x"):
-            with self.subTest(value=value):
-                with self.assertRaises(ValueError):
-                    diag.version_key(value)
-
-
-class UpdateCheckTests(unittest.TestCase):
-    def test_no_source_configured_is_an_answer_not_a_failure(self) -> None:
-        result = diag.check_update(env={})
-        self.assertEqual(result, {"configured": False, "current": __version__})
-
-    def test_a_newer_version_is_reported_with_its_notes(self) -> None:
-        manifest = {
-            "version": "9.9.9",
-            "notes": "Faster saves.",
-            "url": "https://example.test/download",
-        }
-        result = diag.check_update(
-            current="0.1.0",
-            manifest_url="https://example.test/latest.json",
-            fetch=lambda _url: manifest,
-        )
-        self.assertTrue(result["available"])
-        self.assertEqual(result["latest"], "9.9.9")
-        self.assertEqual(result["notes"], "Faster saves.")
-        self.assertEqual(result["url"], "https://example.test/download")
-        self.assertEqual(result["current"], "0.1.0")
-
-    def test_the_same_version_is_not_newer(self) -> None:
-        result = diag.check_update(
-            current="0.1.0",
-            manifest_url="https://example.test/latest.json",
-            fetch=lambda _url: {"version": "0.1"},
-        )
-        self.assertFalse(result["available"])
-
-    def test_an_older_version_is_not_newer(self) -> None:
-        result = diag.check_update(
-            current="1.4.0",
-            manifest_url="https://example.test/latest.json",
-            fetch=lambda _url: {"version": "1.3.9"},
-        )
-        self.assertFalse(result["available"])
-
-    def test_a_version_that_is_not_one_is_a_refusal(self) -> None:
-        with self.assertRaises(Refusal) as raised:
-            diag.check_update(
-                current="0.1.0",
-                manifest_url="https://example.test/latest.json",
-                fetch=lambda _url: {"version": "newest"},
-            )
-        self.assertEqual(raised.exception.code, "update.badManifest")
-        self.assertEqual(raised.exception.status, 502)
-
-    def test_a_source_that_did_not_answer_is_a_refusal(self) -> None:
-        def broken(_url: str) -> dict:
-            raise diag.UpdateUnreachable("connection refused")
-
-        with self.assertRaises(Refusal) as raised:
-            diag.check_update(
-                current="0.1.0",
-                manifest_url="https://example.test/latest.json",
-                fetch=broken,
-            )
-        self.assertEqual(raised.exception.code, "update.unreachable")
-        self.assertEqual(raised.exception.status, 502)
-
-    def test_a_source_that_is_not_a_web_address_is_refused(self) -> None:
-        for url in ("file:///tmp/latest.json", "example.test/latest.json"):
-            with self.subTest(url=url):
-                with self.assertRaises(Refusal) as raised:
-                    diag.check_update(current="0.1.0", manifest_url=url)
-                self.assertEqual(raised.exception.code, "update.badSource")
-                self.assertEqual(raised.exception.status, 409)
-
-    def test_a_download_link_that_is_not_a_web_address_is_dropped(self) -> None:
-        result = diag.check_update(
-            current="0.1.0",
-            manifest_url="https://example.test/latest.json",
-            fetch=lambda _url: {"version": "0.2.0", "url": "javascript:alert(1)"},
-        )
-        self.assertEqual(result["url"], "")
-        self.assertEqual(result["notes"], "")
-
-    def test_the_source_is_read_from_the_environment(self) -> None:
-        seen: list[str] = []
-
-        def reader(url: str) -> dict:
-            seen.append(url)
-            return {"version": "0.2.0"}
-
-        diag.check_update(
-            current="0.1.0",
-            env={diag.ENV_UPDATE_URL: "https://example.test/latest.json"},
-            fetch=reader,
-        )
-        self.assertEqual(seen, ["https://example.test/latest.json"])
-
-
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class DiagnosticsApiTests(unittest.TestCase):
     def test_the_screen_can_be_read(self) -> None:
@@ -365,10 +253,12 @@ class DiagnosticsApiTests(unittest.TestCase):
         answer = client.get("/api/diagnostics/log", params={"lines": 10_000})
         self.assertEqual(answer.status_code, 422)
 
-    def test_a_configured_source_can_be_checked_without_one_being_reached(self) -> None:
-        """The route asks the configured source, and this test gives it none."""
-        client = TestClient(create_app())
-        with patch.dict(os.environ, {diag.ENV_UPDATE_URL: ""}):
-            answer = client.post("/api/diagnostics/update")
-        self.assertEqual(answer.status_code, 200, answer.text)
-        self.assertFalse(answer.json()["configured"])
+    def test_the_old_update_route_is_gone(self) -> None:
+        app = create_app()
+        self.assertNotIn(
+            "/api/diagnostics/update",
+            {getattr(route, "path", "") for route in app.routes},
+        )
+        client = TestClient(app)
+        answer = client.post("/api/diagnostics/update")
+        self.assertIn(answer.status_code, (404, 405))

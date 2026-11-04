@@ -4,24 +4,18 @@ import type { TFunction } from "i18next";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "@/components/settings/fields";
 import {
-  checkForUpdate,
   fetchDiagnostics,
   fetchDiagnosticsLog,
   type Diagnostics,
   type DiagnosticsLog,
-  type UpdateCheck,
 } from "@/lib/api/diagnostics";
 import { errorMessage } from "@/lib/api/client";
-import { openInThisBrowser } from "@/lib/browse";
 import i18n from "@/i18n";
 
 /**
  * What this copy can say about itself, for the moment something is wrong.
  *
  * The screen is read, not operated: nothing here changes the state it describes.
- * The one action that leaves the machine is the update check, and it leaves only
- * when the button is pressed — an app that phones home from a settings page is
- * saying something about itself that this one does not want to say.
  */
 
 /** Warnings this build knows how to word; a newer service may name others. */
@@ -75,10 +69,6 @@ export function DiagnosticsSection({
   const [logBusy, setLogBusy] = useState(false);
   const [logError, setLogError] = useState<string | null>(null);
 
-  const [update, setUpdate] = useState<UpdateCheck | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-
   const [copied, setCopied] = useState<string | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
 
@@ -131,19 +121,6 @@ export function DiagnosticsSection({
       setLogError(errorMessage(err, t("settings.diagnostics.logFailed")));
     } finally {
       setLogBusy(false);
-    }
-  };
-
-  const askUpdate = async () => {
-    setChecking(true);
-    setUpdateError(null);
-    try {
-      setUpdate(await checkForUpdate());
-    } catch (err) {
-      setUpdate(null);
-      setUpdateError(errorMessage(err, t("settings.diagnostics.check.failed")));
-    } finally {
-      setChecking(false);
     }
   };
 
@@ -314,55 +291,6 @@ export function DiagnosticsSection({
                 {t("settings.diagnostics.logNone")}
               </span>
             )}
-          </div>
-
-          <div className="flex flex-col gap-2 border-t pt-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={checking}
-                onClick={() => void askUpdate()}
-              >
-                {checking
-                  ? t("settings.diagnostics.check.checking")
-                  : t("settings.diagnostics.check.button")}
-              </Button>
-              <span role="status" className="text-xs text-muted-foreground">
-                {update === null
-                  ? ""
-                  : !update.configured
-                    ? t("settings.diagnostics.check.unconfigured", { version: update.current })
-                    : update.available
-                      ? t("settings.diagnostics.check.available", {
-                          latest: update.latest,
-                          current: update.current,
-                        })
-                      : t("settings.diagnostics.check.upToDate", { version: update.current })}
-              </span>
-            </div>
-            {update?.configured && update.available && update.notes ? (
-              <p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-                {update.notes}
-              </p>
-            ) : null}
-            {update?.configured && update.available && update.url ? (
-              <div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openInThisBrowser(update.url)}
-                >
-                  {t("settings.diagnostics.check.download")}
-                </Button>
-              </div>
-            ) : null}
-            {updateError ? (
-              <p role="alert" className="text-xs text-destructive">
-                {updateError}
-              </p>
-            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t pt-3">

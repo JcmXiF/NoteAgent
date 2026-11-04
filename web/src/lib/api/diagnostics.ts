@@ -1,12 +1,8 @@
 /**
- * What the running app says about itself, and whether a newer version exists.
- *
- * The update question is asked only when somebody presses the button: this
- * installation may have been built without a source to ask, and a request that
- * leaves the machine on its own is not something a settings screen should do.
+ * What the running app says about itself.
  */
 
-import { getJson, postJson } from "@/lib/api/client";
+import { getJson } from "@/lib/api/client";
 
 export type DiagnosticsAddress = {
   host: string;
@@ -58,26 +54,10 @@ export type DiagnosticsLog = {
   lines: string[];
 };
 
-export type UpdateCheck =
-  | { configured: false; current: string }
-  | {
-      configured: true;
-      current: string;
-      latest: string;
-      available: boolean;
-      notes: string;
-      /** A download address, or empty when the source gave none that can be opened. */
-      url: string;
-    };
-
 export function fetchDiagnostics(): Promise<Diagnostics> {
   return getJson<Diagnostics>("/diagnostics");
 }
 
 export function fetchDiagnosticsLog(lines = 80): Promise<DiagnosticsLog> {
   return getJson<DiagnosticsLog>(`/diagnostics/log?lines=${lines}`);
-}
-
-export function checkForUpdate(): Promise<UpdateCheck> {
-  return postJson<UpdateCheck>("/diagnostics/update");
 }

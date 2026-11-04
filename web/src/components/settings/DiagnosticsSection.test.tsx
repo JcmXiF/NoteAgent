@@ -9,23 +9,17 @@ import type { Diagnostics } from "@/lib/api/diagnostics";
 vi.mock("@/lib/api/diagnostics", () => ({
   fetchDiagnostics: vi.fn(),
   fetchDiagnosticsLog: vi.fn(),
-  checkForUpdate: vi.fn(),
 }));
 
-vi.mock("@/lib/browse", () => ({
-  openInThisBrowser: vi.fn(),
-}));
-
-import { checkForUpdate, fetchDiagnostics, fetchDiagnosticsLog } from "@/lib/api/diagnostics";
-import { openInThisBrowser } from "@/lib/browse";
+import { fetchDiagnostics, fetchDiagnosticsLog } from "@/lib/api/diagnostics";
 
 /**
  * The screen a person opens when the app is already misbehaving.
  *
- * What it must do is say what is true and nothing else: the figures it was given,
- * a plain sentence for each thing worth acting on, and no request leaving the
- * machine unless the update button was pressed. The rest is phrasing, which is
- * pinned to one language here because the wording is part of what is checked.
+ * What it must do is say what is true and nothing else: the figures it was given
+ * and a plain sentence for each thing worth acting on. The rest is phrasing,
+ * which is pinned to one language here because the wording is part of what is
+ * checked.
  */
 
 let host: HTMLDivElement;
@@ -38,11 +32,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // A floor for every test: the report reads, and the two actions the screen
-  // offers answer without a source. A test that cares overrides what it needs.
+  // A floor for every test: the report reads, and the log stays closed.
   vi.mocked(fetchDiagnostics).mockResolvedValue(report());
   vi.mocked(fetchDiagnosticsLog).mockResolvedValue({ path: null, lines: [] });
-  vi.mocked(checkForUpdate).mockResolvedValue({ configured: false, current: "0.1.0" });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -215,71 +207,10 @@ describe("what this copy of the app says about itself", () => {
     await press("看最近的日志");
     expect(host.textContent).toContain("日志目前为空。");
   });
-});
 
-describe("the update question", () => {
-  it("is not asked until the button is pressed", async () => {
-    vi.mocked(fetchDiagnostics).mockResolvedValue(report());
+  it("no longer offers the core update check", async () => {
     await draw();
-
-    expect(checkForUpdate).not.toHaveBeenCalled();
-    await press("检查更新");
-    expect(checkForUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it("says plainly when this installation has no source to ask", async () => {
-    vi.mocked(fetchDiagnostics).mockResolvedValue(report());
-    vi.mocked(checkForUpdate).mockResolvedValue({ configured: false, current: "0.1.0" });
-    await draw();
-
-    await press("检查更新");
-    expect(host.textContent).toContain("此安装未配置更新来源。当前版本为 0.1.0。");
-  });
-
-  it("shows the newer version with its notes, and opens the download page", async () => {
-    vi.mocked(fetchDiagnostics).mockResolvedValue(report());
-    vi.mocked(checkForUpdate).mockResolvedValue({
-      configured: true,
-      current: "0.1.0",
-      latest: "0.2.0",
-      available: true,
-      notes: "Saves are faster.",
-      url: "https://example.test/download",
-    });
-    await draw();
-
-    await press("检查更新");
-    expect(host.textContent).toContain("可用新版本 0.2.0，当前为 0.1.0。");
-    expect(host.textContent).toContain("Saves are faster.");
-
-    await press("打开下载页");
-    expect(openInThisBrowser).toHaveBeenCalledWith("https://example.test/download");
-  });
-
-  it("says the version is current when nothing newer exists", async () => {
-    vi.mocked(fetchDiagnostics).mockResolvedValue(report());
-    vi.mocked(checkForUpdate).mockResolvedValue({
-      configured: true,
-      current: "0.1.0",
-      latest: "0.1.0",
-      available: false,
-      notes: "",
-      url: "",
-    });
-    await draw();
-
-    await press("检查更新");
-    expect(host.textContent).toContain("当前已是最新版本（0.1.0）。");
-    expect(host.textContent).not.toContain("打开下载页");
-  });
-
-  it("words a failure the reader can act on", async () => {
-    vi.mocked(fetchDiagnostics).mockResolvedValue(report());
-    vi.mocked(checkForUpdate).mockRejectedValue(new Error("socket closed"));
-    await draw();
-
-    await press("检查更新");
-    expect(host.textContent).toContain("检查更新未完成。");
+    expect(host.textContent).not.toContain("检查更新");
   });
 });
 

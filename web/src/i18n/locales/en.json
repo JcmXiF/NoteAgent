@@ -1291,15 +1291,6 @@
         "noLog": "Automatic restart is on, but the service log was not found.",
         "goModel": "Set up the model"
       },
-      "check": {
-        "button": "Check for updates",
-        "checking": "Checking…",
-        "unconfigured": "This installation has no update source configured. It is {{version}}.",
-        "available": "Version {{latest}} is available; this is {{current}}.",
-        "upToDate": "This is the newest version ({{version}}).",
-        "download": "Open the download page",
-        "failed": "The update check did not finish."
-      },
       "uptime": {
         "seconds": "{{count}} seconds",
         "minutes": "{{count}} minutes",
@@ -1462,11 +1453,6 @@
         "profileNameNotFound": "That connection no longer exists. Refresh and try again.",
         "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
         "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
-      },
-      "update": {
-        "unreachable": "Could not reach the update source. Check the network and try again.",
-        "badManifest": "The update source answered with something that could not be read; it may not be ready yet.",
-        "badSource": "The update source address is invalid; it must start with http:// or https://."
       }
     }
   }
