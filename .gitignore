@@ -44,7 +44,6 @@ build/
 .mcp.json
 .claude/settings.local.json
 .claude/worktrees/
-.agentsroom/handoff-transcript-*.txt
-.agentsroom/handoff-summary-*.md
-.agentsroom/fork-context-*.txt
-.agentsroom/transfer-context-*.txt
+# Local agent state and the local issue tracker stay on this machine.
+.scratch/
+.agentsroom/
