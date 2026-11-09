@@ -35,6 +35,11 @@ _PACKAGE = Path(__file__).resolve().parent.parent
 
 _CALL_SITE = re.compile(r"\.(?:chat|complete)\(")
 
+#: The kernel's loop asks the model through ``ModelClient``; its call is spelled
+#: ``self._model.stream(...)``. Counting that spelling is what keeps the new seam
+#: under the same rule as the provider-specific calls it replaces.
+_KERNEL_CALL = re.compile(r"self\._model\.stream\(")
+
 
 @dataclass(frozen=True, slots=True)
 class PostCheck:
@@ -225,6 +230,19 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
         given=frozenset({"question", "history", "wiki-context", "limits"}),
         checks=(PostCheck("round-limits", "clamp", frozenset({"limits"})),),
     ),
+    ModelCall(
+        # The kernel loop. Its checks are the ones the loop itself applies: the
+        # tool catalog decides what may run, and the round limit decides when it
+        # must answer from what it has.
+        name="chat-loop",
+        source="agent/kernel.py",
+        given=frozenset({"question", "history", "sections", "tool-catalog", "limits"}),
+        checks=(
+            PostCheck("known-tool", "gate", frozenset({"tool-catalog"})),
+            PostCheck("tool-arguments", "gate", frozenset({"tool-catalog"})),
+            PostCheck("round-limits", "clamp", frozenset({"limits"})),
+        ),
+    ),
 )
 
 
@@ -273,9 +291,11 @@ def call_sites_on_disk(root: Path | None = None) -> dict[str, int]:
         # something: its two methods are the call itself.
         if path.name == "client.py" and path.parent.name == "llm":
             continue
-        found = len(_CALL_SITE.findall(path.read_text(encoding="utf-8")))
+        relative = str(path.relative_to(base)).replace("\\", "/")
+        pattern = _KERNEL_CALL if relative == "agent/kernel.py" else _CALL_SITE
+        found = len(pattern.findall(path.read_text(encoding="utf-8")))
         if found:
-            counts[str(path.relative_to(base)).replace("\\", "/")] = found
+            counts[relative] = found
     return counts
 
 

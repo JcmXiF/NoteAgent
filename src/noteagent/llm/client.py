@@ -331,7 +331,7 @@ class LlmClient:
                         raise LlmError(
                             f"LLM HTTP {response.status_code}: {body[:800]}"
                         )
-                    for event in self._iter_sse_payloads(response):
+                    for event in iter_sse_payloads(response):
                         choices = event.get("choices") or []
                         if not choices or not isinstance(choices[0], dict):
                             continue
@@ -386,22 +386,30 @@ class LlmClient:
             finish_reason=finish,
         )
 
-    def _iter_sse_payloads(
-        self, response: httpx.Response
-    ) -> Iterator[dict[str, Any]]:
-        """The JSON objects of a server-sent-events stream, up to ``[DONE]``."""
-        for line in response.iter_lines():
-            if not line:
-                continue
-            if line.startswith("data:"):
-                data = line[5:].strip()
-            else:
-                continue
-            if data == "[DONE]":
-                break
-            try:
-                payload = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
+def iter_sse_payloads(
+    response: httpx.Response,
+    *,
+    on_done: Callable[[], None] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """The JSON objects of a server-sent-events stream, up to ``[DONE]``.
+
+    ``on_done`` lets a caller tell a stream that finished from one whose
+    connection closed early: an unterminated stream never calls it.
+    """
+    for line in response.iter_lines():
+        if not line:
+            continue
+        if line.startswith("data:"):
+            data = line[5:].strip()
+        else:
+            continue
+        if data == "[DONE]":
+            if on_done is not None:
+                on_done()
+            break
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            yield payload
