@@ -529,6 +529,7 @@
       "submit": "删除会话"
     },
     "listFailed": "无法读取会话列表",
+    "migrationFailed": "有 {{count}} 个旧对话没能导入，旧文件仍保留在项目里。",
     "openFailed": "无法打开这个会话",
     "createFailed": "新建会话失败",
     "deleteFailed": "删除会话失败",
@@ -1396,6 +1397,11 @@
       },
       "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
       "context_overflow": "对话太长，超出了模型窗口。",
+      "session": {
+        "exists": "这个会话已经存在。",
+        "notFound": "这个会话已经不在了。",
+        "invalidId": "这个会话名不能使用。"
+      },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
       },

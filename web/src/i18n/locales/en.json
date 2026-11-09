@@ -529,6 +529,7 @@
       "submit": "Delete conversation"
     },
     "listFailed": "Could not read the conversations",
+    "migrationFailed": "Some old conversations could not be imported ({{count}}). They are still in the project.",
     "openFailed": "Could not open that conversation",
     "createFailed": "Could not start a conversation",
     "deleteFailed": "Could not delete the conversation",
@@ -1396,6 +1397,11 @@
       },
       "compaction_failed": "The earlier conversation could not be summarized. Try again.",
       "context_overflow": "The conversation is too long for the model's window.",
+      "session": {
+        "exists": "That session already exists.",
+        "notFound": "That session is no longer there.",
+        "invalidId": "That session name cannot be used."
+      },
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
       },

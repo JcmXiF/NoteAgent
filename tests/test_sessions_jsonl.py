@@ -106,6 +106,65 @@ class SessionRoundTripTests(_StoreCase):
         with self.assertRaises(FileNotFoundError):
             self.store.load("s1")
 
+    def test_the_index_is_written_and_rebuilt(self) -> None:
+        self.store.create("s1", "First")
+        self.store.append(
+            "s1", {"type": "message", "role": "user", "content": "q"}
+        )
+
+        listed = self.store.list()
+
+        index = self.layout.sessions_dir / "index.json"
+        self.assertTrue(index.is_file())
+        data = json.loads(index.read_text(encoding="utf-8"))
+        self.assertEqual(data["v"], 1)
+        self.assertEqual([item["id"] for item in data["sessions"]], ["s1"])
+        self.assertEqual(data["sessions"][0]["messageCount"], 1)
+        index.unlink()
+
+        again = self.store.list()
+
+        self.assertEqual([item.id for item in again], ["s1"])
+        self.assertTrue(index.is_file())
+        self.assertEqual(listed, again)
+
+    def test_a_corrupt_index_is_rebuilt(self) -> None:
+        self.store.create("s1", "First")
+        index = self.layout.sessions_dir / "index.json"
+        self.store.list()
+        index.write_text("{not json", encoding="utf-8")
+
+        self.assertEqual([item.id for item in self.store.list()], ["s1"])
+        self.assertEqual(
+            json.loads(index.read_text(encoding="utf-8"))["sessions"][0]["id"],
+            "s1",
+        )
+
+    def test_a_file_that_appeared_since_the_index_is_listed(self) -> None:
+        self.store.create("s1")
+        self.store.list()
+        path = self.layout.sessions_dir / "s2.jsonl"
+        path.write_text(json.dumps(_header("s2")) + "\n", encoding="utf-8")
+
+        self.assertEqual(
+            {item.id for item in self.store.list()}, {"s1", "s2"}
+        )
+
+    def test_delete_updates_the_index(self) -> None:
+        self.store.create("s1")
+        self.store.create("s2")
+        self.store.list()
+
+        self.store.delete("s1")
+
+        self.assertEqual([item.id for item in self.store.list()], ["s2"])
+        index = json.loads(
+            (self.layout.sessions_dir / "index.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual([item["id"] for item in index["sessions"]], ["s2"])
+
     def test_the_list_counts_visible_messages(self) -> None:
         self.store.create("s2", "Second")
         self.store.append("s2", {"type": "message", "role": "user", "content": "q"})

@@ -28,6 +28,49 @@ from noteagent.agent.wait import WaitState
 from noteagent.agent.wait_store import wait_status_for
 
 
+def old_chat_payload(
+    conversation_id: str = "c-1",
+    *,
+    title: str = "Entropy",
+    with_cards: bool = True,
+) -> dict[str, object]:
+    """A conversation as the old ``chats/*.json`` files stored it."""
+    cards = (
+        [
+            {
+                "tool": "wiki_read",
+                "title": "Entropy",
+                "slug": "concepts/entropy",
+            }
+        ]
+        if with_cards
+        else []
+    )
+    assistant: dict[str, object] = {
+        "id": "m2",
+        "role": "assistant",
+        "content": "熵衡量不确定性。",
+        "createdAt": "2026-11-09T10:00:02Z",
+    }
+    if cards:
+        assistant["cards"] = cards
+    return {
+        "version": 1,
+        "id": conversation_id,
+        "title": title,
+        "updatedAt": "2026-11-09T10:00:02Z",
+        "messages": [
+            {
+                "id": "m1",
+                "role": "user",
+                "content": "什么是熵？",
+                "createdAt": "2026-11-09T10:00:01Z",
+            },
+            assistant,
+        ],
+    }
+
+
 def seed_long_history(store, session_id: str = "s1", pairs: int = 4) -> None:
     """A session long enough that compaction has something to cut."""
     store.append(

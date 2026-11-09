@@ -499,6 +499,25 @@ export type SessionMessage = {
   name?: string;
 };
 
+/** One row of the versioned session list. */
+export type SessionSummary = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+/** What the one-time old-chat migration did, when it had something to say. */
+export type SessionMigration = {
+  migrated: number;
+  failed?: { id: string; error: string }[];
+};
+
+export type SessionListPayload = {
+  sessions: SessionSummary[];
+  migration?: SessionMigration;
+};
+
 /** The transcript, and the same log read the way the model will see it. */
 export type SessionPayload = {
   id: string;

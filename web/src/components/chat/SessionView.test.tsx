@@ -89,6 +89,7 @@ async function draw(
   sessionId = "s1",
   onOpenLink?: (target: string) => void,
   onOpenInterface?: (wait: WaitPayload, sessionId: string) => void,
+  onSessionChanged?: (session: SessionPayload) => void,
 ) {
   await act(async () => {
     root.render(
@@ -96,6 +97,7 @@ async function draw(
         sessionId={sessionId}
         onOpenLink={onOpenLink}
         onOpenInterface={onOpenInterface}
+        onSessionChanged={onSessionChanged}
       />,
     );
   });
@@ -200,6 +202,38 @@ describe("a session read from its log", () => {
       finish(payload);
     });
     await act(async () => {});
+  });
+
+  it("tells the list when a turn is committed", async () => {
+    const changed = vi.fn();
+    vi.mocked(fetchSession).mockResolvedValue(payload);
+    vi.mocked(postSessionQuery).mockResolvedValue({
+      ...payload,
+      messages: [
+        ...payload.messages,
+        {
+          id: "e4",
+          role: "user",
+          content: "继续",
+          createdAt: "2026-11-10T09:00:03Z",
+        },
+        {
+          id: "e5",
+          role: "assistant",
+          content: "回答",
+          createdAt: "2026-11-10T09:00:04Z",
+        },
+      ],
+    });
+
+    await draw("s1", undefined, undefined, changed);
+    changed.mockClear();
+    await ask("继续");
+
+    expect(changed).toHaveBeenCalled();
+    expect(
+      changed.mock.calls.at(-1)?.[0].messages.at(-1)?.content,
+    ).toBe("回答");
   });
 
   it("says what went wrong when the session cannot be read", async () => {

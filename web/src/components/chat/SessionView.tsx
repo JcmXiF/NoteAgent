@@ -33,12 +33,15 @@ export function SessionView({
   sessionId,
   onOpenLink = () => {},
   onOpenInterface = () => {},
+  onSessionChanged = () => {},
 }: {
   sessionId: string;
   /** A wiki link in an answer; absent leaves the link inert. */
   onOpenLink?: (target: string) => void;
   /** Opening the interface a wait points at, carrying the wait it needs. */
   onOpenInterface?: (wait: WaitPayload, sessionId: string) => void;
+  /** A turn or a name changed; the list's row should say so. */
+  onSessionChanged?: (session: SessionPayload) => void;
 }) {
   const { t } = useTranslation();
   const [session, setSession] = useState<SessionPayload | null>(null);
@@ -106,6 +109,7 @@ export function SessionView({
       (next) => {
         if (!alive) return;
         adoptSession(next);
+        onSessionChanged(next);
         setRunningElsewhere(next.state.busy);
       },
       (reason) => {
@@ -155,7 +159,10 @@ export function SessionView({
           setLiveWait(proposed);
         },
       });
-      if (live()) adoptSession(next);
+      if (live()) {
+        adoptSession(next);
+        onSessionChanged(next);
+      }
     } catch (reason) {
       if (live()) {
         // Stopping was asked for: the transcript now shows where the answer
@@ -169,6 +176,7 @@ export function SessionView({
           const next = await fetchSession(sessionId);
           if (live()) {
             adoptSession(next);
+            onSessionChanged(next);
             // A broken stream can leave the run still going; the read says so,
             // and the composer must not offer a second one.
             if (!stopped) setRunningElsewhere(next.state.busy);

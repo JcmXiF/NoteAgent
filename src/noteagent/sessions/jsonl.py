@@ -11,26 +11,37 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
-import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
-from noteagent.agent.store import SessionSnapshot, SessionSummary, last_timestamp
+from noteagent.agent.store import (
+    SessionSnapshot,
+    SessionSummary,
+    last_timestamp,
+    summary_dict,
+)
 from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.common import (
+    RESERVED_SESSION_IDS,
+    SESSION_ID_RE,
+    SESSION_LOCK,
+    session_line,
+)
+from noteagent.sessions.legacy import MigrationReport, migrate_legacy_chats
 
 logger = logging.getLogger(__name__)
 
 SESSION_VERSION = 1
 SUPPORTED_VERSIONS = frozenset({1})
 
+#: The derived list cache. It is never the truth: a missing, corrupt or stale
+#: index is rebuilt from the JSONL files.
+INDEX_VERSION = 1
+INDEX_NAME = "index.json"
+
 #: A name taken from the first question is a row in a list, so it is clipped.
 TITLE_CHARS = 42
-
-#: A session id is one path component and is also the header's id.
-_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
-_RESERVED_IDS = frozenset({"index"})
 
 #: The entry types the schema knows. An unknown one is kept and warned about,
 #: because a newer writer's line must not make an older reader lose the session.
@@ -54,12 +65,6 @@ _KNOWN_TYPES = frozenset(
     }
 )
 
-#: The app is one process with one writer, but several requests may try to append
-#: at once. The lock keeps the repair, the read of the previous id and the write
-#: in one step.
-_APPEND_LOCK = threading.Lock()
-
-
 class SessionFormatError(ValueError):
     """The bytes cannot be read as a session."""
 
@@ -77,6 +82,9 @@ class JsonlSessionStore:
         self._layout = layout
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIds()
+        #: The one migration pass, so a route that asks for its report and then
+        #: lists does not run the marker check twice.
+        self._migration: MigrationReport | None = None
 
     def create(self, session_id: str, title: str = "") -> SessionSnapshot:
         ident = _require_id(session_id)
@@ -88,16 +96,18 @@ class JsonlSessionStore:
             "id": ident,
             "createdAt": self._now(),
         }
-        with _APPEND_LOCK:
+        with SESSION_LOCK:
             try:
                 with path.open("x", encoding="utf-8", newline="\n") as handle:
-                    handle.write(_line(header))
+                    handle.write(session_line(header))
                     handle.flush()
                     os.fsync(handle.fileno())
             except FileExistsError:
                 raise FileExistsError(f"session already exists: {ident}") from None
         if title.strip():
             self.rename(ident, title)
+        else:
+            self._refresh_index()
         return self.load(ident)
 
     def load(self, session_id: str) -> SessionSnapshot:
@@ -118,7 +128,7 @@ class JsonlSessionStore:
         path = self._layout.session_path(ident)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {ident}")
-        with _APPEND_LOCK:
+        with SESSION_LOCK:
             _repair_tail(path)
             records = _read_records(path)
             header = _checked_header(records, ident)
@@ -135,23 +145,45 @@ class JsonlSessionStore:
             if not isinstance(payload.get("ts"), str) or not payload["ts"]:
                 payload["ts"] = self._now()
             with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(_line(payload))
+                handle.write(session_line(payload))
                 handle.flush()
                 os.fsync(handle.fileno())
+            self._refresh_index()
 
     def list(self) -> tuple[SessionSummary, ...]:
+        if self._migration is None:
+            self.ensure_migrated()
+        paths = self._session_paths()
+        if not paths:
+            return ()
+        indexed = self._read_index()
+        if indexed is not None and {item.id for item in indexed} == set(paths):
+            return tuple(
+                sorted(indexed, key=lambda item: item.updated_at, reverse=True)
+            )
+        items = self._scan(paths)
+        self._write_index(items)
+        return items
+
+    def _session_paths(self) -> dict[str, Path]:
         directory = self._layout.sessions_dir
         if not directory.is_dir():
-            return ()
-        items: list[SessionSummary] = []
+            return {}
+        paths: dict[str, Path] = {}
         for path in directory.iterdir():
             if not path.is_file() or path.suffix != ".jsonl":
                 continue
             if path.name.endswith(".events.jsonl"):
                 continue
             ident = path.stem
-            if not _ID_RE.fullmatch(ident) or ident in _RESERVED_IDS:
+            if not SESSION_ID_RE.fullmatch(ident) or ident in RESERVED_SESSION_IDS:
                 continue
+            paths[ident] = path
+        return paths
+
+    def _scan(self, paths: Mapping[str, Path]) -> tuple[SessionSummary, ...]:
+        items: list[SessionSummary] = []
+        for ident in paths:
             try:
                 snapshot = self.load(ident)
             except (OSError, ValueError) as err:
@@ -173,6 +205,60 @@ class JsonlSessionStore:
         items.sort(key=lambda item: item.updated_at, reverse=True)
         return tuple(items)
 
+    def _read_index(self) -> tuple[SessionSummary, ...] | None:
+        path = self._layout.sessions_dir / INDEX_NAME
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict) or raw.get("v") != INDEX_VERSION:
+            return None
+        items = raw.get("sessions")
+        if not isinstance(items, list):
+            return None
+        summaries: list[SessionSummary] = []
+        for item in items:
+            if not isinstance(item, dict):
+                return None
+            ident = item.get("id")
+            title = item.get("title", "")
+            updated_at = item.get("updatedAt", "")
+            count = item.get("messageCount", 0)
+            if (
+                not isinstance(ident, str)
+                or not isinstance(title, str)
+                or not isinstance(updated_at, str)
+                or not isinstance(count, int)
+            ):
+                return None
+            summaries.append(
+                SessionSummary(ident, title, updated_at, count)
+            )
+        return tuple(summaries)
+
+    def _write_index(self, items: Sequence[SessionSummary]) -> None:
+        directory = self._layout.sessions_dir
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "v": INDEX_VERSION,
+                "sessions": [summary_dict(item) for item in items],
+            }
+            path = directory / INDEX_NAME
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as err:
+            # The index is a cache; a project that cannot write it still reads.
+            logger.warning("session index cannot be written: %s", err)
+
+    def _refresh_index(self) -> None:
+        self._write_index(self._scan(self._session_paths()))
+
     def rename(self, session_id: str, title: str) -> None:
         ident = _require_id(session_id)
         self.load(ident)
@@ -183,10 +269,22 @@ class JsonlSessionStore:
         path = self._layout.session_path(ident)
         if not path.is_file():
             raise FileNotFoundError(f"session not found: {ident}")
-        path.unlink()
-        events = path.with_name(f"{ident}.events.jsonl")
-        if events.is_file():
-            events.unlink()
+        with SESSION_LOCK:
+            path.unlink()
+            events = path.with_name(f"{ident}.events.jsonl")
+            if events.is_file():
+                events.unlink()
+            self._refresh_index()
+
+    def ensure_migrated(self) -> MigrationReport:
+        """Bring the old ``chats/*.json`` files across, once per store."""
+        if self._migration is not None:
+            return self._migration
+        report = migrate_legacy_chats(self._layout, clock=self._clock)
+        if report.migrated:
+            self._refresh_index()
+        self._migration = report
+        return report
 
     def _now(self) -> str:
         return iso_timestamp(self._clock)
@@ -194,13 +292,9 @@ class JsonlSessionStore:
 
 def _require_id(value: str) -> str:
     ident = value.strip()
-    if not _ID_RE.fullmatch(ident) or ident in _RESERVED_IDS:
+    if not SESSION_ID_RE.fullmatch(ident) or ident in RESERVED_SESSION_IDS:
         raise ValueError("session id must be 1–80 letters, digits, _ or -")
     return ident
-
-
-def _line(payload: Mapping[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
 
 
 def _read_records(path: Path) -> list[dict[str, object]]:

@@ -24,13 +24,17 @@ import { useChatStore } from "@/stores/chat-store";
 export function DeleteChatDialog({
   conversation,
   onClose,
+  onDelete,
 }: {
   /** The conversation being asked about, or null when nothing is. */
   conversation: ChatSummary | null;
   onClose: () => void;
+  /** Who removes it; absent falls back to the legacy chat store. */
+  onDelete?: (conversationId: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
-  const remove = useChatStore((state) => state.remove);
+  const removeFromStore = useChatStore((state) => state.remove);
+  const remove = onDelete ?? removeFromStore;
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   /**

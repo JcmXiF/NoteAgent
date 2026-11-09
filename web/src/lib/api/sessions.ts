@@ -1,15 +1,45 @@
 import {
+  deleteJson,
   getJson,
+  patchJson,
   postJson,
   postSse,
   type SseHandlers,
   type WaitPayload,
 } from "@/lib/api/client";
-import type { SessionPayload } from "@/lib/api/types";
+import type {
+  SessionListPayload,
+  SessionPayload,
+} from "@/lib/api/types";
 
 /** One session, by id, as the versioned core reads it. */
 export function fetchSession(sessionId: string): Promise<SessionPayload> {
   return getJson<SessionPayload>(`/v1/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+/** Every session in the active project, newest first. */
+export function fetchSessions(): Promise<SessionListPayload> {
+  return getJson<SessionListPayload>("/v1/sessions");
+}
+
+/** Start an empty session in the active project. */
+export function createSession(title = ""): Promise<SessionPayload> {
+  return postJson<SessionPayload>("/v1/sessions", { title });
+}
+
+/** Give a session a name, or an empty name to put its first question back. */
+export function renameSession(
+  sessionId: string,
+  title: string,
+): Promise<SessionPayload> {
+  return patchJson<SessionPayload>(
+    `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    { title },
+  );
+}
+
+export function deleteSession(sessionId: string): Promise<void> {
+  return deleteJson<void>(`/v1/sessions/${encodeURIComponent(sessionId)}`);
 }
 
 /**

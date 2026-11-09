@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -108,11 +108,14 @@ from noteagent.api.session_access import (
     claim_job,
     enter_wait_for_job,
     job_wait_for_body,
+    migrate_sessions,
     open_session_store,
+    project_sessions,
     session_busy,
     session_runtime,
     session_waits,
 )
+from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
@@ -473,6 +476,10 @@ class CompactBody(BaseModel):
     instructions: str = Field(default="", max_length=2_000)
 
 
+class SessionTitleBody(BaseModel):
+    title: str = Field(default="", max_length=2_000)
+
+
 class GateDecisionBody(BaseModel):
     slug: str = Field(..., min_length=1, max_length=160)
     action: str = "skip"
@@ -644,6 +651,48 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """The versioned health the packaged core reports."""
         return {"status": "ok", "version": __version__}
 
+    @app.get("/api/v1/sessions")
+    def kernel_sessions() -> dict[str, object]:
+        """Every session in the active project, newest first."""
+        store = project_sessions(deps)
+        report = migrate_sessions(store)
+        body: dict[str, object] = {
+            "sessions": [summary_dict(item) for item in store.list()]
+        }
+        if report is not None and (report.migrated or report.failed):
+            body["migration"] = report.payload()
+        return body
+
+    @app.post("/api/v1/sessions", status_code=201)
+    def kernel_session_create(
+        body: SessionTitleBody = Body(default_factory=SessionTitleBody),
+    ) -> dict[str, object]:
+        """Start an empty session, which the list can then open."""
+        store = project_sessions(deps)
+        session_id = deps.ids.new_id("s")
+        try:
+            store.create(session_id, body.title)
+        except FileExistsError as err:
+            raise CodedHTTPException(
+                409,
+                str(err),
+                code="session.exists",
+                params={"id": session_id},
+            ) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                400,
+                str(err),
+                code="session.invalidId",
+                params={"id": session_id},
+            ) from err
+        return session_payload(
+            store,
+            session_id,
+            busy=session_busy(deps, session_id),
+            waits=session_waits(deps, store),
+        )
+
     @app.get("/api/v1/sessions/{session_id}")
     def kernel_session(session_id: str) -> dict[str, object]:
         """One session's transcript, and the same log read as the model sees it."""
@@ -656,6 +705,52 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             busy=session_busy(deps, session_id),
             waits=session_waits(deps, store),
         )
+
+    @app.patch("/api/v1/sessions/{session_id}")
+    def kernel_session_rename(
+        session_id: str, body: SessionTitleBody
+    ) -> dict[str, object]:
+        """Give a session a name, or put its first question back."""
+        store = open_session_store(deps, session_id)
+        try:
+            store.rename(session_id, body.title)
+        except FileNotFoundError as err:
+            raise CodedHTTPException(
+                404,
+                str(err),
+                code="session.notFound",
+                params={"id": session_id},
+            ) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                400,
+                str(err),
+                code="session.invalidId",
+                params={"id": session_id},
+            ) from err
+        return session_payload(
+            store,
+            session_id,
+            busy=session_busy(deps, session_id),
+            waits=session_waits(deps, store),
+        )
+
+    @app.delete("/api/v1/sessions/{session_id}", status_code=204)
+    def kernel_session_delete(session_id: str) -> Response:
+        """Remove the session; a job it was waiting on stays independent."""
+        store = open_session_store(deps, session_id)
+        if session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        try:
+            store.delete(session_id)
+        except FileNotFoundError as err:
+            raise CodedHTTPException(
+                404,
+                str(err),
+                code="session.notFound",
+                params={"id": session_id},
+            ) from err
+        return Response(status_code=204)
 
     @app.post("/api/v1/sessions/{session_id}/query")
     def kernel_session_query(

@@ -43,6 +43,16 @@ class SessionSnapshot:
     version: int = 1
 
 
+def summary_dict(item: "SessionSummary") -> dict[str, object]:
+    """One list row as the index and the API both carry it."""
+    return {
+        "id": item.id,
+        "title": item.title,
+        "updatedAt": item.updated_at,
+        "messageCount": item.message_count,
+    }
+
+
 def last_timestamp(entries: Sequence[Entry]) -> str:
     """The time of the last committed entry, or an empty string."""
     for entry in reversed(entries):

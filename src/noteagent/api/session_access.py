@@ -26,6 +26,7 @@ from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
+from noteagent.sessions.legacy import MigrationReport
 from noteagent.wiki.agent_tools import wiki_tools
 
 
@@ -39,6 +40,22 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
         raise CodedHTTPException(
             409, str(err), code="project.notConfigured"
         ) from err
+
+
+def project_sessions(deps: AppDeps) -> SessionStore:
+    """The store of the active project, or the one a test injected."""
+    if deps.sessions is not None:
+        return deps.sessions
+    layout = active_layout(deps)
+    assert layout is not None
+    return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+
+
+def migrate_sessions(store: SessionStore) -> MigrationReport | None:
+    """Run the old-chat migration for a real store; none for a test fake."""
+    if isinstance(store, JsonlSessionStore):
+        return store.ensure_migrated()
+    return None
 
 
 def open_session_store(
@@ -57,6 +74,10 @@ def open_session_store(
         resolved = layout or active_layout(deps)
         assert resolved is not None
         store = JsonlSessionStore(resolved, clock=deps.clock, ids=deps.ids)
+    if isinstance(store, JsonlSessionStore):
+        # A conversation opened by its old id may not have been through a list
+        # first; the marker makes this a file-existence check on later calls.
+        store.ensure_migrated()
     try:
         store.load(session_id)
     except SessionFormatError as err:
