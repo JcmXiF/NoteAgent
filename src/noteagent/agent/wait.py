@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from noteagent.agent.jobs import JobInterface, JobKind
+from noteagent.agent.jobs import JobArtifact, JobInterface, JobKind
 
 WaitStatus: TypeAlias = Literal[
     "proposed", "entered", "completed", "failed", "cancelled"
@@ -46,6 +46,11 @@ class WaitState:
     completion: str = ""
     intent: str = ""
     reason: str = ""
+    #: The job the human started, once the wait has been entered. Reconciliation
+    #: needs it to look the job up when a completion event was lost.
+    job_id: str = ""
+    artifacts: tuple[JobArtifact, ...] = ()
+    error: str = ""
 
 
 def is_active(wait: WaitState | None) -> bool:
@@ -58,6 +63,41 @@ def completion_for(job: str) -> str:
     return f"start_{job}" if job in JOB_KINDS else "start"
 
 
+def render_run_section(wait: WaitState | None) -> str:
+    """The volatile run/wait section the model reads before its next turn.
+
+    It is derived from the wait events, not stored: a restart, a compaction or a
+    reader that lost the stream all rebuild the same sentence.
+    """
+    if wait is None:
+        return ""
+    lines = ["## Run"]
+    if wait.status in ACTIVE_STATUSES:
+        lines.extend(
+            [
+                "status: waiting",
+                "pending wait:",
+                f"  job: {wait.job}",
+                f"  interface: {wait.interface}",
+                f"  completion: {wait.completion or completion_for(wait.job)}",
+                f"  proposed_at: {wait.proposed_at}",
+            ]
+        )
+        if wait.intent:
+            lines.append(f"  intent: {wait.intent}")
+        return "\n".join(lines)
+    lines.append("status: idle")
+    if wait.status == "cancelled" and not wait.job_id:
+        # Stopped while still proposed: no job ran, so this is not a result.
+        lines.append(f"last wait: {wait.job} cancelled before the job started")
+        return "\n".join(lines)
+    outcome = wait.result_summary or wait.status
+    lines.append(f"last job result: {wait.job} {wait.status} — {outcome}")
+    if wait.error:
+        lines.append(f"last job error: {wait.error}")
+    return "\n".join(lines)
+
+
 def wait_payload(wait: WaitState) -> dict[str, object]:
     """The wait as both the SSE event and the session view carry it."""
     body: dict[str, object] = {
@@ -65,8 +105,17 @@ def wait_payload(wait: WaitState) -> dict[str, object]:
         **_wait_fields(wait),
         "status": wait.status,
     }
+    if wait.job_id:
+        body["jobId"] = wait.job_id
     if wait.result_summary:
         body["resultSummary"] = wait.result_summary
+    if wait.artifacts:
+        body["artifacts"] = [
+            {"kind": item.kind, "id": item.id, "label": item.label}
+            for item in wait.artifacts
+        ]
+    if wait.error:
+        body["error"] = wait.error
     return body
 
 

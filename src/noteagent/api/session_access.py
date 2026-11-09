@@ -8,7 +8,10 @@ would have refused, and a cancel reaches the same registry the query claimed.
 
 from __future__ import annotations
 
-from noteagent.agent.kernel import RunRegistry
+import threading
+from dataclasses import dataclass
+
+from noteagent.agent.kernel import KernelRuntime, RunRegistry
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
@@ -17,6 +20,8 @@ from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
+from noteagent.llm.config import load_llm_config
+from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
@@ -83,6 +88,33 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     return wiki_tools(layout)
 
 
+def session_runtime(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+) -> AgentRuntime:
+    """The runtime a run crosses: the injected one, or the project's kernel.
+
+    A query and the resume that follows a job must be the same kind of run, so
+    they are built in one place. The registry is shared, which is what keeps a
+    job's continuation from starting a second loop beside a person's question.
+    """
+    if deps.runtime is not None:
+        return deps.runtime
+    model = deps.model
+    if model is None:
+        model = OpenAIModelClient(load_llm_config())
+    return KernelRuntime(
+        model=model,
+        sessions=store,
+        tools=session_tools(deps, layout),
+        waits=session_waits(deps, store),
+        clock=deps.clock,
+        ids=deps.ids,
+        registry=deps.runs,
+    )
+
+
 def _run_owner(deps: AppDeps) -> AgentRuntime | RunRegistry:
     """Whoever holds the runs: one carried runtime, or the shared registry.
 
@@ -109,6 +141,69 @@ def cancel_session(deps: AppDeps, session_id: str) -> bool:
 def session_waits(deps: AppDeps, store: SessionStore) -> WaitStore:
     """The waits a route reads: the injected set, or the session's own log."""
     return deps.waits if deps.waits is not None else SessionWaitStore(store)
+
+
+@dataclass(frozen=True, slots=True)
+class JobWait:
+    """A job the chat proposed, with the session that records its lifecycle."""
+
+    store: SessionStore
+    waits: WaitStore
+    session_id: str
+    wait_id: str
+
+
+#: Two presses of the same original button can arrive together. The check and
+#: the entry are one step, so only one job id is ever handed out.
+_ENTER_LOCK = threading.Lock()
+
+
+def check_wait_for_job(job_wait: JobWait, job: str) -> None:
+    """Refuse a job that the named wait does not allow.
+
+    Split from the entry so an endpoint can answer "this wait is wrong" before
+    it answers "the model is not configured", and can validate without writing
+    an entry it may not be able to follow through.
+    """
+    wait = job_wait.waits.current(job_wait.session_id)
+    if wait is None or wait.wait_id != job_wait.wait_id:
+        raise CodedHTTPException(
+            404,
+            (
+                f"wait {job_wait.wait_id} is not the current wait of "
+                f"session {job_wait.session_id}"
+            ),
+            code="wait.notFound",
+            params={"wait": job_wait.wait_id},
+        )
+    if wait.job != job:
+        raise CodedHTTPException(
+            409,
+            f"wait {job_wait.wait_id} is for {wait.job}, not {job}",
+            code="wait.wrongJob",
+            params={"wait": job_wait.wait_id, "job": wait.job},
+        )
+    if wait.status != "proposed":
+        raise CodedHTTPException(
+            409,
+            f"wait {job_wait.wait_id} is already {wait.status}",
+            code="wait.alreadyStarted",
+            params={"wait": job_wait.wait_id, "status": wait.status},
+        )
+
+
+def enter_wait_for_job(deps: AppDeps, job_wait: JobWait, job: str) -> str:
+    """Record that the human started the waited-on job, once.
+
+    The job id is minted here so reconciliation can ask the job system what
+    happened when a completion event was lost. A wait that is not proposed is
+    refused: the same button must not start a second job.
+    """
+    with _ENTER_LOCK:
+        check_wait_for_job(job_wait, job)
+        job_id = deps.ids.new_id("job")
+        job_wait.waits.enter(job_wait.session_id, job_wait.wait_id, job_id)
+        return job_id
 
 
 def cancel_wait(

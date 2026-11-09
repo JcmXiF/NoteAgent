@@ -18,6 +18,10 @@ from noteagent.agent.model import Message, ToolCall
 #: that the call did not finish and decide whether to try again.
 MISSING_RESULT = "missing_result"
 
+#: How many artifacts one job result names in the prompt. The entry keeps them
+#: all; the prompt gets a bounded reading.
+MAX_RESULT_ARTIFACTS = 24
+
 #: Entry types that contribute to the prompt through another step, or that the
 #: transcript does not show. They are known, so they produce no warning.
 _SILENT_TYPES = frozenset(
@@ -25,12 +29,12 @@ _SILENT_TYPES = frozenset(
         "compaction",
         "model_change",
         "reset",
+        "resume_started",
         "session",
         "session_info",
         "thinking_level_change",
         "usage",
         "wait_cancelled",
-        "wait_completed",
         "wait_entered",
         "wait_proposed",
     }
@@ -125,6 +129,14 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
             continue
         if kind == "system_section":
             _apply_section_patch(sections, entry.get("sections"))
+            continue
+        if kind == "wait_completed":
+            # The job result is a message the model must see; it is not a turn
+            # the reader wrote, so it has no transcript row of its own. The
+            # interface shows it from the wait the session carries.
+            pieces.append(
+                _Piece(entry_id, Message("system", _job_result_text(entry)))
+            )
             continue
         if kind == "message":
             piece, item, problem = _message_piece(entry, entry_id, index)
@@ -426,6 +438,29 @@ def _order_tool_pairs(
                 if pieces[found].message is not None:
                     messages.append(pieces[found].message)
     return messages, diagnostics
+
+
+def _job_result_text(entry: Mapping[str, object]) -> str:
+    """What the model reads after a waited-on job finished."""
+    job = _string(entry.get("job")) or "job"
+    status = _string(entry.get("status")) or "completed"
+    lines = [f"Job result ({job}, {status})."]
+    summary = _string(entry.get("summary"))
+    if summary:
+        lines.append(summary)
+    raw_artifacts = entry.get("artifacts")
+    if isinstance(raw_artifacts, list):
+        items = [
+            f"{_string(item.get('kind')) or 'item'}:{_string(item.get('id'))}"
+            for item in raw_artifacts
+            if isinstance(item, Mapping) and _string(item.get("id"))
+        ]
+        if items:
+            lines.append("Artifacts: " + ", ".join(items[:MAX_RESULT_ARTIFACTS]))
+    error = _string(entry.get("error"))
+    if error:
+        lines.append("Error: " + error)
+    return " ".join(lines)
 
 
 def _entry_id(entry: Mapping[str, object]) -> str:

@@ -21,7 +21,6 @@ from starlette.background import BackgroundTask
 
 from noteagent import __version__
 from noteagent.acquire.intake.local_file import MAX_LOCAL_FILES
-from noteagent.agent.kernel import KernelRuntime
 from noteagent.agent.runtime import UserInput, busy_message
 from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
@@ -97,16 +96,20 @@ from noteagent.api.projects import (
     resolve_repo_root,
     use_project,
 )
+from noteagent.api.resume import reconcile_session, start_resume
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
 from noteagent.api.session_access import (
+    JobWait,
     active_layout,
     cancel_session,
     cancel_wait,
+    check_wait_for_job,
+    enter_wait_for_job,
     open_session_store,
     session_busy,
-    session_tools,
+    session_runtime,
     session_waits,
 )
 from noteagent.api.sessions import session_payload
@@ -122,8 +125,7 @@ from noteagent.ingest.revision_inbox import (
 )
 from noteagent.ingest.source_citations import source_citations_payload
 from noteagent.ingest.update_index import rebuild_wiki_index
-from noteagent.llm.config import LlmConfigError, load_llm_config
-from noteagent.llm.model_gateway import OpenAIModelClient
+from noteagent.llm.config import LlmConfigError
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.install import (
     apply_install,
@@ -476,6 +478,11 @@ class TopicMapBody(BaseModel):
     #: The language the reader is using. Explanations are written for them, so they
     #: follow this; page names follow the material.
     language: str = Field(default="", max_length=20)
+    #: When this pass was proposed from the chat, the wait it belongs to. The
+    #: human started the job here, and the placement of these fields is what
+    #: lets the chat record that it entered and what it came back with.
+    sessionId: str = Field(default="", max_length=80)
+    waitId: str = Field(default="", max_length=120)
 
 
 class ConfirmedPageBody(BaseModel):
@@ -619,7 +626,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.get("/api/v1/sessions/{session_id}")
     def kernel_session(session_id: str) -> dict[str, object]:
         """One session's transcript, and the same log read as the model sees it."""
-        store = open_session_store(deps, session_id)
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        reconcile_session(deps, store, layout, session_id)
         return session_payload(
             store,
             session_id,
@@ -641,25 +650,12 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 code="busy",
                 params={"session": session_id},
             )
+        reconcile_session(deps, store, layout, session_id)
         waits = session_waits(deps, store)
-        runtime = deps.runtime
-        if runtime is None:
-            model = deps.model
-            if model is None:
-                try:
-                    config = load_llm_config()
-                except LlmConfigError as err:
-                    raise http_error(err, 503) from err
-                model = OpenAIModelClient(config)
-            runtime = KernelRuntime(
-                model=model,
-                sessions=store,
-                tools=session_tools(deps, layout),
-                waits=waits,
-                clock=deps.clock,
-                ids=deps.ids,
-                registry=deps.runs,
-            )
+        try:
+            runtime = session_runtime(deps, store, layout)
+        except LlmConfigError as err:
+            raise http_error(err, 503) from err
         return StreamingResponse(
             iter_run_sse(
                 runtime,
@@ -1310,16 +1306,55 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/projects/{name}/topic-map")
     def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:
         layout = require_project_layout(name)
+
+        # A plan proposed by the chat is entered through the same original
+        # button; the wait is what connects that press to the conversation. A
+        # wrong wait is answered before a missing model, and nothing is written
+        # until the job can actually start.
+        job_wait: JobWait | None = None
+        if body.waitId or body.sessionId:
+            if not (body.waitId and body.sessionId):
+                raise CodedHTTPException(
+                    400,
+                    "a waited-on plan needs both its session and its wait",
+                    code="wait.contextIncomplete",
+                )
+            store = open_session_store(deps, body.sessionId, layout=layout)
+            job_wait = JobWait(
+                store,
+                session_waits(deps, store),
+                body.sessionId,
+                body.waitId,
+            )
+            check_wait_for_job(job_wait, "plan")
+
         try:
             ensure_llm_configured()
         except LlmConfigError as err:
             raise http_error(err, 503) from err
+
+        on_finished = None
+        if job_wait is not None:
+            enter_wait_for_job(deps, job_wait, "plan")
+            finished_wait = job_wait
+            on_finished = lambda: start_resume(
+                deps,
+                finished_wait.store,
+                layout,
+                finished_wait.session_id,
+                finished_wait.wait_id,
+            )
+
         return StreamingResponse(
             iter_topic_map_sse(
                 layout,
                 intent=body.intent,
                 source_identity=body.sourceIdentity,
                 language=body.language,
+                waits=job_wait.waits if job_wait is not None else None,
+                session_id=job_wait.session_id if job_wait is not None else "",
+                wait_id=job_wait.wait_id if job_wait is not None else "",
+                on_finished=on_finished,
             ),
             media_type="text/event-stream",
             headers={

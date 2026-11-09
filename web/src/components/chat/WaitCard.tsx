@@ -17,8 +17,8 @@ export function WaitCard({
   stopping = false,
 }: {
   wait: WaitPayload;
-  /** Opening the interface that owns the job, with the wait it must carry. */
-  onOpen?: (view: string, waitId: string) => void;
+  /** Opening the interface that owns the job, carrying this wait with it. */
+  onOpen?: (wait: WaitPayload) => void;
   /** Stop a wait the human has not entered; absent while it cannot be stopped. */
   onStop?: () => void;
   stopping?: boolean;
@@ -31,6 +31,7 @@ export function WaitCard({
     defaultValue: t("chat.wait.completion.start"),
   });
   const stop = wait.status === "proposed" && onStop !== undefined;
+  const finished = wait.status === "completed" || wait.status === "failed";
 
   return (
     <section
@@ -57,11 +58,45 @@ export function WaitCard({
           {t("chat.wait.enteredHint")}
         </p>
       ) : null}
+      {finished ? (
+        <div className="mt-1.5 rounded border bg-background/60 p-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground">
+            {t("chat.wait.result")}
+            {wait.artifacts?.length
+              ? ` · ${t("chat.wait.resultCount", { count: wait.artifacts.length })}`
+              : ""}
+          </p>
+          {wait.artifacts?.length ? (
+            <ul className="mt-0.5 flex flex-col gap-0.5">
+              {wait.artifacts.map((item) => (
+                <li
+                  key={`${item.kind}:${item.id}`}
+                  className="flex items-center gap-1.5 text-[11px]"
+                >
+                  <span className="min-w-0 flex-1 truncate" title={item.id}>
+                    {item.label || item.id}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {t(`chat.wait.artifact.${item.kind}`, {
+                      defaultValue: item.kind,
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {wait.status === "failed" ? (
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {t("chat.wait.jobFailedHint")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-2 flex items-center gap-1.5">
         <Button
           variant="outline"
           size="sm"
-          onClick={() => onOpen?.(wait.interface, wait.waitId)}
+          onClick={() => onOpen?.(wait)}
         >
           <ArrowUpRight />
           {t(`chat.wait.open.${wait.interface}`, {

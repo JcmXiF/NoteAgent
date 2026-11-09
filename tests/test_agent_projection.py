@@ -160,6 +160,57 @@ class ProjectionGoldenTests(unittest.TestCase):
         )
         self.assertEqual(projection.transcript[1].cards, (card,))
 
+    def test_a_completed_wait_becomes_a_job_result_message(self) -> None:
+        entries = [
+            _entry("e1", "message", role="user", content="安排一下"),
+            _entry(
+                "w1",
+                "wait_proposed",
+                waitId="w1",
+                job="plan",
+                interface="source",
+                completion="start_plan",
+                proposedAt="2026-11-10T09:00:00Z",
+            ),
+            _entry("w2", "wait_entered", waitId="w1", jobId="job-9"),
+            _entry(
+                "w3",
+                "wait_completed",
+                waitId="w1",
+                jobId="job-9",
+                job="plan",
+                status="completed",
+                summary="planned 2 pages",
+                artifacts=[
+                    {
+                        "kind": "write",
+                        "id": "concepts/entropy",
+                        "label": "Entropy",
+                    }
+                ],
+            ),
+            _entry("w4", "resume_started", waitId="w1"),
+            _assistant("e2", "规划好了，接下来开始写。"),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(
+            [message.role for message in projection.messages],
+            ["user", "system", "assistant"],
+        )
+        self.assertEqual(projection.messages[0].content, "安排一下")
+        self.assertEqual(projection.messages[2].content, "规划好了，接下来开始写。")
+        result = projection.messages[1].content
+        self.assertTrue(result.startswith("Job result (plan, completed"))
+        self.assertIn("planned 2 pages", result)
+        self.assertIn("write:concepts/entropy", result)
+        self.assertEqual(
+            [(item.role, item.content) for item in projection.transcript],
+            [("user", "安排一下"), ("assistant", "规划好了，接下来开始写。")],
+        )
+        self.assertEqual(projection.diagnostics, ())
+
     def test_a_missing_tool_result_is_filled_in_place(self) -> None:
         entries = [
             _assistant("e1", "", [_call("t1"), _call("t2", name="search")]),

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { SessionView } from "@/components/chat/SessionView";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, type WaitPayload } from "@/lib/api/client";
 import {
   fetchSession,
   postSessionCancel,
@@ -88,7 +88,7 @@ afterEach(() => {
 async function draw(
   sessionId = "s1",
   onOpenLink?: (target: string) => void,
-  onOpenInterface?: (view: string, waitId: string) => void,
+  onOpenInterface?: (wait: WaitPayload, sessionId: string) => void,
 ) {
   await act(async () => {
     root.render(
@@ -437,7 +437,38 @@ describe("a session read from its log", () => {
     await act(async () => {
       open?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(onOpenInterface).toHaveBeenCalledWith("source", "wait-1");
+    expect(onOpenInterface).toHaveBeenCalledWith(proposedWait, "s1");
+  });
+
+  it("shows what a finished job produced", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      wait: {
+        ...proposedWait,
+        status: "completed",
+        resultSummary: "planned 2 pages",
+        artifacts: [
+          { kind: "write", id: "concepts/entropy", label: "Entropy" },
+          {
+            kind: "mention",
+            id: "concepts/information",
+            label: "Information",
+          },
+        ],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("chat.wait.result"));
+    expect(host.textContent).toContain(
+      i18n.t("chat.wait.resultCount", { count: 2 }),
+    );
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain("Information");
+    expect(host.textContent).toContain(i18n.t("chat.wait.artifact.write"));
+    expect(host.textContent).toContain(i18n.t("chat.wait.artifact.mention"));
+    expect(host.textContent).not.toContain(i18n.t("chat.wait.stop"));
   });
 
   it("stops a proposed wait and shows it cancelled", async () => {

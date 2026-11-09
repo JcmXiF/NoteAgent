@@ -18,6 +18,7 @@ from noteagent.agent.events import (
     is_terminal,
 )
 from noteagent.agent.faux import FauxModelClient
+from noteagent.agent.jobs import JobArtifact, JobResult
 from noteagent.agent.kernel import MAX_ABORTED_CHARS, KernelRuntime, RunRegistry
 from noteagent.agent.model import (
     AssistantMessage,
@@ -29,8 +30,10 @@ from noteagent.agent.model import (
     ToolCall,
 )
 from noteagent.agent.projection import MISSING_RESULT, project
-from noteagent.agent.runtime import BusyError, RunCancelled, UserInput
+from noteagent.agent.runtime import BusyError, Resume, RunCancelled, UserInput
 from noteagent.agent.tools import ToolRegistry, ToolResult, ToolSpec
+from noteagent.agent.wait import WaitState
+from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore
 
@@ -557,6 +560,232 @@ class KernelRuntimeTests(unittest.TestCase):
         self.assertEqual(wait.status, "proposed")
         self.assertEqual(wait.job, "compile")
         self.assertNotEqual(again.wait_id, result.wait_id)
+
+    def complete_plan(
+        self,
+        wait_id: str = "w1",
+        *,
+        summary: str = "planned 2 pages",
+        artifacts: tuple[JobArtifact, ...] = (),
+    ) -> SessionWaitStore:
+        waits = SessionWaitStore(self.store)
+        waits.propose(
+            "s1",
+            WaitState(
+                wait_id=wait_id,
+                job="plan",
+                interface="source",
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion="start_plan",
+            ),
+        )
+        waits.enter("s1", wait_id, "job-9")
+        waits.finish(
+            "s1",
+            wait_id,
+            JobResult(
+                job="plan",
+                status="succeeded",
+                summary=summary,
+                artifacts=artifacts,
+            ),
+        )
+        return waits
+
+    def test_a_pending_wait_is_named_in_the_prompt(self) -> None:
+        SessionWaitStore(self.store).propose(
+            "s1",
+            WaitState(
+                wait_id="w1",
+                job="plan",
+                interface="source",
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion="start_plan",
+            ),
+        )
+        model = FauxModelClient.text("先等你开始规划。")
+
+        result = self.runtime(model).execute(
+            UserInput("s1", "现在呢"), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "completed")
+        system = model.requests[0].messages[0]
+        self.assertEqual(system.role, "system")
+        self.assertIn("## Run", system.content)
+        self.assertIn("status: waiting", system.content)
+        self.assertIn("pending wait", system.content)
+        self.assertIn("job: plan", system.content)
+
+    def test_a_resume_run_reads_the_job_result_and_answers(self) -> None:
+        self.complete_plan(
+            summary="planned 2 pages",
+            artifacts=(
+                JobArtifact("write", "concepts/entropy", "Entropy"),
+                JobArtifact("mention", "concepts/information", "Information"),
+            ),
+        )
+        model = FauxModelClient.text("规划完成，接下来可以编译。")
+        runtime = self.runtime(model)
+
+        result = runtime.execute(Resume("s1", "w1"), lambda _event: None)
+
+        self.assertEqual(result.status, "completed")
+        entries = self.store.load("s1").entries
+        self.assertEqual(
+            [entry["type"] for entry in entries],
+            [
+                "wait_proposed",
+                "wait_entered",
+                "wait_completed",
+                "resume_started",
+                "message",
+            ],
+        )
+        self.assertEqual(entries[-1]["role"], "assistant")
+        self.assertEqual(entries[-1]["content"], "规划完成，接下来可以编译。")
+
+        messages = model.requests[0].messages
+        self.assertIn("last job result", messages[0].content)
+        joined = "\n".join(message.content for message in messages)
+        self.assertIn("Job result (plan, completed)", joined)
+        self.assertIn("planned 2 pages", joined)
+        self.assertIn("write:concepts/entropy", joined)
+
+    def test_a_resume_is_not_run_twice(self) -> None:
+        self.complete_plan()
+        first = self.runtime(FauxModelClient.text("第一次继续。"))
+        first.execute(Resume("s1", "w1"), lambda _event: None)
+
+        second_model = FauxModelClient.text("不该再继续。")
+        second = self.runtime(second_model)
+        events = []
+        result = second.execute(Resume("s1", "w1"), events.append)
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(second_model.requests, [])
+        self.assertIsInstance(events[-1], DoneEvent)
+        answers = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry.get("type") == "message"
+            and entry.get("role") == "assistant"
+        ]
+        self.assertEqual(len(answers), 1)
+
+    def test_a_resume_waits_until_the_job_is_finished(self) -> None:
+        waits = SessionWaitStore(self.store)
+        waits.propose(
+            "s1",
+            WaitState(
+                wait_id="w1",
+                job="plan",
+                interface="source",
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion="start_plan",
+            ),
+        )
+        model = FauxModelClient.text("不该跑。")
+        runtime = self.runtime(model)
+
+        with self.assertRaises(ValueError):
+            runtime.execute(Resume("s1", "w1"), lambda _event: None)
+
+        waits.enter("s1", "w1", "job-9")
+        with self.assertRaises(ValueError):
+            runtime.execute(Resume("s1", "w1"), lambda _event: None)
+
+        self.assertEqual(model.requests, [])
+        self.assertFalse(
+            any(
+                entry["type"] == "resume_started"
+                for entry in self.store.load("s1").entries
+            )
+        )
+
+    def test_a_cancelled_job_still_resumes_the_chat(self) -> None:
+        waits = SessionWaitStore(self.store)
+        waits.propose(
+            "s1",
+            WaitState(
+                wait_id="w1",
+                job="plan",
+                interface="source",
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion="start_plan",
+            ),
+        )
+        waits.enter("s1", "w1", "job-9")
+        waits.finish(
+            "s1",
+            "w1",
+            JobResult(
+                job="plan",
+                status="cancelled",
+                summary="stopped by the job",
+            ),
+        )
+        model = FauxModelClient.text("作业取消了。")
+
+        result = self.runtime(model).execute(
+            Resume("s1", "w1"), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(model.requests)
+        joined = "\n".join(
+            message.content for message in model.requests[0].messages
+        )
+        self.assertIn("Job result (plan, cancelled)", joined)
+
+    def test_a_wait_stopped_before_its_job_does_not_resume(self) -> None:
+        waits = SessionWaitStore(self.store)
+        waits.propose(
+            "s1",
+            WaitState(
+                wait_id="w1",
+                job="plan",
+                interface="source",
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion="start_plan",
+            ),
+        )
+        waits.cancel("s1", "w1")
+        model = FauxModelClient.text("不该跑。")
+
+        with self.assertRaises(ValueError):
+            self.runtime(model).execute(Resume("s1", "w1"), lambda _event: None)
+
+        self.assertEqual(model.requests, [])
+
+    def test_after_a_plan_the_model_can_propose_compile(self) -> None:
+        self.complete_plan()
+        model = FauxModelClient.tool_call(
+            "p1",
+            "propose",
+            '{"job":"compile","interface":"plan_board"}',
+            text="规划好了，开始编译。",
+        )
+        runtime = self.runtime(model)
+
+        result = runtime.execute(Resume("s1", "w1"), lambda _event: None)
+
+        self.assertEqual(result.status, "waiting")
+        wait = runtime.wait_state("s1")
+        assert wait is not None
+        self.assertEqual(wait.job, "compile")
+        self.assertEqual(wait.status, "proposed")
+        self.assertTrue(
+            any(
+                entry["type"] == "resume_started"
+                for entry in self.store.load("s1").entries
+            )
+        )
 
     def _start(self, runtime, sink):
         """Run one question in the background, so the test can stop it."""

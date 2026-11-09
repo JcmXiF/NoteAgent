@@ -341,9 +341,14 @@ export type WaitPayload = {
   status: string;
   completion: string;
   proposedAt: string;
+  /** The job the human started, once the wait has been entered. */
+  jobId?: string;
   intent?: string;
   reason?: string;
   resultSummary?: string;
+  /** What a finished job produced, as bounded references. */
+  artifacts?: { kind: string; id: string; label?: string }[];
+  error?: string;
 };
 
 /**

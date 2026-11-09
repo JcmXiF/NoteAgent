@@ -59,7 +59,7 @@ class SessionWaitStoreTests(unittest.TestCase):
         self.assertEqual(wait.intent, "plan entropy")
         self.assertEqual(wait.proposed_at, "2026-11-10T09:00:00Z")
 
-    def test_entering_keeps_what_was_proposed(self) -> None:
+    def test_entering_keeps_what_was_proposed_and_names_the_job(self) -> None:
         self.propose()
 
         self.waits.enter("s1", "w1", "job-9")
@@ -70,6 +70,7 @@ class SessionWaitStoreTests(unittest.TestCase):
         self.assertEqual(wait.job, "plan")
         self.assertEqual(wait.interface, "source")
         self.assertEqual(wait.intent, "plan entropy")
+        self.assertEqual(wait.job_id, "job-9")
 
     def test_cancelling_leaves_the_last_wait_cancelled(self) -> None:
         self.propose()
@@ -80,17 +81,21 @@ class SessionWaitStoreTests(unittest.TestCase):
         assert wait is not None
         self.assertEqual(wait.status, "cancelled")
 
-    def test_completing_keeps_the_summary(self) -> None:
+    def test_completing_keeps_the_summary_and_the_artifacts(self) -> None:
         self.propose()
+        self.waits.enter("s1", "w1", "job-9")
 
-        self.waits.complete(
+        self.waits.finish(
             "s1",
             "w1",
             JobResult(
                 job="plan",
                 status="succeeded",
                 summary="planned 3 pages",
-                artifacts=(JobArtifact("plan", "concepts/entropy", "Entropy plan"),),
+                artifacts=(
+                    JobArtifact("write", "concepts/entropy", "Entropy"),
+                    JobArtifact("mention", "concepts/information", "Information"),
+                ),
             ),
         )
 
@@ -98,11 +103,82 @@ class SessionWaitStoreTests(unittest.TestCase):
         assert wait is not None
         self.assertEqual(wait.status, "completed")
         self.assertEqual(wait.result_summary, "planned 3 pages")
+        self.assertEqual(wait.job_id, "job-9")
+        self.assertEqual(
+            [(item.kind, item.id, item.label) for item in wait.artifacts],
+            [
+                ("write", "concepts/entropy", "Entropy"),
+                ("mention", "concepts/information", "Information"),
+            ],
+        )
 
-    def test_a_failed_job_is_a_failed_wait(self) -> None:
+    def test_finishing_the_same_wait_twice_keeps_one_result(self) -> None:
+        self.propose()
+        self.waits.enter("s1", "w1", "job-9")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="succeeded", summary="planned 1 page"),
+        )
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="failed", summary="a second delivery"),
+        )
+
+        completed = [
+            entry
+            for entry in self.sessions.load("s1").entries
+            if entry["type"] == "wait_completed"
+        ]
+        self.assertEqual(len(completed), 1)
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "completed")
+        self.assertEqual(wait.result_summary, "planned 1 page")
+
+    def test_a_cancelled_job_is_recorded_as_cancelled(self) -> None:
+        self.propose()
+        self.waits.enter("s1", "w1", "job-9")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="cancelled", summary="stopped"),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "cancelled")
+        self.assertEqual(wait.job_id, "job-9")
+
+    def test_finishing_a_superseded_wait_does_nothing(self) -> None:
+        self.propose("w1")
+        self.waits.cancel("s1", "w1")
+        self.propose("w2", "compile", "plan_board")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="succeeded", summary="an old plan"),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.wait_id, "w2")
+        self.assertEqual(wait.status, "proposed")
+        self.assertFalse(
+            any(
+                entry["type"] == "wait_completed"
+                for entry in self.sessions.load("s1").entries
+            )
+        )
+
+    def test_a_failed_job_is_a_failed_wait_with_its_error(self) -> None:
         self.propose()
 
-        self.waits.complete(
+        self.waits.finish(
             "s1",
             "w1",
             JobResult(job="plan", status="failed", summary="", error="out of budget"),
@@ -111,6 +187,7 @@ class SessionWaitStoreTests(unittest.TestCase):
         wait = self.waits.current("s1")
         assert wait is not None
         self.assertEqual(wait.status, "failed")
+        self.assertEqual(wait.error, "out of budget")
 
     def test_a_new_proposal_supersedes_the_previous_wait(self) -> None:
         self.propose("w1")

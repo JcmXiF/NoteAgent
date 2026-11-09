@@ -25,6 +25,7 @@ from noteagent.agent.runtime import RunResult
 from noteagent.agent.store import SessionSnapshot, SessionSummary
 from noteagent.agent.tools import ToolContext
 from noteagent.agent.wait import WaitState
+from noteagent.agent.wait_store import wait_status_for
 
 
 class FixedClock:
@@ -190,12 +191,18 @@ class FakeWaitStore:
 
     def enter(self, session_id: str, wait_id: str, job_id: str) -> None:
         wait = self.waits[session_id]
-        self.waits[session_id] = replace(wait, status="entered")
+        self.waits[session_id] = replace(
+            wait, status="entered", job_id=job_id
+        )
 
-    def complete(self, session_id: str, wait_id: str, result: JobResult) -> None:
+    def finish(self, session_id: str, wait_id: str, result: JobResult) -> None:
         wait = self.waits[session_id]
         self.waits[session_id] = replace(
-            wait, status="completed", result_summary=result.summary
+            wait,
+            status=wait_status_for(result),
+            result_summary=result.summary,
+            artifacts=result.artifacts,
+            error=result.error,
         )
 
     def cancel(self, session_id: str, wait_id: str, reason: str = "") -> None:

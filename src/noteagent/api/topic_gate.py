@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from typing import Any
 
+from noteagent.agent.jobs import JobArtifact, JobResult
+from noteagent.agent.store import WaitStore
 from noteagent.api.ingest import ingest_result_payload
 from noteagent.api.sse import iter_job_sse
+from noteagent.api.waited_jobs import iter_waited_job_sse
 from noteagent.ingest.clips import ClipCollection, load_clip_store, save_clip_store
 from noteagent.ingest.confirmed import ingest_confirmed
 from noteagent.ingest.topic_map import (
@@ -122,6 +125,51 @@ def topic_map_payload(topic_map: TopicMap) -> dict[str, Any]:
     return topic_map.to_dict()
 
 
+def plan_job_result(payload: Mapping[str, Any]) -> JobResult:
+    """The typed result the chat records for a finished plan.
+
+    Every page the plan names is kept. The plan itself is capped when it is
+    parsed, so this reading is already bounded; the prompt applies its own,
+    smaller bound without changing what the transcript records.
+    """
+    counts = {"write": 0, "mention": 0, "skip": 0}
+    artifacts: list[JobArtifact] = []
+    total = 0
+    for raw in _plan_nodes(payload):
+        slug = str(raw.get("slug") or "").strip()
+        if not slug:
+            continue
+        coverage = str(raw.get("coverage") or "skip").strip() or "skip"
+        counts[coverage] = counts.get(coverage, 0) + 1
+        total += 1
+        title = str(raw.get("title") or slug).strip() or slug
+        artifacts.append(JobArtifact(coverage, slug, title))
+    summary = (
+        f"planned {total} page(s): {counts['write']} write, "
+        f"{counts['mention']} mention, {counts['skip']} skip"
+    )
+    return JobResult(
+        job="plan",
+        status="succeeded",
+        summary=summary,
+        artifacts=tuple(artifacts),
+    )
+
+
+def _plan_nodes(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        return [item for item in candidates if isinstance(item, Mapping)]
+    nodes: list[Mapping[str, Any]] = []
+    primary = payload.get("primary")
+    if isinstance(primary, Mapping):
+        nodes.append(primary)
+    also = payload.get("alsoInSources")
+    if isinstance(also, list):
+        nodes.extend(item for item in also if isinstance(item, Mapping))
+    return nodes
+
+
 def run_ingest_confirmed_job(
     layout: ProjectLayout,
     confirmed: list[dict[str, Any]],
@@ -196,6 +244,10 @@ def iter_topic_map_sse(
     intent: str = "",
     source_identity: str = "",
     language: str = "",
+    waits: WaitStore | None = None,
+    session_id: str = "",
+    wait_id: str = "",
+    on_finished=None,
 ) -> Iterator[bytes]:
     def worker(on_status, cancel, _emit):
         return run_topic_map_job(
@@ -207,6 +259,17 @@ def iter_topic_map_sse(
             cancel=cancel,
         )
 
+    if waits is not None:
+        return iter_waited_job_sse(
+            worker,
+            waits=waits,
+            session_id=session_id,
+            wait_id=wait_id,
+            job="plan",
+            result_from_payload=plan_job_result,
+            on_finished=on_finished,
+            default_step_id="plan",
+        )
     return iter_job_sse(worker, default_step_id="plan")
 
 
@@ -231,6 +294,7 @@ def iter_ingest_confirmed_sse(
 __all__ = [
     "iter_ingest_confirmed_sse",
     "iter_topic_map_sse",
+    "plan_job_result",
     "run_ingest_confirmed_job",
     "run_topic_map_job",
     "topic_map_payload",

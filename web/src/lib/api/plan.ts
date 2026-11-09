@@ -4,6 +4,12 @@ import type { ConfirmedPage, IngestDone, TopicMap } from "@/lib/api/types";
 
 type StepStatus = (message: string, stepId?: string) => void;
 
+/** The chat wait this press is entering, when the plan was proposed there. */
+export type PlanWait = {
+  sessionId: string;
+  waitId: string;
+};
+
 /**
  * Turns the selected passages into candidate pages.
  *
@@ -15,6 +21,7 @@ export function planTopicMap(
   options: {
     intent: string;
     sourceIdentity?: string;
+    wait?: PlanWait;
     onStatus?: StepStatus;
     signal?: AbortSignal;
   },
@@ -24,6 +31,9 @@ export function planTopicMap(
     {
       intent: options.intent,
       ...(options.sourceIdentity ? { sourceIdentity: options.sourceIdentity } : {}),
+      ...(options.wait
+        ? { sessionId: options.wait.sessionId, waitId: options.wait.waitId }
+        : {}),
       // The core cannot know what language the reader is using, and the reasons it
       // asks the model for are read by that reader. Page names follow the material
       // either way.

@@ -41,6 +41,7 @@ _KNOWN_TYPES = frozenset(
         "message",
         "model_change",
         "reset",
+        "resume_started",
         "session",
         "session_info",
         "system_section",

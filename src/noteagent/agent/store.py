@@ -86,7 +86,7 @@ class WaitStore(Protocol):
     def enter(self, session_id: str, wait_id: str, job_id: str) -> None:
         ...
 
-    def complete(self, session_id: str, wait_id: str, result: JobResult) -> None:
+    def finish(self, session_id: str, wait_id: str, result: JobResult) -> None:
         ...
 
     def cancel(self, session_id: str, wait_id: str, reason: str = "") -> None:

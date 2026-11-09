@@ -650,6 +650,14 @@
         "cancelled": "已停下。"
       },
       "enteredHint": "作业现在归原界面管理；要停下请到那里操作。",
+      "result": "结果",
+      "resultCount": "{{count}} 页",
+      "artifact": {
+        "write": "写入",
+        "mention": "提及",
+        "skip": "跳过"
+      },
+      "jobFailedHint": "作业失败了；可以在对话里让它重试。",
       "stop": "停下等待",
       "stopping": "正在停下…",
       "stopFailed": "无法停下这次等待"
@@ -1376,7 +1384,10 @@
       "internal": "出了点问题，请重试。",
       "wait": {
         "notFound": "这条等待已经不是会话当前的那一条了。",
-        "notCancelable": "作业已经开始；请到原界面停止。"
+        "notCancelable": "作业已经开始；请到原界面停止。",
+        "contextIncomplete": "从对话发起的作业需要同时带上会话和等待。",
+        "wrongJob": "这条等待属于另一个作业。",
+        "alreadyStarted": "这条等待已经启动过了。"
       },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"

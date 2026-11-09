@@ -37,8 +37,8 @@ export function SessionView({
   sessionId: string;
   /** A wiki link in an answer; absent leaves the link inert. */
   onOpenLink?: (target: string) => void;
-  /** Opening the interface a wait points at, carrying the wait id it needs. */
-  onOpenInterface?: (view: string, waitId: string) => void;
+  /** Opening the interface a wait points at, carrying the wait it needs. */
+  onOpenInterface?: (wait: WaitPayload, sessionId: string) => void;
 }) {
   const { t } = useTranslation();
   const [session, setSession] = useState<SessionPayload | null>(null);
@@ -275,7 +275,7 @@ export function SessionView({
         {shownWait ? (
           <WaitCard
             wait={shownWait}
-            onOpen={onOpenInterface}
+            onOpen={(target) => onOpenInterface(target, sessionId)}
             onStop={
               sending
                 ? undefined

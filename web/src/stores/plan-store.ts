@@ -12,6 +12,7 @@ import {
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useClipsStore } from "@/stores/clips-store";
 import { useDeepSearchStore } from "@/stores/deep-search-store";
+import { useWaitContextStore } from "@/stores/wait-context-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import i18n from "@/i18n";
 
@@ -103,10 +104,14 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           // The plan is decided against what the board says, so anything the reader
           // has just answered has to be stored before it is run.
           await useClipsStore.getState().persistNow();
+          // A press that came from a chat wait carries that wait into the job;
+          // the endpoint records the entry and the result under it.
+          const wait = useWaitContextStore.getState().take("plan");
           ctx.status(i18n.t("plan.planProgress"));
           const map = await planTopicMap(project, {
             intent,
             ...(scope ? { sourceIdentity: scope } : {}),
+            ...(wait ? { wait } : {}),
             onStatus: (message, stepId) => {
               // Developer wording from the backend goes to the log, not the
               // screen; the progress sentence is the frontend's.

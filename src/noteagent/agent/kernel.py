@@ -51,8 +51,17 @@ from noteagent.agent.runtime import (
 )
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import Diagnostic, ToolContext, ToolRegistry, ToolResult
-from noteagent.agent.wait import WaitState, completion_for, is_active
-from noteagent.agent.wait_store import SessionWaitStore
+from noteagent.agent.wait import (
+    WaitState,
+    completion_for,
+    is_active,
+    render_run_section,
+)
+from noteagent.agent.wait_store import (
+    SessionWaitStore,
+    current_wait,
+    has_resumed,
+)
 
 #: An answer stopped mid-stream is kept only as far as this. A cancellation must
 #: not be able to put an unbounded partial into the log.
@@ -132,14 +141,14 @@ class KernelRuntime:
         self._max_tool_rounds = max_tool_rounds
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
-        if isinstance(request, Resume):
-            raise ValueError("resume arrives with the wait slice")
         if isinstance(request, Retry):
             raise ValueError("no route opens a retry yet")
         session_id = request.session_id
         cancel = self._registry.claim(session_id)
         run_id = self._ids.new_id("run")
         try:
+            if isinstance(request, Resume):
+                return self._run_resume(request, sink, run_id, cancel)
             return self._run_user(request, sink, run_id, cancel)
         finally:
             self._registry.release(session_id)
@@ -164,14 +173,75 @@ class KernelRuntime:
         content = request.content.strip()
         if not content:
             raise ValueError("question is empty")
-        # What the current model call has streamed but not yet committed. A stop
-        # keeps it, so the reader can see where the answer ended.
-        partial: list[str] = []
         try:
             _check_cancel(cancel)
             self._sessions.append(
                 session_id, {"type": "message", "role": "user", "content": content}
             )
+        except RunCancelled:
+            return self._cancelled_result(session_id, run_id, sink, "")
+        return self._run_loop(session_id, run_id, sink, cancel)
+
+    def _run_resume(
+        self,
+        request: Resume,
+        sink: EventSink,
+        run_id: str,
+        cancel: Event,
+    ) -> RunResult:
+        """Continue a session after the job it waited on came back.
+
+        A resume is a run like any other, except that its turn begins with the
+        job result the log now holds rather than with something a person said.
+        The marker makes a second delivery of the same completion a no-op.
+        """
+        session_id = request.session_id
+        try:
+            _check_cancel(cancel)
+            snapshot = self._sessions.load(session_id)
+            wait = current_wait(snapshot.entries)
+            if wait is None or wait.wait_id != request.wait_id:
+                raise ValueError(
+                    f"session {session_id} is not waiting on {request.wait_id}"
+                )
+            # A job that was cancelled still has a result: the cancellation.
+            # A wait the human stopped before starting has no job and no
+            # continuation to run.
+            finished = wait.status in ("completed", "failed") or (
+                wait.status == "cancelled" and bool(wait.job_id)
+            )
+            if not finished:
+                raise ValueError(
+                    f"wait {request.wait_id} is {wait.status}, not finished"
+                )
+            if has_resumed(snapshot.entries, request.wait_id):
+                # The completion was delivered twice: the job may only continue
+                # the conversation once.
+                sink(
+                    DoneEvent(
+                        {"id": session_id}, {"id": run_id, "status": "completed"}
+                    )
+                )
+                return RunResult(session_id, run_id, "completed")
+            self._sessions.append(
+                session_id,
+                {"type": "resume_started", "waitId": request.wait_id},
+            )
+        except RunCancelled:
+            return self._cancelled_result(session_id, run_id, sink, "")
+        return self._run_loop(session_id, run_id, sink, cancel)
+
+    def _run_loop(
+        self,
+        session_id: str,
+        run_id: str,
+        sink: EventSink,
+        cancel: Event,
+    ) -> RunResult:
+        # What the current model call has streamed but not yet committed. A stop
+        # keeps it, so the reader can see where the answer ended.
+        partial: list[str] = []
+        try:
             sink(StatusEvent("thinking", "think"))
             messages = self._prompt(session_id)
             tool_rounds = 0
@@ -491,6 +561,9 @@ class KernelRuntime:
         parts = [text for text in projection.sections.values() if text.strip()]
         if projection.summary.strip():
             parts.append("Summary of earlier conversation:\n" + projection.summary)
+        run_section = render_run_section(current_wait(snapshot.entries))
+        if run_section.strip():
+            parts.append(run_section)
         messages = list(projection.messages)
         if parts:
             messages.insert(0, Message("system", "\n\n".join(parts)))
