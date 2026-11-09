@@ -73,7 +73,10 @@ export function WaitCard({
                   key={`${item.kind}:${item.id}`}
                   className="flex items-center gap-1.5 text-[11px]"
                 >
-                  <span className="min-w-0 flex-1 truncate" title={item.id}>
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    title={item.label || item.id}
+                  >
                     {item.label || item.id}
                   </span>
                   <span className="shrink-0 text-[10px] text-muted-foreground">

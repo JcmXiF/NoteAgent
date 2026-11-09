@@ -11,7 +11,7 @@ vi.mock("@/i18n", () => ({
 }));
 
 import { postSse } from "@/lib/api/client";
-import { planTopicMap } from "@/lib/api/plan";
+import { compileConfirmed, planTopicMap } from "@/lib/api/plan";
 
 beforeEach(() => {
   vi.mocked(postSse).mockClear();
@@ -43,5 +43,29 @@ describe("the plan request", () => {
       intent: "熵",
       language: "zh",
     });
+  });
+
+  it("carries the wait a compile button is entering", async () => {
+    const confirmed = [
+      {
+        name: "Entropy",
+        slug: "concepts/entropy",
+        wikiPath: "wiki/concepts/entropy.md",
+        action: "write" as const,
+        sectionIds: ["s1"],
+      },
+    ];
+
+    await compileConfirmed(
+      "demo",
+      { intent: "熵", confirmed },
+      { wait: { sessionId: "s1", waitId: "w2" } },
+    );
+
+    expect(postSse).toHaveBeenCalledWith(
+      "/projects/demo/ingest-confirmed",
+      { intent: "熵", confirmed, sessionId: "s1", waitId: "w2" },
+      { onStatus: undefined, signal: undefined },
+    );
   });
 });

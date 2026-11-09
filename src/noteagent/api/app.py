@@ -96,17 +96,17 @@ from noteagent.api.projects import (
     resolve_repo_root,
     use_project,
 )
-from noteagent.api.resume import reconcile_session, start_resume
+from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
 from noteagent.api.session_access import (
-    JobWait,
     active_layout,
     cancel_session,
     cancel_wait,
-    check_wait_for_job,
+    claim_job,
     enter_wait_for_job,
+    job_wait_for_body,
     open_session_store,
     session_busy,
     session_runtime,
@@ -496,6 +496,10 @@ class ConfirmedPageBody(BaseModel):
 class IngestConfirmedBody(BaseModel):
     intent: str = ""
     confirmed: list[ConfirmedPageBody] = Field(..., min_length=1, max_length=20)
+    #: When this compile was proposed from the chat, the wait it belongs to.
+    #: The human confirmed the pages here, and the chat records the outcome.
+    sessionId: str = Field(default="", max_length=80)
+    waitId: str = Field(default="", max_length=120)
 
 
 class DeepSearchActBody(BaseModel):
@@ -1311,22 +1315,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         # button; the wait is what connects that press to the conversation. A
         # wrong wait is answered before a missing model, and nothing is written
         # until the job can actually start.
-        job_wait: JobWait | None = None
-        if body.waitId or body.sessionId:
-            if not (body.waitId and body.sessionId):
-                raise CodedHTTPException(
-                    400,
-                    "a waited-on plan needs both its session and its wait",
-                    code="wait.contextIncomplete",
-                )
-            store = open_session_store(deps, body.sessionId, layout=layout)
-            job_wait = JobWait(
-                store,
-                session_waits(deps, store),
-                body.sessionId,
-                body.waitId,
-            )
-            check_wait_for_job(job_wait, "plan")
+        job_wait = job_wait_for_body(
+            deps, layout, body.sessionId, body.waitId, "plan"
+        )
 
         try:
             ensure_llm_configured()
@@ -1335,15 +1326,12 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
         on_finished = None
         if job_wait is not None:
-            enter_wait_for_job(deps, job_wait, "plan")
-            finished_wait = job_wait
-            on_finished = lambda: start_resume(
-                deps,
-                finished_wait.store,
-                layout,
-                finished_wait.session_id,
-                finished_wait.wait_id,
-            )
+            job_id = enter_wait_for_job(deps, job_wait, "plan")
+            on_finished = job_completion(deps, job_wait, layout, job_id)
+        else:
+            # A direct press writes the same project; it is a collaboration job
+            # too, so it waits for the one the chat entered.
+            job_id = claim_job(deps)
 
         return StreamingResponse(
             iter_topic_map_sse(
@@ -1362,6 +1350,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+            background=BackgroundTask(
+                job_cleanup, deps, job_wait, layout, job_id, "plan"
+            ),
         )
 
     @app.post("/api/projects/{name}/ingest-confirmed")
@@ -1369,19 +1360,46 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         name: str, body: IngestConfirmedBody
     ) -> StreamingResponse:
         layout = require_project_layout(name)
+
+        # A compile proposed by the chat is entered through the same original
+        # button, after the human has decided which pages to write. The wait is
+        # what connects that confirmation to the conversation.
+        job_wait = job_wait_for_body(
+            deps, layout, body.sessionId, body.waitId, "compile"
+        )
+
         try:
             ensure_llm_configured()
         except LlmConfigError as err:
             raise http_error(err, 503) from err
+
+        on_finished = None
+        if job_wait is not None:
+            job_id = enter_wait_for_job(deps, job_wait, "compile")
+            on_finished = job_completion(deps, job_wait, layout, job_id)
+        else:
+            job_id = claim_job(deps)
+
         confirmed = [item.model_dump() for item in body.confirmed]
         return StreamingResponse(
-            iter_ingest_confirmed_sse(layout, confirmed, intent=body.intent),
+            iter_ingest_confirmed_sse(
+                layout,
+                confirmed,
+                intent=body.intent,
+                waits=job_wait.waits if job_wait is not None else None,
+                session_id=job_wait.session_id if job_wait is not None else "",
+                wait_id=job_wait.wait_id if job_wait is not None else "",
+                on_finished=on_finished,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+            background=BackgroundTask(
+                job_cleanup, deps, job_wait, layout, job_id, "compile"
+            ),
         )
 
     # A write names its project, so these two cannot answer: saying so beats

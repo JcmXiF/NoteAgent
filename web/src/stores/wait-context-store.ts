@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { ApiError } from "@/lib/api/client";
 
 /**
  * The wait a job button is about to start.
@@ -38,3 +39,16 @@ export const useWaitContextStore = create<WaitContextState>((set, get) => ({
 
   clear: () => set({ pending: null }),
 }));
+
+/**
+ * Put a wait back after a press was refused because another job held the
+ * collaboration slot. The wait is still proposed, so pressing again must still
+ * carry it. Other failures leave it spent: it was either entered or is no
+ * longer the current wait.
+ */
+export function rearmOnBusy(err: unknown, context: WaitContext | null): void {
+  if (!context) return;
+  if (err instanceof ApiError && err.code === "job.busy") {
+    useWaitContextStore.getState().arm(context);
+  }
+}

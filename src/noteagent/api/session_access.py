@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
+from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
@@ -192,6 +193,52 @@ def check_wait_for_job(job_wait: JobWait, job: str) -> None:
         )
 
 
+def job_wait_for_body(
+    deps: AppDeps,
+    layout: ProjectLayout | None,
+    session_id: str,
+    wait_id: str,
+    job: str,
+) -> JobWait | None:
+    """The wait a job endpoint's body names, after checking it may be entered.
+
+    Both ids travel together: a wait without its session cannot be found, and a
+    session without a wait is not a proposal. A wrong wait is answered before
+    the model configuration, and nothing is written until the job can start.
+    """
+    if not (session_id or wait_id):
+        return None
+    if not (session_id and wait_id):
+        raise CodedHTTPException(
+            400,
+            "a waited-on job needs both its session and its wait",
+            code="wait.contextIncomplete",
+        )
+    store = open_session_store(deps, session_id, layout=layout)
+    job_wait = JobWait(
+        store,
+        session_waits(deps, store),
+        session_id,
+        wait_id,
+    )
+    check_wait_for_job(job_wait, job)
+    return job_wait
+
+
+def claim_job(deps: AppDeps) -> str:
+    """Take the one collaboration-job slot, or refuse with ``job.busy``.
+
+    A direct plan or compile press is a collaboration job too: it writes the
+    same project, so it must wait for a job the chat already entered.
+    """
+    job_id = deps.ids.new_id("job")
+    try:
+        deps.job_gate.claim(job_id)
+    except JobBusyError as err:
+        raise CodedHTTPException(409, str(err), code="job.busy") from err
+    return job_id
+
+
 def enter_wait_for_job(deps: AppDeps, job_wait: JobWait, job: str) -> str:
     """Record that the human started the waited-on job, once.
 
@@ -201,8 +248,14 @@ def enter_wait_for_job(deps: AppDeps, job_wait: JobWait, job: str) -> str:
     """
     with _ENTER_LOCK:
         check_wait_for_job(job_wait, job)
-        job_id = deps.ids.new_id("job")
-        job_wait.waits.enter(job_wait.session_id, job_wait.wait_id, job_id)
+        # The wait stays proposed when the slot is taken: the reader can press
+        # again once the other collaboration job has finished.
+        job_id = claim_job(deps)
+        try:
+            job_wait.waits.enter(job_wait.session_id, job_wait.wait_id, job_id)
+        except Exception:
+            deps.job_gate.release(job_id)
+            raise
         return job_id
 
 

@@ -655,7 +655,8 @@
       "artifact": {
         "write": "write",
         "mention": "mention",
-        "skip": "skip"
+        "skip": "skip",
+        "written": "written"
       },
       "jobFailedHint": "The job failed; ask in the chat to try it again.",
       "stop": "Stop waiting",
@@ -1388,6 +1389,9 @@
         "contextIncomplete": "A job started from the chat needs both its session and its wait.",
         "wrongJob": "This wait belongs to a different job.",
         "alreadyStarted": "This wait has already been started."
+      },
+      "job": {
+        "busy": "Another job is already running. Wait for it to finish."
       },
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."

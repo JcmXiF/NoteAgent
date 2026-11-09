@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -273,11 +273,108 @@ def iter_topic_map_sse(
     return iter_job_sse(worker, default_step_id="plan")
 
 
+def compile_job_result(
+    payload: Mapping[str, Any],
+    *,
+    confirmed: Sequence[Mapping[str, Any]] = (),
+) -> JobResult:
+    """The typed result the chat records for a finished compile.
+
+    A written file is shown by the page's name, not by its path: the reader is
+    looking at a result card, not at the project's folders. The confirmed pages
+    carry the names; a page the pipeline wrote without being asked for falls
+    back to its file stem, which is still a page word rather than a path.
+    """
+    names = _confirmed_names(confirmed)
+    written: list[JobArtifact] = []
+    failures: list[Mapping[str, Any]] = []
+    results = payload.get("results")
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, Mapping):
+                continue
+            warnings = result.get("writeWarnings")
+            if isinstance(warnings, list):
+                failures.extend(
+                    item for item in warnings if isinstance(item, Mapping)
+                )
+            files = result.get("written")
+            if not isinstance(files, list):
+                continue
+            for item in files:
+                if not isinstance(item, Mapping):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if not path:
+                    continue
+                label = names.get(_page_key(path)) or _page_label(path)
+                written.append(JobArtifact("written", path, label))
+    raw_errors = payload.get("errors")
+    if isinstance(raw_errors, list):
+        failures.extend(
+            item for item in raw_errors if isinstance(item, Mapping)
+        )
+    summary = f"wrote {len(written)} page(s)"
+    error = ""
+    if failures:
+        summary += f", {len(failures)} failure(s)"
+        error = "; ".join(
+            f"{item.get('path') or item.get('code') or '?'}: "
+            f"{item.get('message') or item.get('detail') or ''}".strip()
+            for item in failures[:5]
+        )[:500]
+    return JobResult(
+        job="compile",
+        # Some pages may have been written before another failed; the chat
+        # still needs the failure, so a partial round is a failed job with its
+        # written pages attached.
+        status="failed" if failures else "succeeded",
+        summary=summary,
+        artifacts=tuple(written),
+        error=error,
+    )
+
+
+def _confirmed_names(
+    confirmed: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for item in confirmed:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        for key in (item.get("wikiPath"), item.get("slug")):
+            normalized = _page_key(str(key or ""))
+            if normalized:
+                names[normalized] = name
+    return names
+
+
+def _page_key(value: str) -> str:
+    text = value.replace("\\", "/").strip().strip("/")
+    if text.lower().startswith("wiki/"):
+        text = text[len("wiki/") :]
+    if text.lower().endswith(".md"):
+        text = text[:-3]
+    return text.strip("/").lower()
+
+
+def _page_label(path: str) -> str:
+    stem = path.replace("\\", "/").rsplit("/", 1)[-1]
+    if stem.lower().endswith(".md"):
+        stem = stem[:-3]
+    return stem.replace("-", " ").replace("_", " ").strip() or stem
+
+
 def iter_ingest_confirmed_sse(
     layout: ProjectLayout,
     confirmed: list[dict[str, Any]],
     *,
     intent: str = "",
+    waits: WaitStore | None = None,
+    session_id: str = "",
+    wait_id: str = "",
+    on_finished=None,
 ) -> Iterator[bytes]:
     def worker(on_status, cancel, _emit):
         return run_ingest_confirmed_job(
@@ -288,10 +385,24 @@ def iter_ingest_confirmed_sse(
             cancel=cancel,
         )
 
+    if waits is not None:
+        return iter_waited_job_sse(
+            worker,
+            waits=waits,
+            session_id=session_id,
+            wait_id=wait_id,
+            job="compile",
+            result_from_payload=lambda payload: compile_job_result(
+                payload, confirmed=confirmed
+            ),
+            on_finished=on_finished,
+            default_step_id="compose",
+        )
     return iter_job_sse(worker, default_step_id="compose")
 
 
 __all__ = [
+    "compile_job_result",
     "iter_ingest_confirmed_sse",
     "iter_topic_map_sse",
     "plan_job_result",

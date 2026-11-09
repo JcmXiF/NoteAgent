@@ -440,6 +440,29 @@ describe("a session read from its log", () => {
     expect(onOpenInterface).toHaveBeenCalledWith(proposedWait, "s1");
   });
 
+  it("draws a compile wait with the board it belongs to", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      wait: {
+        ...proposedWait,
+        job: "compile",
+        interface: "plan_board",
+        completion: "start_compile",
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("chat.wait.job.compile"));
+    expect(host.textContent).toContain(
+      i18n.t("chat.wait.interface.plan_board"),
+    );
+    expect(host.textContent).toContain(
+      i18n.t("chat.wait.completion.start_compile"),
+    );
+    expect(host.textContent).toContain(i18n.t("chat.wait.open.plan_board"));
+  });
+
   it("shows what a finished job produced", async () => {
     vi.mocked(fetchSession).mockResolvedValue({
       ...payload,

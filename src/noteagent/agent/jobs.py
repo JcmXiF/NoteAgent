@@ -7,6 +7,7 @@ asks it to stop.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
@@ -50,3 +51,40 @@ class JobClient(Protocol):
     def cancel(self, job_id: str) -> None:
         """Ask the job to stop; the original interface still owns the outcome."""
         ...
+
+
+class JobBusyError(RuntimeError):
+    """A collaboration job is already running."""
+
+
+class JobGate:
+    """One collaboration job at a time, across every session.
+
+    A plan and a compile share the gate: two readers working at once would
+    write to the same project and each would believe its own result was the
+    project's state. The gate is process-wide by default; a test can hold it to
+    prove the refusal.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._owner = ""
+
+    def claim(self, owner: str) -> None:
+        """Take the gate for *owner*, or raise ``JobBusyError``."""
+        with self._lock:
+            if self._owner:
+                raise JobBusyError(
+                    f"a collaboration job is already running: {self._owner}"
+                )
+            self._owner = owner
+
+    def release(self, owner: str) -> None:
+        """Let go only if *owner* still holds it."""
+        with self._lock:
+            if self._owner == owner:
+                self._owner = ""
+
+    def is_busy(self) -> bool:
+        with self._lock:
+            return bool(self._owner)

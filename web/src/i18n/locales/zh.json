@@ -655,7 +655,8 @@
       "artifact": {
         "write": "写入",
         "mention": "提及",
-        "skip": "跳过"
+        "skip": "跳过",
+        "written": "已写入"
       },
       "jobFailedHint": "作业失败了；可以在对话里让它重试。",
       "stop": "停下等待",
@@ -1388,6 +1389,9 @@
         "contextIncomplete": "从对话发起的作业需要同时带上会话和等待。",
         "wrongJob": "这条等待属于另一个作业。",
         "alreadyStarted": "这条等待已经启动过了。"
+      },
+      "job": {
+        "busy": "另一个作业正在运行，请等它结束。"
       },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"

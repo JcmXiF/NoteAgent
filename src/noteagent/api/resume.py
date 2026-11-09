@@ -12,12 +12,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 
+from noteagent.agent.jobs import JobResult
 from noteagent.agent.runtime import BusyError, OnBusy, Resume
 from noteagent.agent.store import SessionStore
 from noteagent.agent.wait_store import has_resumed
 from noteagent.api.deps import AppDeps
-from noteagent.api.session_access import session_runtime, session_waits
+from noteagent.api.session_access import JobWait, session_runtime, session_waits
 from noteagent.project.layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,79 @@ def start_resume(
         name=f"resume:{session_id}",
         daemon=True,
     ).start()
+
+
+def job_completion(
+    deps: AppDeps,
+    job_wait: JobWait,
+    layout: ProjectLayout | None,
+    job_id: str,
+) -> Callable[[], None]:
+    """What a finished waited-on job does: continue the chat, release the gate.
+
+    The release is in a ``finally`` because a collaboration job that has ended
+    must never keep the next one waiting, even if the continuation cannot start.
+    """
+
+    def finished() -> None:
+        try:
+            start_resume(
+                deps,
+                job_wait.store,
+                layout,
+                job_wait.session_id,
+                job_wait.wait_id,
+            )
+        finally:
+            deps.job_gate.release(job_id)
+
+    return finished
+
+
+def job_cleanup(
+    deps: AppDeps,
+    job_wait: JobWait | None,
+    layout: ProjectLayout | None,
+    job_id: str,
+    job: str,
+) -> None:
+    """Release the gate when a job stream ends, however it ends.
+
+    A normal completion already released it through ``job_completion``. This
+    runs as the response's background task, so a reader that disconnects before
+    the stream is read cannot leave the collaboration slot held. If the job
+    never got to finish, the wait is closed as failed so the chat is not left
+    waiting on a job that will never report.
+    """
+    try:
+        if job_wait is not None:
+            wait = job_wait.waits.current(job_wait.session_id)
+            if (
+                wait is not None
+                and wait.wait_id == job_wait.wait_id
+                and wait.status == "entered"
+            ):
+                job_wait.waits.finish(
+                    job_wait.session_id,
+                    job_wait.wait_id,
+                    JobResult(
+                        job=job,
+                        status="failed",
+                        summary="",
+                        error="the job stream ended before it finished",
+                    ),
+                )
+                start_resume(
+                    deps,
+                    job_wait.store,
+                    layout,
+                    job_wait.session_id,
+                    job_wait.wait_id,
+                )
+    except Exception:
+        logger.exception("the wait for job %s could not be closed", job_id)
+    finally:
+        deps.job_gate.release(job_id)
 
 
 def reconcile_session(

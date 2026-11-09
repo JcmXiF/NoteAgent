@@ -15,6 +15,10 @@ import { useAcquireStore } from "@/stores/acquire-store";
 import { useClipsStore } from "@/stores/clips-store";
 import { useDeepSearchStore } from "@/stores/deep-search-store";
 import { useDocsStore } from "@/stores/docs-store";
+import {
+  rearmOnBusy,
+  useWaitContextStore,
+} from "@/stores/wait-context-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import i18n from "@/i18n";
 
@@ -97,6 +101,9 @@ export const useCompileStore = create<CompileState>((set, get) => ({
 
     // The previous round stops being the answer the moment another is asked for.
     set({ running: true, error: null, round: null, last: input });
+    // A press that came from a chat wait carries that wait into the job; the
+    // endpoint records the entry and the result under it.
+    const wait = useWaitContextStore.getState().take("compile");
 
     const work = () =>
       runAsActivity({
@@ -167,6 +174,7 @@ export const useCompileStore = create<CompileState>((set, get) => ({
                 ctx.status(i18n.t("compile.composing"), stepId ?? "compose");
               },
               signal: ctx.signal,
+              ...(wait ? { wait } : {}),
             },
           );
           set({ round: roundFromIngestDone(payload, intent) });
@@ -210,6 +218,9 @@ export const useCompileStore = create<CompileState>((set, get) => ({
     try {
       await work();
     } catch (err) {
+      // The wait is still proposed when another job made the press busy, so
+      // the next press must carry it again.
+      rearmOnBusy(err, wait);
       // Reported on the job as well; this is what keeps the panel from showing the
       // last round as though it were this one.
       set({ error: errorMessage(err, i18n.t("compile.runFailed")) });

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
-from noteagent.agent.jobs import JobClient
+from noteagent.agent.jobs import JobClient, JobGate
 from noteagent.agent.kernel import RunRegistry
 from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime
@@ -35,4 +35,6 @@ class AppDeps:
     sessions: SessionStore | None = None
     waits: WaitStore | None = None
     jobs: JobClient | None = None
+    #: One collaboration job at a time, across every session.
+    job_gate: JobGate = field(default_factory=JobGate)
     settings: Mapping[str, object] | None = None

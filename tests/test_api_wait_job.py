@@ -287,7 +287,7 @@ class WaitedPlanApiTests(unittest.TestCase):
                 side_effect=FileNotFoundError("the session is gone"),
             ),
             patch("noteagent.api.waited_jobs.logger"),
-            patch("noteagent.api.app.start_resume"),
+            patch("noteagent.api.resume.start_resume"),
         ):
             response = TestClient(create_app(self.deps)).post(
                 "/api/projects/demo/topic-map",
