@@ -101,9 +101,11 @@ from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
 from noteagent.api.session_access import (
+    active_layout,
     cancel_session,
     open_session_store,
     session_busy,
+    session_tools,
 )
 from noteagent.api.sessions import session_payload
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -625,7 +627,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         session_id: str, body: ChatQueryBody
     ) -> StreamingResponse:
         """Ask one question; the answer arrives as it is written."""
-        store = open_session_store(deps, session_id)
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
         if session_busy(deps, session_id):
             raise CodedHTTPException(
                 409,
@@ -645,7 +648,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             runtime = KernelRuntime(
                 model=model,
                 sessions=store,
-                tools=deps.tools,
+                tools=session_tools(deps, layout),
                 clock=deps.clock,
                 ids=deps.ids,
                 registry=deps.runs,

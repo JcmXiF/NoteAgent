@@ -340,9 +340,13 @@ export type ObservationPayload = {
   scope?: string;
   query?: string;
   match?: string;
+  /** How many pages a search matched. */
+  hits?: number;
   missing?: boolean;
   unsafe?: boolean;
   error?: boolean;
+  /** The handler did not finish within its own time. */
+  timeout?: boolean;
   omitted?: string;
   truncated?: boolean;
   not_source?: boolean;
@@ -353,6 +357,8 @@ export type ObservationPayload = {
   /** For a write action: which one it was, and whether it actually wrote. */
   action?: string;
   wrote_wiki?: boolean;
+  /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
+  diagnostics?: { severity: string; code: string; message: string }[];
 };
 
 /**

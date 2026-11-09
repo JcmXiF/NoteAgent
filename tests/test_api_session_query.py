@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from agent_fakes import FakeRuntime, FakeSessionStore, FixedClock, SequentialIds
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.kernel import RunRegistry
 from noteagent.agent.model import ModelErrorEvent, ModelStartEvent
+from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.jsonl import JsonlSessionStore
+from noteagent.wiki.agent_tools import wiki_tools
 
 try:
     from fastapi.testclient import TestClient
 
     from noteagent.api.app import create_app
     from noteagent.api.deps import AppDeps
+    from noteagent.api.session_access import session_tools
 except ImportError:  # pragma: no cover
     TestClient = None  # type: ignore[misc, assignment]
     create_app = None  # type: ignore[misc, assignment]
     AppDeps = None  # type: ignore[misc, assignment]
+    session_tools = None  # type: ignore[misc, assignment]
 
 
 def _sse(text: str) -> list[tuple[str, dict]]:
@@ -162,6 +169,108 @@ class SessionQueryTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["code"], "session.notFound")
+
+
+class WikiToolApiTests(unittest.TestCase):
+    """The loop, the real wiki tools and the SSE stream, with a faux model."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.layout = ProjectLayout(Path(self._tmp.name))
+        pages = {
+            "wiki/concepts/entropy.md": (
+                '---\ntitle: "Entropy"\n---\n\n熵衡量不确定性。'
+            ),
+            "wiki/concepts/information.md": (
+                '---\ntitle: "Information"\n---\n\n信息是不确定性的减少。'
+            ),
+        }
+        for relative, text in pages.items():
+            path = self.layout.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        self.store = JsonlSessionStore(
+            self.layout, clock=FixedClock(), ids=SequentialIds()
+        )
+        self.store.create("s1")
+
+    def ask(self, *scripts):
+        deps = AppDeps(
+            sessions=self.store,
+            model=FauxModelClient(*scripts),
+            tools=wiki_tools(self.layout),
+            clock=FixedClock(),
+            ids=SequentialIds(),
+        )
+        response = TestClient(create_app(deps)).post(
+            "/api/v1/sessions/s1/query", json={"content": "什么是熵？"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        events = _sse(response.text)
+        observations = [data for kind, data in events if kind == "observation"]
+        return events, observations
+
+    def test_a_wiki_read_is_a_card_and_its_page_stays_with_the_model(self) -> None:
+        events, observations = self.ask(
+            FauxModelClient.tool_call(
+                "t1", "wiki_read", '{"slug": "concepts/entropy"}'
+            ).script,
+            FauxModelClient.text("熵衡量不确定性。").script,
+        )
+
+        self.assertEqual(len(observations), 1)
+        card = observations[0]
+        self.assertEqual(card["tool"], "wiki_read")
+        self.assertEqual(card["path"], "wiki/concepts/entropy.md")
+        self.assertEqual(card["slug"], "concepts/entropy")
+        self.assertEqual(card["title"], "Entropy")
+        self.assertNotIn("熵衡量不确定性", json.dumps(card, ensure_ascii=False))
+
+        done = events[-1][1]
+        step = next(
+            message
+            for message in done["session"]["messages"]
+            if message.get("isStep")
+        )
+        self.assertEqual(step["cards"][0]["path"], "wiki/concepts/entropy.md")
+        entries = self.store.load("s1").entries
+        self.assertEqual(
+            [entry["role"] for entry in entries],
+            ["user", "assistant", "toolResult", "assistant"],
+        )
+
+    def test_a_search_returns_locator_cards_before_the_answer(self) -> None:
+        events, observations = self.ask(
+            FauxModelClient.tool_call(
+                "t1", "search", '{"query": "不确定性"}'
+            ).script,
+            FauxModelClient.text("熵和信息的共同点是不确定性。").script,
+        )
+
+        self.assertEqual(len(observations), 1)
+        card = observations[0]
+        self.assertEqual(card["tool"], "search")
+        self.assertEqual(card["scope"], "wiki")
+        self.assertEqual(card["query"], "不确定性")
+        self.assertGreaterEqual(card["hits"], 2)
+        self.assertEqual(events[-1][0], "done")
+
+
+class DefaultToolTests(unittest.TestCase):
+    def test_the_default_run_offers_the_projects_wiki_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = ProjectLayout(Path(tmp))
+            tools = session_tools(AppDeps(sessions=None), layout)
+
+        self.assertEqual(
+            [tool.name for tool in tools.enabled()], ["wiki_read", "search"]
+        )
+
+    def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:
+        tools = session_tools(AppDeps(sessions=FakeSessionStore()), None)
+
+        self.assertEqual(tools.enabled(), ())
 
 
 if __name__ == "__main__":

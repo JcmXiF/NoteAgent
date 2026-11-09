@@ -472,6 +472,49 @@ export type ChatConversation = {
   messages: ChatTurn[];
 };
 
+/** One visible turn of a JSONL session, as the core projects it. */
+export type SessionTurn = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  /** What the answer was built from, as the run's tool cards. */
+  cards?: ObservationPayload[];
+  stopReason?: string;
+  /** The assistant was calling a tool; its words are a preamble, not the answer. */
+  isStep?: boolean;
+};
+
+export type SessionDiagnostic = {
+  kind: string;
+  entryId: string;
+  message: string;
+};
+
+export type SessionMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  toolCalls?: { id: string; name: string; arguments: string }[];
+  toolCallId?: string;
+  name?: string;
+};
+
+/** The transcript, and the same log read the way the model will see it. */
+export type SessionPayload = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  /** Whether a run is in progress, as of this read. */
+  state: { busy: boolean };
+  messages: SessionTurn[];
+  derived: {
+    sections: Record<string, string>;
+    summary: string;
+    messages: SessionMessage[];
+    diagnostics: SessionDiagnostic[];
+  };
+};
+
 export type ChatListPayload = {
   limits: ChatLimitsPayload;
   conversations: ChatSummary[];

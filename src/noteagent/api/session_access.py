@@ -11,24 +11,44 @@ from __future__ import annotations
 from noteagent.agent.kernel import RunRegistry
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore
+from noteagent.agent.tools import ToolRegistry
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
 from noteagent.project.config import ProjectNotConfiguredError
+from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
+from noteagent.wiki.agent_tools import wiki_tools
 
 
-def open_session_store(deps: AppDeps, session_id: str) -> SessionStore:
-    """The store holding *session_id*, after proving the session can be read."""
+def active_layout(deps: AppDeps) -> ProjectLayout | None:
+    """The project the default store reads, when no store was injected."""
+    if deps.sessions is not None:
+        return None
+    try:
+        return get_active_layout()
+    except ProjectNotConfiguredError as err:
+        raise CodedHTTPException(
+            409, str(err), code="project.notConfigured"
+        ) from err
+
+
+def open_session_store(
+    deps: AppDeps,
+    session_id: str,
+    *,
+    layout: ProjectLayout | None = None,
+) -> SessionStore:
+    """The store holding *session_id*, after proving the session can be read.
+
+    *layout* is the one the caller already resolved, so a query does not read
+    the active-project pointer twice.
+    """
     store = deps.sessions
     if store is None:
-        try:
-            layout = get_active_layout()
-        except ProjectNotConfiguredError as err:
-            raise CodedHTTPException(
-                409, str(err), code="project.notConfigured"
-            ) from err
-        store = JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+        resolved = layout or active_layout(deps)
+        assert resolved is not None
+        store = JsonlSessionStore(resolved, clock=deps.clock, ids=deps.ids)
     try:
         store.load(session_id)
     except SessionFormatError as err:
@@ -44,6 +64,21 @@ def open_session_store(deps: AppDeps, session_id: str) -> SessionStore:
             400, str(err), code="session.invalidId", params={"id": session_id}
         ) from err
     return store
+
+
+def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
+    """The tools a kernel run offers: the injected set, or the project's wiki.
+
+    The catalog is built per run because the active project can change while the
+    server keeps running; a registry captured at startup would read the wrong
+    wiki after the reader switched projects.
+    """
+    if deps.tools is not None:
+        return deps.tools
+    if layout is None:
+        # A test that injected its own store and no tools asked for a bare run.
+        return ToolRegistry()
+    return wiki_tools(layout)
 
 
 def _run_owner(deps: AppDeps) -> AgentRuntime | RunRegistry:

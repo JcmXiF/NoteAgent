@@ -539,6 +539,8 @@
     "send": "Ask",
     "stop": "Stop",
     "stopped": "Stopped waiting. The model call in progress may still finish, and then it stops.",
+    "aborted": "Stopped before this answer was finished.",
+    "busy": "This conversation is still answering in another tab. Reload when it finishes.",
     "answered": "Answered",
     "remark": {
       "save": "Save as a remark",
@@ -611,7 +613,11 @@
       "notSource": "a result, not a source yet",
       "failed": "did not work",
       "title": "What the answer looked at",
-      "reading": "reading now"
+      "reading": "reading now",
+      "truncated": "cut short",
+      "timeout": "timed out",
+      "omitted": "some left out",
+      "hits": "{{count}} hits"
     },
     "gate": {
       "title": "Writing pages",
@@ -1329,6 +1335,10 @@
     "openFolder": "Could not open that folder",
     "deleteProject": "Could not delete the project",
     "code": {
+      "model_error": "The assistant did not answer. Try again.",
+      "cancelled": "Stopped.",
+      "busy": "This conversation is already answering. Wait for it to finish.",
+      "internal": "Something went wrong. Try again.",
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
       },

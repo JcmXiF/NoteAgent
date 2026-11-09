@@ -539,6 +539,8 @@
     "send": "发送",
     "stop": "停止生成",
     "stopped": "已停止等待。正在进行的模型调用可能仍会完成，此后不再继续。",
+    "aborted": "这条回答没有写完就停止了。",
+    "busy": "这个会话正在另一个标签页里作答；结束后刷新即可看到。",
     "answered": "已作答",
     "remark": {
       "save": "存为备注",
@@ -611,7 +613,11 @@
       "notSource": "只是结果，还不是资料",
       "failed": "没成功",
       "title": "回答查看过的内容",
-      "reading": "正在读"
+      "reading": "正在读",
+      "truncated": "已截断",
+      "timeout": "超时",
+      "omitted": "部分命中未显示",
+      "hits": "{{count}} 个命中"
     },
     "gate": {
       "title": "写页",
@@ -1329,6 +1335,10 @@
     "openFolder": "无法打开这个文件夹",
     "deleteProject": "删除项目失败",
     "code": {
+      "model_error": "助手没有作答，请重试。",
+      "cancelled": "已停止。",
+      "busy": "这个会话正在作答，请等它结束。",
+      "internal": "出了点问题，请重试。",
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
       },
