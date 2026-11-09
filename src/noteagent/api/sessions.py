@@ -9,16 +9,21 @@ from __future__ import annotations
 
 from noteagent.agent.model import Message
 from noteagent.agent.projection import TranscriptItem, project
-from noteagent.agent.store import SessionStore, last_timestamp
+from noteagent.agent.store import SessionStore, WaitStore, last_timestamp
+from noteagent.agent.wait import wait_payload
 
 
 def session_payload(
-    store: SessionStore, session_id: str, *, busy: bool = False
+    store: SessionStore,
+    session_id: str,
+    *,
+    busy: bool = False,
+    waits: WaitStore | None = None,
 ) -> dict[str, object]:
     """One session, with its transcript and the state derived from its entries."""
     snapshot = store.load(session_id)
     projection = project(snapshot.entries)
-    return {
+    body: dict[str, object] = {
         "id": snapshot.id,
         "title": snapshot.title,
         "updatedAt": last_timestamp(snapshot.entries),
@@ -38,6 +43,10 @@ def session_payload(
             ],
         },
     }
+    if waits is not None:
+        wait = waits.current(session_id)
+        body["wait"] = wait_payload(wait) if wait is not None else None
+    return body
 
 
 def _transcript_item(item: TranscriptItem) -> dict[str, object]:

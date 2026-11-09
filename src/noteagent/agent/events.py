@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar, TypeAlias
 
 from noteagent.agent.jobs import JobResult
-from noteagent.agent.wait import WaitState
+from noteagent.agent.wait import WaitState, wait_payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,21 +68,10 @@ class WaitEvent:
     """A collaboration node the run has proposed or observed."""
 
     wait: WaitState
-    completion: str
     kind: ClassVar[str] = "wait"
 
     def payload(self) -> dict[str, object]:
-        body: dict[str, object] = {
-            "waitId": self.wait.wait_id,
-            "job": self.wait.job,
-            "interface": self.wait.interface,
-            "completion": self.completion,
-            "status": self.wait.status,
-            "proposedAt": self.wait.proposed_at,
-        }
-        if self.wait.result_summary:
-            body["resultSummary"] = self.wait.result_summary
-        return body
+        return wait_payload(self.wait)
 
 
 @dataclass(frozen=True, slots=True)

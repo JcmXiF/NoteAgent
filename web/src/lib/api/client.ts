@@ -316,10 +316,34 @@ export type SseHandlers = {
    * the answer.
    */
   onObservation?: (observation: ObservationPayload) => void;
+  /**
+   * `wait`: a collaboration node the run proposed, and where the human
+   * finishes it. The job starts in that interface, never here.
+   */
+  onWait?: (wait: WaitPayload) => void;
   /** Aborting this stops the reader; the backend cancels before its next model call. */
   signal?: AbortSignal;
   /** Message used when the stream ends without a `done` or `error` event. */
   emptyError?: string;
+};
+
+/**
+ * The one collaboration node a session is waiting on.
+ *
+ * `completion` is a stable name for the action the human takes, not a sentence:
+ * the core does not know which language the reader is using, so the interface
+ * words it. `interface` is where the original button lives.
+ */
+export type WaitPayload = {
+  waitId: string;
+  job: string;
+  interface: string;
+  status: string;
+  completion: string;
+  proposedAt: string;
+  intent?: string;
+  reason?: string;
+  resultSummary?: string;
 };
 
 /**
@@ -371,8 +395,15 @@ export async function postSse<T>(
   handlers: SseHandlers = {},
 ): Promise<T> {
   const fallbackError = i18n.t("error.noResult");
-  const { onStatus, onToken, onTokenReset, onObservation, signal, emptyError = fallbackError } =
-    handlers;
+  const {
+    onStatus,
+    onToken,
+    onTokenReset,
+    onObservation,
+    onWait,
+    signal,
+    emptyError = fallbackError,
+  } = handlers;
   if (signal?.aborted) throw abortedError();
 
   const res = await send(`${API_BASE}${path}`, {
@@ -414,6 +445,10 @@ export async function postSse<T>(
           } else if (parsed.event === "observation") {
             if (typeof payload.tool === "string" && payload.tool) {
               onObservation?.(payload as unknown as ObservationPayload);
+            }
+          } else if (parsed.event === "wait") {
+            if (typeof payload.waitId === "string" && payload.waitId) {
+              onWait?.(payload as unknown as WaitPayload);
             }
           } else if (parsed.event === "token") {
             // A retraction carries no text of its own: it says the text already sent

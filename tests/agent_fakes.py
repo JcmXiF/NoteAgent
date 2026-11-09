@@ -6,6 +6,7 @@ Not named ``test_*``, so discovery treats it as a helper rather than a suite.
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from noteagent.agent.events import DoneEvent, ObservationEvent, StatusEvent, TokenEvent
@@ -189,26 +190,17 @@ class FakeWaitStore:
 
     def enter(self, session_id: str, wait_id: str, job_id: str) -> None:
         wait = self.waits[session_id]
-        self.waits[session_id] = WaitState(
-            wait.wait_id, wait.job, wait.interface, "entered", wait.proposed_at
-        )
+        self.waits[session_id] = replace(wait, status="entered")
 
     def complete(self, session_id: str, wait_id: str, result: JobResult) -> None:
         wait = self.waits[session_id]
-        self.waits[session_id] = WaitState(
-            wait.wait_id,
-            wait.job,
-            wait.interface,
-            "completed",
-            wait.proposed_at,
-            result.summary,
+        self.waits[session_id] = replace(
+            wait, status="completed", result_summary=result.summary
         )
 
     def cancel(self, session_id: str, wait_id: str, reason: str = "") -> None:
         wait = self.waits[session_id]
-        self.waits[session_id] = WaitState(
-            wait.wait_id, wait.job, wait.interface, "cancelled", wait.proposed_at
-        )
+        self.waits[session_id] = replace(wait, status="cancelled")
 
 
 class FakeJobClient:

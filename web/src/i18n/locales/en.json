@@ -619,6 +619,41 @@
       "omitted": "some left out",
       "hits": "{{count}} hits"
     },
+    "wait": {
+      "title": "Waiting on you",
+      "job": {
+        "plan": "Plan",
+        "compile": "Compile"
+      },
+      "interface": {
+        "source": "the source page",
+        "plan_board": "the plan board",
+        "compile_board": "the compile board"
+      },
+      "where": "This happens in {{place}}.",
+      "completion": {
+        "start_plan": "Start the plan with the original button there.",
+        "start_compile": "Start the compile with the original button there.",
+        "start": "Start it with the original button there."
+      },
+      "open": {
+        "source": "Go to the source page",
+        "plan_board": "Go to the plan board",
+        "compile_board": "Go to the compile board",
+        "default": "Go there"
+      },
+      "status": {
+        "proposed": "Waiting for you to start it.",
+        "entered": "The job has started.",
+        "completed": "The job finished.",
+        "failed": "The job failed.",
+        "cancelled": "Stopped."
+      },
+      "enteredHint": "The job belongs to its own interface now; stop it there.",
+      "stop": "Stop waiting",
+      "stopping": "Stopping…",
+      "stopFailed": "Could not stop this wait"
+    },
     "gate": {
       "title": "Writing pages",
       "waitingTitle": "Nothing is written yet",
@@ -1339,6 +1374,10 @@
       "cancelled": "Stopped.",
       "busy": "This conversation is already answering. Wait for it to finish.",
       "internal": "Something went wrong. Try again.",
+      "wait": {
+        "notFound": "That wait is no longer the session's current one.",
+        "notCancelable": "The job has already started; stop it in its own interface."
+      },
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
       },

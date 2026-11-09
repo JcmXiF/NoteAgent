@@ -14,6 +14,7 @@ from noteagent.agent.events import (
     ObservationEvent,
     StatusEvent,
     TokenEvent,
+    WaitEvent,
     is_terminal,
 )
 from noteagent.agent.faux import FauxModelClient
@@ -346,6 +347,216 @@ class KernelRuntimeTests(unittest.TestCase):
             if entry["type"] == "message"
         ]
         self.assertEqual([entry["role"] for entry in messages], ["user"])
+
+    def test_a_proposal_records_one_wait_and_ends_the_run(self) -> None:
+        model = FauxModelClient.tool_call(
+            "p1",
+            "propose",
+            '{"job":"plan","interface":"source","intent":"plan entropy"}',
+            text="我来安排。",
+        )
+        runtime = self.runtime(model)
+        events = []
+
+        result = runtime.execute(UserInput("s1", "安排一下"), events.append)
+
+        self.assertEqual(result.status, "waiting")
+        self.assertTrue(result.wait_id)
+        wait_events = [event for event in events if isinstance(event, WaitEvent)]
+        self.assertEqual(len(wait_events), 1)
+        self.assertEqual(
+            wait_events[0].payload()["job"],
+            "plan",
+        )
+        self.assertEqual(wait_events[0].payload()["interface"], "source")
+        self.assertEqual(wait_events[0].payload()["completion"], "start_plan")
+        self.assertEqual(wait_events[0].payload()["status"], "proposed")
+        self.assertIsInstance(events[-1], DoneEvent)
+        self.assertEqual(events[-1].run["status"], "waiting")
+
+        entries = self.store.load("s1").entries
+        self.assertEqual(
+            [entry["type"] for entry in entries], ["message", "message", "wait_proposed"]
+        )
+        self.assertEqual(entries[1]["content"], "我来安排。")
+        self.assertEqual(entries[1]["stopReason"], "propose")
+        self.assertEqual(entries[2]["id"], result.wait_id)
+        self.assertEqual(entries[2]["job"], "plan")
+        self.assertEqual(entries[2]["intent"], "plan entropy")
+
+        wait = runtime.wait_state("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "proposed")
+        self.assertEqual(
+            [tool["function"]["name"] for tool in model.requests[0].tools],
+            ["propose"],
+        )
+
+    def test_a_second_proposal_is_refused_while_the_first_is_waiting(self) -> None:
+        first = FauxModelClient.tool_call(
+            "p1", "propose", '{"job":"plan","interface":"source"}'
+        )
+        runtime = self.runtime(first)
+        runtime.execute(UserInput("s1", "安排一下"), lambda _event: None)
+
+        second = FauxModelClient.tool_call(
+            "p2", "propose", '{"job":"compile","interface":"plan_board"}'
+        )
+        third = FauxModelClient.text("先把当前的等待处理掉。")
+        runtime = KernelRuntime(
+            model=FauxModelClient(second.script, third.script),
+            sessions=self.store,
+            clock=FixedClock(),
+            ids=SequentialIds(),
+            model_name="faux",
+        )
+        events = []
+
+        result = runtime.execute(UserInput("s1", "再安排一个"), events.append)
+
+        self.assertEqual(result.status, "completed")
+        refusal = next(
+            event for event in events if isinstance(event, ObservationEvent)
+        )
+        self.assertTrue(refusal.payload()["error"])
+        self.assertEqual(refusal.payload()["job"], "plan")
+        waits = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry["type"] == "wait_proposed"
+        ]
+        self.assertEqual(len(waits), 1)
+        self.assertEqual(waits[0]["job"], "plan")
+
+    def test_a_batch_that_mixes_propose_with_a_tool_is_refused_whole(self) -> None:
+        ran = threading.Event()
+
+        def should_not_run(_arguments, _context):
+            ran.set()
+            return ToolResult(content="ran", meta={"title": "echo"})
+
+        tools = ToolRegistry(
+            [
+                ToolSpec(
+                    name="echo",
+                    description="Echo the text.",
+                    parameters={"type": "object"},
+                    handler=should_not_run,
+                )
+            ]
+        )
+        model = FauxModelClient(
+            [
+                ModelStartEvent("faux"),
+                ModelToolCallEnd(ToolCall("t1", "echo", "{}")),
+                ModelToolCallEnd(
+                    ToolCall("p1", "propose", '{"job":"plan","interface":"source"}')
+                ),
+                ModelDoneEvent(AssistantMessage(stop_reason="tool_calls")),
+            ],
+            FauxModelClient.text("分开再来。").script,
+        )
+        events = []
+
+        result = self.runtime(model, tools).execute(
+            UserInput("s1", "安排"), events.append
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertFalse(ran.is_set(), "a refused batch must not run any of its calls")
+        self.assertEqual(
+            [
+                entry["type"]
+                for entry in self.store.load("s1").entries
+                if entry["type"] == "wait_proposed"
+            ],
+            [],
+        )
+        tool_results = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry.get("role") == "toolResult"
+        ]
+        self.assertEqual(len(tool_results), 2)
+        self.assertTrue(all(entry["meta"]["error"] for entry in tool_results))
+        cards = [
+            event.payload()
+            for event in events
+            if isinstance(event, ObservationEvent)
+        ]
+        self.assertEqual([card["tool"] for card in cards], ["echo", "propose"])
+        self.assertTrue(all(card["error"] for card in cards))
+
+    def test_an_invalid_proposal_is_an_observation_and_the_loop_continues(self) -> None:
+        proposal = FauxModelClient.tool_call(
+            "p1", "propose", '{"job":"plan","interface":"compile_board"}'
+        )
+        answer = FauxModelClient.text("那次提议的地点不对。")
+        runtime = KernelRuntime(
+            model=FauxModelClient(proposal.script, answer.script),
+            sessions=self.store,
+            clock=FixedClock(),
+            ids=SequentialIds(),
+            model_name="faux",
+        )
+        events = []
+
+        result = runtime.execute(UserInput("s1", "安排"), events.append)
+
+        self.assertEqual(result.status, "completed")
+        refusal = next(
+            event for event in events if isinstance(event, ObservationEvent)
+        )
+        self.assertTrue(refusal.payload()["error"])
+        self.assertIn("plan", refusal.payload()["diagnostics"][0]["message"])
+        self.assertEqual(
+            [
+                entry
+                for entry in self.store.load("s1").entries
+                if entry["type"] == "wait_proposed"
+            ],
+            [],
+        )
+        self.assertIsNone(runtime.wait_state("s1"))
+
+    def test_a_new_proposal_is_allowed_after_the_wait_was_cancelled(self) -> None:
+        from noteagent.agent.wait_store import SessionWaitStore
+
+        # One id generator stands in for the process-wide one: a new proposal
+        # must not reuse the id of the wait it supersedes.
+        ids = SequentialIds()
+        first = FauxModelClient.tool_call(
+            "p1", "propose", '{"job":"plan","interface":"source"}'
+        )
+        runtime = KernelRuntime(
+            model=first,
+            sessions=self.store,
+            clock=FixedClock(),
+            ids=ids,
+            model_name="faux",
+        )
+        result = runtime.execute(UserInput("s1", "安排"), lambda _event: None)
+        SessionWaitStore(self.store).cancel("s1", result.wait_id)
+
+        second = FauxModelClient.tool_call(
+            "p2", "propose", '{"job":"compile","interface":"plan_board"}'
+        )
+        runtime = KernelRuntime(
+            model=second,
+            sessions=self.store,
+            clock=FixedClock(),
+            ids=ids,
+            model_name="faux",
+        )
+
+        again = runtime.execute(UserInput("s1", "改成编译"), lambda _event: None)
+
+        self.assertEqual(again.status, "waiting")
+        wait = runtime.wait_state("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "proposed")
+        self.assertEqual(wait.job, "compile")
+        self.assertNotEqual(again.wait_id, result.wait_id)
 
     def _start(self, runtime, sink):
         """Run one question in the background, so the test can stop it."""

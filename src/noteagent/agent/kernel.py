@@ -11,13 +11,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from threading import Event, Lock
 
-from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
+from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.events import (
     DoneEvent,
     ErrorEvent,
     ObservationEvent,
     StatusEvent,
     TokenEvent,
+    WaitEvent,
 )
 from noteagent.agent.model import (
     Message,
@@ -26,9 +27,17 @@ from noteagent.agent.model import (
     ModelRequest,
     ModelStreamError,
     ModelTextDelta,
+    ToolCall,
     collect,
 )
 from noteagent.agent.projection import project
+from noteagent.agent.propose import (
+    PROPOSE_NAME,
+    PROPOSE_TOOL,
+    Proposal,
+    ProposeError,
+    parse_proposal,
+)
 from noteagent.agent.runtime import (
     BusyError,
     EventSink,
@@ -40,9 +49,10 @@ from noteagent.agent.runtime import (
     UserInput,
     busy_message,
 )
-from noteagent.agent.store import SessionStore
+from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import Diagnostic, ToolContext, ToolRegistry, ToolResult
-from noteagent.agent.wait import WaitState
+from noteagent.agent.wait import WaitState, completion_for, is_active
+from noteagent.agent.wait_store import SessionWaitStore
 
 #: An answer stopped mid-stream is kept only as far as this. A cancellation must
 #: not be able to put an unbounded partial into the log.
@@ -102,6 +112,7 @@ class KernelRuntime:
         model: ModelClient,
         sessions: SessionStore,
         tools: ToolRegistry | None = None,
+        waits: WaitStore | None = None,
         clock: Clock | None = None,
         ids: Ids | None = None,
         registry: RunRegistry | None = None,
@@ -111,6 +122,9 @@ class KernelRuntime:
         self._model = model
         self._sessions = sessions
         self._tools = tools or ToolRegistry()
+        # A wait is read from the same log as the turns, so the default keeps
+        # the runtime and the session view looking at one record.
+        self._waits = waits if waits is not None else SessionWaitStore(sessions)
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIds()
         self._registry = registry or RunRegistry()
@@ -134,7 +148,7 @@ class KernelRuntime:
         self._registry.cancel(session_id)
 
     def wait_state(self, session_id: str) -> WaitState | None:
-        return None
+        return self._waits.current(session_id)
 
     def is_busy(self, session_id: str) -> bool:
         return self._registry.is_busy(session_id)
@@ -167,7 +181,7 @@ class KernelRuntime:
                 forced = tool_rounds >= self._max_tool_rounds
                 if forced:
                     sink(StatusEvent("answering from the tool results", "answer"))
-                offered = () if forced else self._tools.model_tools()
+                offered = () if forced else self._offered_tools()
                 model_request = ModelRequest(
                     model=self._model_name,
                     messages=messages,
@@ -194,64 +208,53 @@ class KernelRuntime:
                     return RunResult(session_id, run_id, "failed", error=str(err))
 
                 if assistant.tool_calls and not forced:
+                    calls = assistant.tool_calls
+                    refusal: ToolResult | None = None
+                    if len(calls) == 1 and calls[0].name == PROPOSE_NAME:
+                        proposal, refusal = self._read_proposal(session_id, calls[0])
+                        if proposal is not None:
+                            # A control action is not a tool round: the prose is
+                            # the answer's last words, the wait is the outcome,
+                            # and the run ends here. Nothing is dispatched.
+                            text = assistant.content.strip()
+                            if text:
+                                self._sessions.append(
+                                    session_id,
+                                    {
+                                        "type": "message",
+                                        "role": "assistant",
+                                        "content": text,
+                                        "stopReason": "propose",
+                                    },
+                                )
+                            wait = self._record_wait(session_id, proposal)
+                            sink(WaitEvent(wait))
+                            sink(
+                                DoneEvent(
+                                    {"id": session_id},
+                                    {"id": run_id, "status": "waiting"},
+                                )
+                            )
+                            return RunResult(
+                                session_id,
+                                run_id,
+                                "waiting",
+                                wait_id=wait.wait_id,
+                            )
+                    # A refused proposal and an ordinary batch share one tail:
+                    # the preamble becomes a step, every call gets its result,
+                    # and the next round reads the log.
                     sink(TokenEvent("", reset=True))
-                    self._sessions.append(
-                        session_id,
-                        {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": assistant.content,
-                            "toolCalls": [
-                                {
-                                    "id": call.id,
-                                    "name": call.name,
-                                    "arguments": call.arguments,
-                                }
-                                for call in assistant.tool_calls
-                            ],
-                        },
-                    )
+                    self._commit_tool_calls(session_id, calls, assistant.content)
                     # The preamble is now part of the tool-call entry, so a stop
                     # from here on must not commit it a second time.
                     partial.clear()
-                    calls = assistant.tool_calls
-                    within = calls[:MAX_TOOL_CALLS_PER_ROUND]
-                    results = self._tools.dispatch_many(
-                        within,
-                        ToolContext(
-                            session_id=session_id,
-                            run_id=run_id,
-                            cancel=cancel,
-                            clock=self._clock,
-                        ),
+                    results = (
+                        (refusal,)
+                        if refusal is not None
+                        else self._round_results(session_id, run_id, calls, cancel)
                     )
-                    for call, result in zip(within, results, strict=True):
-                        self._commit_result(session_id, call.id, call.name, result)
-                        sink(ObservationEvent(result.observation(call.name)))
-                    for call in calls[MAX_TOOL_CALLS_PER_ROUND:]:
-                        # A result is still owed for every call in the batch, so
-                        # pairing holds and the model can see what was refused.
-                        message = (
-                            "too many tool calls in one round "
-                            f"(max {MAX_TOOL_CALLS_PER_ROUND})"
-                        )
-                        self._commit_result(
-                            session_id,
-                            call.id,
-                            call.name,
-                            ToolResult(
-                                content=message,
-                                meta={"title": call.name, "error": True},
-                                diagnostics=(
-                                    Diagnostic("error", "too_many_calls", message),
-                                ),
-                            ),
-                        )
-                        sink(
-                            ObservationEvent(
-                                {"tool": call.name, "title": call.name, "error": True}
-                            )
-                        )
+                    self._commit_results(session_id, calls, results, sink)
                     tool_rounds += 1
                     messages = self._prompt(session_id)
                     sink(StatusEvent("thinking", "think"))
@@ -285,6 +288,153 @@ class KernelRuntime:
             return self._cancelled_result(
                 session_id, run_id, sink, "".join(partial)
             )
+
+    def _offered_tools(self) -> tuple[dict[str, object], ...]:
+        """The tools the model may call, with the control action beside them."""
+        return (PROPOSE_TOOL,) + self._tools.model_tools()
+
+    def _read_proposal(
+        self, session_id: str, call: ToolCall
+    ) -> tuple[Proposal | None, ToolResult | None]:
+        """The checked proposal, or the observation that says why not."""
+        try:
+            proposal = parse_proposal(call.arguments)
+        except ProposeError as err:
+            return None, self._refused(
+                call, f"invalid proposal: {err}", "invalid_proposal"
+            )
+        active = self._waits.current(session_id)
+        if is_active(active):
+            assert active is not None
+            return None, self._refused(
+                call,
+                (
+                    f"this session is already waiting on {active.job}; "
+                    "finish or stop it first"
+                ),
+                "already_waiting",
+                job=active.job,
+            )
+        return proposal, None
+
+    def _record_wait(self, session_id: str, proposal: Proposal) -> WaitState:
+        """Commit the wait a checked proposal asks for, and return it."""
+        wait = WaitState(
+            wait_id=self._ids.new_id("wait"),
+            job=proposal.job,
+            interface=proposal.interface,
+            status="proposed",
+            proposed_at=iso_timestamp(self._clock),
+            completion=completion_for(proposal.job),
+            intent=proposal.intent,
+            reason=proposal.reason,
+        )
+        self._waits.propose(session_id, wait)
+        return wait
+
+    def _round_results(
+        self,
+        session_id: str,
+        run_id: str,
+        calls: tuple[ToolCall, ...],
+        cancel: Event,
+    ) -> tuple[ToolResult, ...]:
+        """One result per call, in the model's order.
+
+        A batch that has propose beside another call is refused whole: the
+        control action is only meaningful alone, and running the rest would
+        leave the model believing half of it happened.
+        """
+        if any(call.name == PROPOSE_NAME for call in calls):
+            message = (
+                "propose must be alone in its batch; nothing in this batch was run"
+            )
+            return tuple(
+                self._refused(call, message, "propose_not_alone") for call in calls
+            )
+        within = calls[:MAX_TOOL_CALLS_PER_ROUND]
+        results = list(
+            self._tools.dispatch_many(
+                within,
+                ToolContext(
+                    session_id=session_id,
+                    run_id=run_id,
+                    cancel=cancel,
+                    clock=self._clock,
+                ),
+            )
+        )
+        for call in calls[MAX_TOOL_CALLS_PER_ROUND:]:
+            # A result is still owed for every call in the batch, so pairing
+            # holds and the model can see what was refused.
+            message = (
+                "too many tool calls in one round "
+                f"(max {MAX_TOOL_CALLS_PER_ROUND})"
+            )
+            results.append(
+                ToolResult(
+                    content=message,
+                    meta={"title": call.name, "error": True},
+                    diagnostics=(
+                        Diagnostic("error", "too_many_calls", message),
+                    ),
+                )
+            )
+        return tuple(results)
+
+    def _refused(
+        self,
+        call: ToolCall,
+        message: str,
+        code: str,
+        *,
+        job: str = "",
+    ) -> ToolResult:
+        """A call that did not run, as both the model and the reader see it."""
+        meta: dict[str, object] = {"title": call.name, "error": True}
+        if call.name == PROPOSE_NAME:
+            meta["needs_human"] = True
+        if job:
+            meta["job"] = job
+        return ToolResult(
+            content=message,
+            meta=meta,
+            diagnostics=(Diagnostic("error", code, message),),
+        )
+
+    def _commit_tool_calls(
+        self,
+        session_id: str,
+        calls: tuple[ToolCall, ...],
+        content: str,
+    ) -> None:
+        self._sessions.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": content,
+                "toolCalls": [
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }
+                    for call in calls
+                ],
+            },
+        )
+
+    def _commit_results(
+        self,
+        session_id: str,
+        calls: tuple[ToolCall, ...],
+        results: tuple[ToolResult, ...],
+        sink: EventSink,
+    ) -> None:
+        for call, result in zip(calls, results, strict=True):
+            self._commit_result(session_id, call.id, call.name, result)
+            sink(ObservationEvent(result.observation(call.name)))
 
     def _commit_result(
         self,

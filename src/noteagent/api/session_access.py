@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from noteagent.agent.kernel import RunRegistry
 from noteagent.agent.runtime import AgentRuntime
-from noteagent.agent.store import SessionStore
+from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
+from noteagent.agent.wait import wait_payload
+from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
@@ -102,3 +104,39 @@ def cancel_session(deps: AppDeps, session_id: str) -> bool:
     if busy:
         owner.cancel(session_id)
     return busy
+
+
+def session_waits(deps: AppDeps, store: SessionStore) -> WaitStore:
+    """The waits a route reads: the injected set, or the session's own log."""
+    return deps.waits if deps.waits is not None else SessionWaitStore(store)
+
+
+def cancel_wait(
+    waits: WaitStore, session_id: str, wait_id: str
+) -> dict[str, object]:
+    """Stop a proposed wait, and say what the wait is now.
+
+    Only ``proposed`` can be stopped here. Once the human has entered the node,
+    the job belongs to its own interface, and cancelling it in the chat would
+    leave that interface running something the conversation thinks is over.
+    """
+    wait = waits.current(session_id)
+    if wait is None or wait.wait_id != wait_id:
+        raise CodedHTTPException(
+            404,
+            f"wait {wait_id} is not the current wait of session {session_id}",
+            code="wait.notFound",
+            params={"wait": wait_id},
+        )
+    if wait.status == "cancelled":
+        return {"cancelled": False, "wait": wait_payload(wait)}
+    if wait.status != "proposed":
+        raise CodedHTTPException(
+            409,
+            f"wait {wait_id} is {wait.status}; stop it in its own interface",
+            code="wait.notCancelable",
+            params={"wait": wait_id, "status": wait.status},
+        )
+    waits.cancel(session_id, wait_id, "stopped from the chat")
+    stopped = waits.current(session_id) or wait
+    return {"cancelled": True, "wait": wait_payload(stopped)}

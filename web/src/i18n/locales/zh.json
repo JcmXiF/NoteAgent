@@ -619,6 +619,41 @@
       "omitted": "部分命中未显示",
       "hits": "{{count}} 个命中"
     },
+    "wait": {
+      "title": "等待你开始",
+      "job": {
+        "plan": "规划",
+        "compile": "编译"
+      },
+      "interface": {
+        "source": "资料页",
+        "plan_board": "计划板",
+        "compile_board": "编译板"
+      },
+      "where": "这一步在{{place}}进行。",
+      "completion": {
+        "start_plan": "在原界面按原按钮开始规划。",
+        "start_compile": "在原界面按原按钮开始编译。",
+        "start": "在原界面按原按钮开始。"
+      },
+      "open": {
+        "source": "去资料页",
+        "plan_board": "去计划板",
+        "compile_board": "去编译板",
+        "default": "去那里"
+      },
+      "status": {
+        "proposed": "还在等你开始。",
+        "entered": "作业已经开始。",
+        "completed": "作业已完成。",
+        "failed": "作业失败了。",
+        "cancelled": "已停下。"
+      },
+      "enteredHint": "作业现在归原界面管理；要停下请到那里操作。",
+      "stop": "停下等待",
+      "stopping": "正在停下…",
+      "stopFailed": "无法停下这次等待"
+    },
     "gate": {
       "title": "写页",
       "waitingTitle": "还没有写入任何内容",
@@ -1339,6 +1374,10 @@
       "cancelled": "已停止。",
       "busy": "这个会话正在作答，请等它结束。",
       "internal": "出了点问题，请重试。",
+      "wait": {
+        "notFound": "这条等待已经不是会话当前的那一条了。",
+        "notCancelable": "作业已经开始；请到原界面停止。"
+      },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
       },

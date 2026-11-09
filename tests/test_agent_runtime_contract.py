@@ -65,8 +65,8 @@ class EventPayloadTests(unittest.TestCase):
                 interface="source",
                 status="proposed",
                 proposed_at="2026-11-10T09:00:00Z",
-            ),
-            completion="confirm",
+                completion="confirm",
+            )
         )
         self.assertEqual(
             event.payload(),

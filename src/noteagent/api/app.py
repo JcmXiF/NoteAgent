@@ -103,9 +103,11 @@ from noteagent.api.search import run_search_payload
 from noteagent.api.session_access import (
     active_layout,
     cancel_session,
+    cancel_wait,
     open_session_store,
     session_busy,
     session_tools,
+    session_waits,
 )
 from noteagent.api.sessions import session_payload
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -619,7 +621,10 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """One session's transcript, and the same log read as the model sees it."""
         store = open_session_store(deps, session_id)
         return session_payload(
-            store, session_id, busy=session_busy(deps, session_id)
+            store,
+            session_id,
+            busy=session_busy(deps, session_id),
+            waits=session_waits(deps, store),
         )
 
     @app.post("/api/v1/sessions/{session_id}/query")
@@ -636,6 +641,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 code="busy",
                 params={"session": session_id},
             )
+        waits = session_waits(deps, store)
         runtime = deps.runtime
         if runtime is None:
             model = deps.model
@@ -649,12 +655,18 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 model=model,
                 sessions=store,
                 tools=session_tools(deps, layout),
+                waits=waits,
                 clock=deps.clock,
                 ids=deps.ids,
                 registry=deps.runs,
             )
         return StreamingResponse(
-            iter_run_sse(runtime, UserInput(session_id, body.content), store=store),
+            iter_run_sse(
+                runtime,
+                UserInput(session_id, body.content),
+                store=store,
+                waits=waits,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -668,6 +680,12 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Stop this session's run; an idle session has nothing to stop."""
         open_session_store(deps, session_id)
         return {"cancelled": cancel_session(deps, session_id)}
+
+    @app.post("/api/v1/sessions/{session_id}/wait/{wait_id}/cancel")
+    def kernel_wait_cancel(session_id: str, wait_id: str) -> dict[str, object]:
+        """Stop a wait the human has not entered, before the job starts."""
+        store = open_session_store(deps, session_id)
+        return cancel_wait(session_waits(deps, store), session_id, wait_id)
 
     # Reading only: the screen these answer is the one a person opens when the app
     # is already misbehaving, so nothing here changes the state it describes.

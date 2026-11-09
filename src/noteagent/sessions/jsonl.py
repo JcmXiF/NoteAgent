@@ -14,10 +14,9 @@ import os
 import re
 import threading
 from collections.abc import Mapping
-from datetime import timezone
 from pathlib import Path
 
-from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
+from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.store import SessionSnapshot, SessionSummary, last_timestamp
 from noteagent.project.layout import ProjectLayout
 
@@ -189,15 +188,7 @@ class JsonlSessionStore:
             events.unlink()
 
     def _now(self) -> str:
-        now = self._clock.now()
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=timezone.utc)
-        return (
-            now.astimezone(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        return iso_timestamp(self._clock)
 
 
 def _require_id(value: str) -> str:

@@ -9,6 +9,7 @@ import {
   fetchSession,
   postSessionCancel,
   postSessionQuery,
+  postSessionWaitCancel,
 } from "@/lib/api/sessions";
 import type { SessionPayload } from "@/lib/api/types";
 
@@ -16,6 +17,7 @@ vi.mock("@/lib/api/sessions", () => ({
   fetchSession: vi.fn(),
   postSessionCancel: vi.fn(),
   postSessionQuery: vi.fn(),
+  postSessionWaitCancel: vi.fn(),
 }));
 
 const payload: SessionPayload = {
@@ -53,6 +55,16 @@ const payload: SessionPayload = {
   },
 };
 
+const proposedWait = {
+  waitId: "wait-1",
+  job: "plan",
+  interface: "source",
+  status: "proposed",
+  completion: "start_plan",
+  proposedAt: "2026-11-10T09:00:00Z",
+  intent: "plan entropy",
+};
+
 let host: HTMLDivElement;
 let root: Root;
 
@@ -60,6 +72,7 @@ beforeEach(() => {
   vi.mocked(fetchSession).mockReset();
   vi.mocked(postSessionCancel).mockReset();
   vi.mocked(postSessionQuery).mockReset();
+  vi.mocked(postSessionWaitCancel).mockReset();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -75,9 +88,16 @@ afterEach(() => {
 async function draw(
   sessionId = "s1",
   onOpenLink?: (target: string) => void,
+  onOpenInterface?: (view: string, waitId: string) => void,
 ) {
   await act(async () => {
-    root.render(<SessionView sessionId={sessionId} onOpenLink={onOpenLink} />);
+    root.render(
+      <SessionView
+        sessionId={sessionId}
+        onOpenLink={onOpenLink}
+        onOpenInterface={onOpenInterface}
+      />,
+    );
   });
   await act(async () => {});
 }
@@ -390,5 +410,139 @@ describe("a session read from its log", () => {
       finish(payload);
     });
     await act(async () => {});
+  });
+
+  it("shows the wait card and opens the interface that owns the job", async () => {
+    const onOpenInterface = vi.fn();
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      wait: proposedWait,
+    });
+
+    await draw("s1", undefined, onOpenInterface);
+
+    expect(host.textContent).toContain(i18n.t("chat.wait.title"));
+    expect(host.textContent).toContain(i18n.t("chat.wait.completion.start_plan"));
+    expect(host.textContent).toContain(
+      i18n.t("chat.wait.where", {
+        place: i18n.t("chat.wait.interface.source"),
+      }),
+    );
+    expect(host.textContent).toContain(proposedWait.intent);
+
+    const open = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes(i18n.t("chat.wait.open.source")),
+    );
+    expect(open).not.toBeUndefined();
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onOpenInterface).toHaveBeenCalledWith("source", "wait-1");
+  });
+
+  it("stops a proposed wait and shows it cancelled", async () => {
+    const cancelled = { ...proposedWait, status: "cancelled" };
+    vi.mocked(fetchSession)
+      .mockResolvedValueOnce({ ...payload, wait: proposedWait })
+      .mockResolvedValue({ ...payload, wait: cancelled });
+    vi.mocked(postSessionWaitCancel).mockResolvedValue({
+      cancelled: true,
+      wait: cancelled,
+    });
+
+    await draw();
+
+    const stop = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes(i18n.t("chat.wait.stop")),
+    );
+    expect(stop).not.toBeUndefined();
+    await act(async () => {
+      stop?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await act(async () => {});
+
+    expect(postSessionWaitCancel).toHaveBeenCalledWith("s1", "wait-1");
+    expect(host.textContent).toContain(i18n.t("chat.wait.status.cancelled"));
+    expect(
+      [...host.querySelectorAll("button")].some((button) =>
+        button.textContent?.includes(i18n.t("chat.wait.stop")),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not carry a stop in flight into the next session", async () => {
+    vi.mocked(fetchSession).mockImplementation((id) =>
+      Promise.resolve(
+        id === "s1"
+          ? { ...payload, id: "s1", wait: proposedWait }
+          : {
+              ...payload,
+              id: "s2",
+              wait: { ...proposedWait, waitId: "wait-2" },
+            },
+      ),
+    );
+    // The stop never answers, so its state would leak if the next session
+    // did not clear it.
+    vi.mocked(postSessionWaitCancel).mockReturnValue(new Promise(() => {}));
+
+    await draw("s1");
+    const stop = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes(i18n.t("chat.wait.stop")),
+    );
+    expect(stop).not.toBeUndefined();
+    await act(async () => {
+      stop?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(host.textContent).toContain(i18n.t("chat.wait.stopping"));
+
+    await draw("s2");
+
+    const nextStop = [...host.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes(i18n.t("chat.wait.stop")),
+    );
+    expect(nextStop).not.toBeUndefined();
+    expect((nextStop as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows a wait proposed while the run is still going", async () => {
+    vi.mocked(fetchSession).mockResolvedValue(payload);
+    let finish!: (value: SessionPayload) => void;
+    vi.mocked(postSessionQuery).mockImplementation(
+      (_sessionId, _content, handlers) => {
+        handlers?.onWait?.(proposedWait);
+        return new Promise<SessionPayload>((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+
+    await draw();
+    await ask("安排一下");
+
+    expect(host.textContent).toContain(i18n.t("chat.wait.title"));
+    expect(host.textContent).toContain(i18n.t("chat.wait.completion.start_plan"));
+
+    await act(async () => {
+      finish({ ...payload, wait: proposedWait });
+    });
+    await act(async () => {});
+    expect(host.textContent).toContain(i18n.t("chat.wait.title"));
+  });
+
+  it("does not offer to stop a wait whose job already started", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      wait: { ...proposedWait, status: "entered" },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("chat.wait.enteredHint"));
+    expect(
+      [...host.querySelectorAll("button")].some((button) =>
+        button.textContent?.includes(i18n.t("chat.wait.stop")),
+      ),
+    ).toBe(false);
   });
 });

@@ -1,4 +1,10 @@
-import { getJson, postJson, postSse, type SseHandlers } from "@/lib/api/client";
+import {
+  getJson,
+  postJson,
+  postSse,
+  type SseHandlers,
+  type WaitPayload,
+} from "@/lib/api/client";
 import type { SessionPayload } from "@/lib/api/types";
 
 /** One session, by id, as the versioned core reads it. */
@@ -14,6 +20,19 @@ export function postSessionCancel(
   sessionId: string,
 ): Promise<{ cancelled: boolean }> {
   return postJson(`/v1/sessions/${encodeURIComponent(sessionId)}/cancel`);
+}
+
+/**
+ * Stops a proposed wait before the human enters the job. Once the job has
+ * started, its own interface owns the stop, and this is refused.
+ */
+export function postSessionWaitCancel(
+  sessionId: string,
+  waitId: string,
+): Promise<{ cancelled: boolean; wait: WaitPayload }> {
+  return postJson(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/wait/${encodeURIComponent(waitId)}/cancel`,
+  );
 }
 
 type SessionQueryDone = {
