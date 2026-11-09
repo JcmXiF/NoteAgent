@@ -12,6 +12,15 @@ from collections.abc import Iterable, Iterator
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
+from noteagent.agent.compaction import (
+    CompactionLimits,
+    bounded_summary,
+    choose_cut,
+    compaction_entry,
+    estimate_tokens,
+    render_transcript,
+    trim_tool_results,
+)
 from noteagent.agent.events import (
     DoneEvent,
     ErrorEvent,
@@ -49,7 +58,7 @@ from noteagent.agent.runtime import (
     UserInput,
     busy_message,
 )
-from noteagent.agent.store import SessionStore, WaitStore
+from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
 from noteagent.agent.tools import Diagnostic, ToolContext, ToolRegistry, ToolResult
 from noteagent.agent.wait import (
     WaitState,
@@ -71,6 +80,18 @@ MAX_ABORTED_CHARS = 8_000
 #: writes a hundred calls in one batch is not doing the work in an order a
 #: reader can follow, and every call costs a result entry.
 MAX_TOOL_CALLS_PER_ROUND = 8
+
+#: What the summary request is told to keep and drop. It is a summarizer, not a
+#: second pair of hands: it may read the old transcript, never the project.
+SUMMARY_INSTRUCTIONS = (
+    "Summarize the earlier part of this conversation so it can be left out of "
+    "the context. Keep: the reader's goals, constraints, decisions and open "
+    "questions; important tool results (pages read or searched, job results); "
+    "the current task state, pending waits or jobs, and the next step; project "
+    "constraints that must not be forgotten. Drop: raw tool output, repeated "
+    "material, and intermediate reasoning. Write a compact summary in the "
+    "language of the conversation."
+)
 
 
 class RunRegistry:
@@ -127,6 +148,7 @@ class KernelRuntime:
         registry: RunRegistry | None = None,
         model_name: str = "",
         max_tool_rounds: int = 6,
+        compaction: CompactionLimits | None = None,
     ) -> None:
         self._model = model
         self._sessions = sessions
@@ -139,6 +161,7 @@ class KernelRuntime:
         self._registry = registry or RunRegistry()
         self._model_name = model_name
         self._max_tool_rounds = max_tool_rounds
+        self._compaction = compaction or CompactionLimits()
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
         if isinstance(request, Retry):
@@ -243,11 +266,18 @@ class KernelRuntime:
         partial: list[str] = []
         try:
             sink(StatusEvent("thinking", "think"))
-            messages = self._prompt(session_id)
             tool_rounds = 0
+            overflow_retried = False
 
             while True:
                 _check_cancel(cancel)
+                try:
+                    self._compact_if_needed(session_id, sink, cancel)
+                except ModelStreamError as err:
+                    return self._compaction_failure(
+                        session_id, run_id, sink, err
+                    )
+                messages = self._prompt(session_id)
                 forced = tool_rounds >= self._max_tool_rounds
                 if forced:
                     sink(StatusEvent("answering from the tool results", "answer"))
@@ -268,6 +298,19 @@ class KernelRuntime:
                     if err.code == "cancelled":
                         # One cancellation path, whichever layer noticed first.
                         raise RunCancelled("run cancelled") from err
+                    if err.code == "context_overflow" and not overflow_retried:
+                        overflow_retried = True
+                        try:
+                            compacted = self._compact_if_needed(
+                                session_id, sink, cancel, force=True
+                            )
+                        except ModelStreamError as summary_err:
+                            return self._compaction_failure(
+                                session_id, run_id, sink, summary_err
+                            )
+                        if compacted:
+                            # The prompt is smaller now; ask once more.
+                            continue
                     sink(
                         ErrorEvent(
                             err.code,
@@ -277,6 +320,9 @@ class KernelRuntime:
                     )
                     return RunResult(session_id, run_id, "failed", error=str(err))
 
+                # This turn answered, so a later overflow (after a tool round,
+                # say) gets its own compaction and retry.
+                overflow_retried = False
                 if assistant.tool_calls and not forced:
                     calls = assistant.tool_calls
                     refusal: ToolResult | None = None
@@ -326,7 +372,6 @@ class KernelRuntime:
                     )
                     self._commit_results(session_id, calls, results, sink)
                     tool_rounds += 1
-                    messages = self._prompt(session_id)
                     sink(StatusEvent("thinking", "think"))
                     continue
 
@@ -533,6 +578,25 @@ class KernelRuntime:
             ]
         self._sessions.append(session_id, entry)
 
+    def _compaction_failure(
+        self,
+        session_id: str,
+        run_id: str,
+        sink: EventSink,
+        err: ModelStreamError,
+    ) -> RunResult:
+        """End the run because the summary call could not finish."""
+        if err.code == "cancelled":
+            raise RunCancelled("run cancelled") from err
+        sink(
+            ErrorEvent(
+                "compaction_failed",
+                str(err),
+                retryable=err.retryable,
+            )
+        )
+        return RunResult(session_id, run_id, "failed", error=str(err))
+
     def _cancelled_result(
         self,
         session_id: str,
@@ -555,8 +619,119 @@ class KernelRuntime:
         sink(ErrorEvent("cancelled", "the run was cancelled", retryable=True))
         return RunResult(session_id, run_id, "cancelled")
 
-    def _prompt(self, session_id: str) -> tuple[Message, ...]:
+    def compact(self, session_id: str, instructions: str = "") -> bool:
+        """Summarize the older history now, on the reader's request.
+
+        A manual compaction claims the session like a run; it may not race a
+        conversation that is still writing.
+        """
+        cancel = self._registry.claim(session_id)
+        try:
+            return self._compact_if_needed(
+                session_id,
+                lambda _event: None,
+                cancel,
+                force=True,
+                instructions=instructions,
+            )
+        finally:
+            self._registry.release(session_id)
+
+    def _compact_if_needed(
+        self,
+        session_id: str,
+        sink: EventSink,
+        cancel: Event,
+        *,
+        force: bool = False,
+        instructions: str = "",
+    ) -> bool:
         snapshot = self._sessions.load(session_id)
+        cut_id = choose_cut(snapshot.entries, self._compaction)
+        if cut_id is None:
+            return False
+        prompt = self._prompt_from(snapshot)
+        tokens_before = estimate_tokens(prompt, self._compaction.chars_per_token)
+        if not force and tokens_before < self._compaction.threshold_tokens:
+            return False
+        cut_index = next(
+            (
+                index
+                for index, entry in enumerate(snapshot.entries)
+                if entry.get("id") == cut_id
+            ),
+            None,
+        )
+        if cut_index is None:
+            return False
+        old = project(snapshot.entries[:cut_index])
+        transcript = render_transcript(
+            trim_tool_results(old.messages, self._compaction)
+        )
+        context = ""
+        if old.summary.strip():
+            context += "Earlier summary:\n" + old.summary.strip() + "\n\n"
+        context += transcript
+        # The summary request has to fit the same window. Keep the opening
+        # (goals, constraints) and the end (the turns nearest the cut).
+        max_chars = (
+            self._compaction.threshold_tokens
+            * self._compaction.chars_per_token
+        )
+        if len(context) > max_chars:
+            head = max_chars // 4
+            tail = max_chars - head
+            context = (
+                context[:head]
+                + "\n[middle of the earlier conversation omitted]\n"
+                + context[-tail:]
+            )
+        system = SUMMARY_INSTRUCTIONS
+        if instructions.strip():
+            system += (
+                "\n\nAdditional instructions from the reader:\n"
+                + instructions.strip()
+            )
+        run_section = render_run_section(current_wait(snapshot.entries))
+        if run_section.strip():
+            system += "\n\nCurrent run state:\n" + run_section
+        sink(StatusEvent("compacting earlier turns", "think"))
+        summary_message = collect(
+            self._model.stream(
+                ModelRequest(
+                    model=self._model_name,
+                    messages=(
+                        Message("system", system),
+                        Message("user", context or "(no earlier messages)"),
+                    ),
+                    max_tokens=self._compaction.max_summary_tokens,
+                    session_id=session_id,
+                    cancel=cancel,
+                )
+            )
+        )
+        summary = bounded_summary(
+            summary_message.content, self._compaction
+        )
+        if not summary:
+            return False
+        usage = None
+        if summary_message.usage is not None:
+            usage = {
+                "inputTokens": summary_message.usage.input_tokens,
+                "outputTokens": summary_message.usage.output_tokens,
+                "cacheReadTokens": summary_message.usage.cache_read_tokens,
+            }
+        self._sessions.append(
+            session_id,
+            compaction_entry(summary, cut_id, tokens_before, usage),
+        )
+        return True
+
+    def _prompt(self, session_id: str) -> tuple[Message, ...]:
+        return self._prompt_from(self._sessions.load(session_id))
+
+    def _prompt_from(self, snapshot: SessionSnapshot) -> tuple[Message, ...]:
         projection = project(snapshot.entries)
         parts = [text for text in projection.sections.values() if text.strip()]
         if projection.summary.strip():
@@ -564,10 +739,13 @@ class KernelRuntime:
         run_section = render_run_section(current_wait(snapshot.entries))
         if run_section.strip():
             parts.append(run_section)
-        messages = list(projection.messages)
+        messages = list(
+            trim_tool_results(projection.messages, self._compaction)
+        )
         if parts:
             messages.insert(0, Message("system", "\n\n".join(parts)))
         return tuple(messages)
+
 
 def _tap(
     stream: Iterable[ModelEvent],

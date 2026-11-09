@@ -243,6 +243,17 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
             PostCheck("round-limits", "clamp", frozenset({"limits"})),
         ),
     ),
+    ModelCall(
+        # The compaction summary. It reads only the history being cut and the
+        # current run state; the project is never handed to the summarizer.
+        name="compaction-summary",
+        source="agent/kernel.py",
+        given=frozenset({"history", "run-state", "instructions"}),
+        checks=(
+            # The summary is bounded by the configured output limit.
+            PostCheck("summary-bounded", "clamp"),
+        ),
+    ),
 )
 
 

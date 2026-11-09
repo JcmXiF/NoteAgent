@@ -8,6 +8,7 @@ the turn.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -104,7 +105,7 @@ class OpenAIModelClient:
                     if response.status_code >= 400:
                         detail = response.read().decode("utf-8", errors="replace")
                         yield ModelErrorEvent(
-                            "model_error",
+                            _error_code(response.status_code, detail),
                             f"model HTTP {response.status_code}: {detail[:800]}",
                             retryable=_retryable(response.status_code),
                         )
@@ -227,3 +228,19 @@ def _int(value: object) -> int:
 
 def _retryable(status: int) -> bool:
     return status in (408, 409, 425, 429) or status >= 500
+
+
+#: How providers word "this prompt did not fit". The loop compacts and asks
+#: once more when it sees this, so the match is deliberately narrow: a bad
+#: request must stay a bad request.
+_CONTEXT_OVERFLOW = re.compile(
+    r"context length|context window|maximum context|too many tokens|"
+    r"prompt is too long|input is too long|exceeds the context",
+    re.IGNORECASE,
+)
+
+
+def _error_code(status: int, detail: str) -> str:
+    if status in (400, 413) and _CONTEXT_OVERFLOW.search(detail):
+        return "context_overflow"
+    return "model_error"

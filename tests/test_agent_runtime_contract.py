@@ -147,10 +147,12 @@ class TerminalEventTests(unittest.TestCase):
 
 
 class RuntimeSeamTests(unittest.TestCase):
-    def test_a_runtime_is_anything_that_answers_the_four_calls(self) -> None:
+    def test_a_runtime_is_anything_that_answers_the_five_calls(self) -> None:
         # The API and the tests cross the same seam, so a stand-in only has to
-        # offer these four methods rather than inherit an implementation.
-        self.assertIsInstance(FakeRuntime(), AgentRuntime)
+        # offer these five methods rather than inherit an implementation.
+        runtime = FakeRuntime()
+        self.assertIsInstance(runtime, AgentRuntime)
+        self.assertFalse(runtime.compact("s1"))
 
     def test_a_run_can_be_driven_with_a_list_as_its_sink(self) -> None:
         events = []

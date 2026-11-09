@@ -28,6 +28,34 @@ from noteagent.agent.wait import WaitState
 from noteagent.agent.wait_store import wait_status_for
 
 
+def seed_long_history(store, session_id: str = "s1", pairs: int = 4) -> None:
+    """A session long enough that compaction has something to cut."""
+    store.append(
+        session_id,
+        {
+            "type": "system_section",
+            "sections": {"identity": "You are NoteAgent."},
+        },
+    )
+    for index in range(pairs):
+        store.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "user",
+                "content": f"old question {index} " + "x" * 300,
+            },
+        )
+        store.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": f"old answer {index} " + "y" * 300,
+            },
+        )
+
+
 class FixedClock:
     """A clock that only moves when a test says so."""
 
@@ -132,6 +160,9 @@ class FakeRuntime:
 
     def is_busy(self, session_id: str) -> bool:
         return session_id in self.running
+
+    def compact(self, session_id: str, instructions: str = "") -> bool:
+        return False
 
 
 class FakeSessionStore:

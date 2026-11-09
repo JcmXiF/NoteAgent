@@ -240,6 +240,12 @@ export function SessionView({
       </header>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {session.derived.summary ? (
+          <p className="mb-2 rounded-md border bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
+            {t("chat.compacted")}
+          </p>
+        ) : null}
+
         {session.messages.length === 0 && !pendingQuestion ? (
           <p className="py-8 text-center text-xs text-muted-foreground">
             {t("chat.view.firstAsk")}

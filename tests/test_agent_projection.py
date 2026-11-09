@@ -318,6 +318,72 @@ class ProjectionGoldenTests(unittest.TestCase):
             any(item.kind == "orphan_tool_result" for item in projection.diagnostics)
         )
 
+    def test_a_compaction_keeps_the_whole_transcript(self) -> None:
+        entries = [
+            _entry("e1", "message", role="user", content="old question"),
+            _assistant("e2", "old answer"),
+            _entry(
+                "e3",
+                "compaction",
+                summary="earlier",
+                firstKeptEntryId="e4",
+            ),
+            _entry("e4", "message", role="user", content="new"),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(
+            [message.content for message in projection.messages], ["new"]
+        )
+        self.assertEqual(
+            [item.content for item in projection.transcript],
+            ["old question", "old answer", "new"],
+        )
+
+    def test_a_compaction_keeps_the_system_sections(self) -> None:
+        entries = [
+            _entry(
+                "e1",
+                "system_section",
+                sections={"identity": "You are NoteAgent."},
+            ),
+            _entry("e2", "message", role="user", content="old"),
+            _entry(
+                "e3",
+                "compaction",
+                summary="earlier",
+                firstKeptEntryId="e4",
+            ),
+            _entry("e4", "message", role="user", content="new"),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(
+            projection.sections, {"identity": "You are NoteAgent."}
+        )
+
+    def test_a_compaction_pointing_at_a_missing_entry_is_ignored(self) -> None:
+        entries = [
+            _entry("e1", "message", role="user", content="old"),
+            _entry(
+                "e2",
+                "compaction",
+                summary="stale",
+                firstKeptEntryId="missing",
+            ),
+            _entry("e3", "message", role="user", content="new"),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(projection.summary, "")
+        self.assertEqual(
+            [message.content for message in projection.messages],
+            ["old", "new"],
+        )
+
     def test_a_reset_starts_a_new_context(self) -> None:
         entries = [
             _entry("e1", "message", role="user", content="before"),

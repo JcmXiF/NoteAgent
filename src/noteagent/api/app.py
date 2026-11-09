@@ -21,7 +21,8 @@ from starlette.background import BackgroundTask
 
 from noteagent import __version__
 from noteagent.acquire.intake.local_file import MAX_LOCAL_FILES
-from noteagent.agent.runtime import UserInput, busy_message
+from noteagent.agent.model import ModelStreamError
+from noteagent.agent.runtime import BusyError, UserInput, busy_message
 from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
 from noteagent.acquire.types import ProviderNotConfiguredError
@@ -151,6 +152,16 @@ from noteagent.wiki.deep_search import (
     put_session_payload as put_deep_search_payload,
 )
 from noteagent.wiki.graph import wiki_graph_payload
+
+
+def _session_busy_refusal(session_id: str) -> CodedHTTPException:
+    """The one answer when a session already has a run."""
+    return CodedHTTPException(
+        409,
+        busy_message(session_id),
+        code="busy",
+        params={"session": session_id},
+    )
 
 
 def _project_http_error(err: Exception) -> HTTPException:
@@ -456,6 +467,12 @@ class ChatQueryBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=100_000)
 
 
+class CompactBody(BaseModel):
+    """The reader's own instructions for a manual summary."""
+
+    instructions: str = Field(default="", max_length=2_000)
+
+
 class GateDecisionBody(BaseModel):
     slug: str = Field(..., min_length=1, max_length=160)
     action: str = "skip"
@@ -648,12 +665,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         layout = active_layout(deps)
         store = open_session_store(deps, session_id, layout=layout)
         if session_busy(deps, session_id):
-            raise CodedHTTPException(
-                409,
-                busy_message(session_id),
-                code="busy",
-                params={"session": session_id},
-            )
+            raise _session_busy_refusal(session_id)
         reconcile_session(deps, store, layout, session_id)
         waits = session_waits(deps, store)
         try:
@@ -686,6 +698,35 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Stop a wait the human has not entered, before the job starts."""
         store = open_session_store(deps, session_id)
         return cancel_wait(session_waits(deps, store), session_id, wait_id)
+
+    @app.post("/api/v1/sessions/{session_id}/compact")
+    def kernel_session_compact(
+        session_id: str, body: CompactBody
+    ) -> dict[str, object]:
+        """Summarize older history now, on the reader's request."""
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        if session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        try:
+            runtime = session_runtime(deps, store, layout)
+        except LlmConfigError as err:
+            raise http_error(err, 503) from err
+        try:
+            compacted = runtime.compact(session_id, body.instructions)
+        except BusyError as err:
+            raise _session_busy_refusal(session_id) from err
+        except ModelStreamError as err:
+            raise CodedHTTPException(502, str(err), code=err.code) from err
+        return {
+            "compacted": compacted,
+            **session_payload(
+                store,
+                session_id,
+                busy=session_busy(deps, session_id),
+                waits=session_waits(deps, store),
+            ),
+        }
 
     # Reading only: the screen these answer is the one a person opens when the app
     # is already misbehaving, so nothing here changes the state it describes.

@@ -1,4 +1,4 @@
-"""What a caller asks a runtime to do, and the four calls it may make.
+"""What a caller asks a runtime to do, and the five calls it may make.
 
 A run is one user input or one resume, executed eagerly until it ends. The
 runtime is the kernel's external seam: the API, the job watcher and the tests
@@ -106,4 +106,12 @@ class AgentRuntime(Protocol):
 
     def is_busy(self, session_id: str) -> bool:
         """Whether the session has a run in progress."""
+        ...
+
+    def compact(self, session_id: str, instructions: str = "") -> bool:
+        """Summarize older history now; say whether anything was cut.
+
+        It is a runtime call because it may ask the model for a summary, and it
+        claims the session like a run while it does.
+        """
         ...

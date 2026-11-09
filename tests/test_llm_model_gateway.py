@@ -17,7 +17,12 @@ from noteagent.agent.model import (
     collect,
 )
 from noteagent.llm.config import LlmConfig
-from noteagent.llm.model_gateway import OpenAIModelClient, _stream_events, openai_body
+from noteagent.llm.model_gateway import (
+    OpenAIModelClient,
+    _error_code,
+    _stream_events,
+    openai_body,
+)
 
 
 def _config() -> LlmConfig:
@@ -61,6 +66,21 @@ def _response(*payloads: dict, done: bool = True) -> httpx.Response:
     if done:
         body += "data: [DONE]\n\n"
     return httpx.Response(200, content=body.encode("utf-8"))
+
+
+class ErrorCodeTests(unittest.TestCase):
+    def test_a_context_overflow_is_named(self) -> None:
+        self.assertEqual(
+            _error_code(
+                400,
+                "This model's maximum context length is 8192 tokens.",
+            ),
+            "context_overflow",
+        )
+
+    def test_other_client_errors_are_model_errors(self) -> None:
+        self.assertEqual(_error_code(400, "invalid request"), "model_error")
+        self.assertEqual(_error_code(500, "context length"), "model_error")
 
 
 class OpenAIStreamTests(unittest.TestCase):

@@ -104,10 +104,17 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
                 )
             )
 
-    start = _after_reset(records)
-    start, summary = _after_compaction(records, start)
+    reset_start = _after_reset(records)
+    start, summary = _after_compaction(records, reset_start)
 
     sections: dict[str, str] = {}
+    # Sections are not part of the compacted history: a cut drops messages, not
+    # the identity, tools, skills and brief every prompt must carry. Replay
+    # every patch after the last reset, whichever side of the cut it sits on.
+    for index in range(reset_start, len(records)):
+        entry = records[index]
+        if entry.get("type") == "system_section":
+            _apply_section_patch(sections, entry.get("sections"))
     pieces: list[_Piece] = []
     transcript: list[TranscriptItem] = []
     #: The step the current tool results belong to. A step with prose already
@@ -118,31 +125,39 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
     step_id = ""
     step_created_at = ""
 
-    for index in range(start, len(records)):
+    for index in range(reset_start, len(records)):
+        in_context = index >= start
         entry = records[index]
         kind = entry.get("type")
         entry_id = _entry_id(entry)
         if not isinstance(kind, str):
-            diagnostics.append(
-                ProjectionDiagnostic("invalid_entry", entry_id, "entry has no type")
-            )
+            if in_context:
+                diagnostics.append(
+                    ProjectionDiagnostic(
+                        "invalid_entry", entry_id, "entry has no type"
+                    )
+                )
             continue
         if kind == "system_section":
-            _apply_section_patch(sections, entry.get("sections"))
+            # Already replayed before the cut, so that a compaction cannot drop
+            # a section the prompt still needs.
             continue
         if kind == "wait_completed":
             # The job result is a message the model must see; it is not a turn
             # the reader wrote, so it has no transcript row of its own. The
             # interface shows it from the wait the session carries.
-            pieces.append(
-                _Piece(entry_id, Message("system", _job_result_text(entry)))
-            )
+            if in_context:
+                pieces.append(
+                    _Piece(entry_id, Message("system", _job_result_text(entry)))
+                )
             continue
         if kind == "message":
+            # The transcript is the reader's whole log, so it keeps the turns
+            # the prompt no longer carries; only the prompt starts at the cut.
             piece, item, problem = _message_piece(entry, entry_id, index)
-            if problem:
+            if problem and in_context:
                 diagnostics.append(problem)
-            if piece is not None:
+            if piece is not None and in_context:
                 pieces.append(piece)
             if item is not None:
                 transcript.append(item)
@@ -190,19 +205,23 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
         if kind == "context_edit":
             # v1 replays the log as written; an edit waits for the slice that
             # gives the interface a way to make one.
-            diagnostics.append(
-                ProjectionDiagnostic(
-                    "unsupported_entry", entry_id, "context_edit is not applied"
+            if in_context:
+                diagnostics.append(
+                    ProjectionDiagnostic(
+                        "unsupported_entry",
+                        entry_id,
+                        "context_edit is not applied",
+                    )
                 )
-            )
             continue
         if kind in _SILENT_TYPES:
             continue
-        diagnostics.append(
-            ProjectionDiagnostic(
-                "unknown_type", entry_id, f"unknown entry type: {kind}"
+        if in_context:
+            diagnostics.append(
+                ProjectionDiagnostic(
+                    "unknown_type", entry_id, f"unknown entry type: {kind}"
+                )
             )
-        )
 
     messages, pair_diagnostics = _order_tool_pairs(pieces)
     diagnostics.extend(pair_diagnostics)
@@ -259,13 +278,13 @@ def _after_compaction(
         )
         if found is None:
             continue
-        start = _pair_start(records, found)
+        start = pair_start(records, found)
         raw_summary = entry.get("summary")
         summary = raw_summary if isinstance(raw_summary, str) else ""
     return start, summary
 
 
-def _pair_start(records: Sequence[Mapping[str, object]], index: int) -> int:
+def pair_start(records: Sequence[Mapping[str, object]], index: int) -> int:
     """Move a cut that landed on a tool result back to the call it answers."""
     entry = records[index]
     if entry.get("type") != "message" or entry.get("role") != "toolResult":

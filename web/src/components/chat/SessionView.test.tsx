@@ -220,6 +220,20 @@ describe("a session read from its log", () => {
     expect(host.textContent).toContain(i18n.t("chat.askFailed"));
   });
 
+  it("says when earlier turns were summarized", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      derived: {
+        ...payload.derived,
+        summary: "earlier turns were about entropy",
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("chat.compacted"));
+  });
+
   it("marks an answer that was stopped before it finished", async () => {
     vi.mocked(fetchSession).mockResolvedValue({
       ...payload,

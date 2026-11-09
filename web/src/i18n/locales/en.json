@@ -541,6 +541,7 @@
     "stopped": "Stopped waiting. The model call in progress may still finish, and then it stops.",
     "aborted": "Stopped before this answer was finished.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
+    "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "answered": "Answered",
     "remark": {
       "save": "Save as a remark",
@@ -1393,6 +1394,8 @@
       "job": {
         "busy": "Another job is already running. Wait for it to finish."
       },
+      "compaction_failed": "The earlier conversation could not be summarized. Try again.",
+      "context_overflow": "The conversation is too long for the model's window.",
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
       },
