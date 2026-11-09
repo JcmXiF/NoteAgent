@@ -21,6 +21,8 @@ from starlette.background import BackgroundTask
 
 from noteagent import __version__
 from noteagent.acquire.intake.local_file import MAX_LOCAL_FILES
+from noteagent.agent.kernel import KernelRuntime
+from noteagent.agent.runtime import UserInput, busy_message
 from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
 from noteagent.acquire.types import ProviderNotConfiguredError
@@ -38,6 +40,7 @@ from noteagent.api.chat import (
 )
 from noteagent.api.clips import get_clips_payload, put_clips_payload
 from noteagent.api.deep_search import iter_act_sse
+from noteagent.api.deps import AppDeps
 from noteagent.api.diagnostics import (
     MAX_TAIL_LINES,
     diagnostics_payload,
@@ -94,8 +97,15 @@ from noteagent.api.projects import (
     resolve_repo_root,
     use_project,
 )
+from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
+from noteagent.api.session_access import (
+    cancel_session,
+    open_session_store,
+    session_busy,
+)
+from noteagent.api.sessions import session_payload
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
@@ -108,7 +118,8 @@ from noteagent.ingest.revision_inbox import (
 )
 from noteagent.ingest.source_citations import source_citations_payload
 from noteagent.ingest.update_index import rebuild_wiki_index
-from noteagent.llm.config import LlmConfigError
+from noteagent.llm.config import LlmConfigError, load_llm_config
+from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.install import (
     apply_install,
@@ -569,12 +580,20 @@ async def _app_lifespan(_app: FastAPI):
             await task
 
 
-def create_app() -> FastAPI:
+def create_app(deps: AppDeps | None = None) -> FastAPI:
+    """Build the app from the parts it may cross.
+
+    The old routes keep their own accessors for now; everything the agent
+    kernel adds is reached through ``deps``, so a test can replace the model,
+    tools, store, jobs, clock and ids without patching a module.
+    """
+    deps = deps or AppDeps()
     app = FastAPI(
         title="NOTEAGENT API",
         version=__version__,
         lifespan=_app_lifespan,
     )
+    app.state.deps = deps
     # There is no password, so the headers a browser fills in are what says whether
     # a request was meant for this server at all.
     app.add_middleware(LocalOnly)
@@ -587,6 +606,65 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/v1/health")
+    def kernel_health() -> dict[str, str]:
+        """The versioned health the packaged core reports."""
+        return {"status": "ok", "version": __version__}
+
+    @app.get("/api/v1/sessions/{session_id}")
+    def kernel_session(session_id: str) -> dict[str, object]:
+        """One session's transcript, and the same log read as the model sees it."""
+        store = open_session_store(deps, session_id)
+        return session_payload(
+            store, session_id, busy=session_busy(deps, session_id)
+        )
+
+    @app.post("/api/v1/sessions/{session_id}/query")
+    def kernel_session_query(
+        session_id: str, body: ChatQueryBody
+    ) -> StreamingResponse:
+        """Ask one question; the answer arrives as it is written."""
+        store = open_session_store(deps, session_id)
+        if session_busy(deps, session_id):
+            raise CodedHTTPException(
+                409,
+                busy_message(session_id),
+                code="busy",
+                params={"session": session_id},
+            )
+        runtime = deps.runtime
+        if runtime is None:
+            model = deps.model
+            if model is None:
+                try:
+                    config = load_llm_config()
+                except LlmConfigError as err:
+                    raise http_error(err, 503) from err
+                model = OpenAIModelClient(config)
+            runtime = KernelRuntime(
+                model=model,
+                sessions=store,
+                tools=deps.tools,
+                clock=deps.clock,
+                ids=deps.ids,
+                registry=deps.runs,
+            )
+        return StreamingResponse(
+            iter_run_sse(runtime, UserInput(session_id, body.content), store=store),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/v1/sessions/{session_id}/cancel")
+    def kernel_session_cancel(session_id: str) -> dict[str, bool]:
+        """Stop this session's run; an idle session has nothing to stop."""
+        open_session_store(deps, session_id)
+        return {"cancelled": cancel_session(deps, session_id)}
 
     # Reading only: the screen these answer is the one a person opens when the app
     # is already misbehaving, so nothing here changes the state it describes.
