@@ -1,0 +1,7 @@
+{"v":1,"type":"session","id":"golden","createdAt":"2026-11-10T09:00:00Z"}
+{"v":1,"id":"e1","parentId":"golden","ts":"2026-11-10T09:00:00Z","type":"message","role":"user","content":"什么是熵？"}
+{"v":1,"id":"e2","parentId":"e1","ts":"2026-11-10T09:00:01Z","type":"system_section","sections":{"identity":"你是 NoteAgent。","tools":"wiki_read"}}
+{"v":1,"id":"e3","parentId":"e2","ts":"2026-11-10T09:00:02Z","type":"message","role":"assistant","content":"我先查一下。","toolCalls":[{"id":"t1","name":"wiki_read","arguments":{"targets":["concepts/entropy"]}}]}
+{"v":1,"id":"e4","parentId":"e3","ts":"2026-11-10T09:00:03Z","type":"message","role":"toolResult","toolCallId":"t1","name":"wiki_read","content":"熵是……"}
+{"v":1,"id":"e5","parentId":"e4","ts":"2026-11-10T09:00:04Z","type":"message","role":"assistant","content":"熵衡量不确定性。","stopReason":"stop","meta":{"cards":[{"title":"熵"}]}}
+{"v":1,"id":"e6","parentId":"e5","ts":"2026-11-10T09:00:05Z","type":"system_section","sections":{"tools":null,"index":"1. 熵"}}

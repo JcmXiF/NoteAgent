@@ -136,6 +136,15 @@ class ProjectLayout:
         return self.meta / "chats"
 
     @property
+    def sessions_dir(self) -> Path:
+        """Append-only transcripts, one file per session."""
+        return self.meta / "sessions"
+
+    def session_path(self, session_id: str) -> Path:
+        """The JSONL file one session is stored in."""
+        return self.sessions_dir / f"{session_id}.jsonl"
+
+    @property
     def chat_limits(self) -> Path:
         return self.config / "chat-limits.json"
 
