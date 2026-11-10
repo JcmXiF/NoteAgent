@@ -27,8 +27,31 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e ".[api]"
-      - name: Tests
+      - name: Unit, integration and golden tests
         run: python -m unittest discover -s tests
+
+  evals:
+    name: Behaviour evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[api]"
+      - name: Deterministic evals
+        shell: bash
+        # Every case injects a scripted model, and this job is given no
+        # provider secret: a pull request can never reach a live API.
+        run: bash scripts/run-evals.sh
+      - name: Keep the report and any failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: build/evals
+          if-no-files-found: ignore
 
   docs:
     name: Markdown

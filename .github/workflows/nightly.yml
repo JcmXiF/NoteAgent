@@ -1,0 +1,114 @@
+name: Nightly
+
+# A pull request runs the deterministic evals once. This workflow runs them
+# again on a schedule beside the full quality pass and a packaging build, so a
+# slower or Windows-only failure cannot hold up a change.
+#
+# Nothing here calls a live provider: there is no judge and no key, so the
+# deterministic suite is the quality signal. A live eval, when one exists,
+# belongs here and never in the pull-request workflow.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    name: Full behaviour evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[api]"
+      - name: Evals
+        shell: bash
+        run: bash scripts/run-evals.sh
+      - name: Keep the report and any failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-report
+          path: build/evals
+          if-no-files-found: ignore
+
+  quality:
+    name: Full quality checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the core
+        run: pip install -e ".[api]"
+      - name: Test the core
+        run: python -m unittest discover -s tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - name: Install the interface
+        working-directory: web
+        run: npm ci
+      - name: Check the interface
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm test
+          npm run lint
+          npm run build
+      - name: Install the shell
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+      - name: Test the shell
+        working-directory: desktop
+        run: npm test
+
+  packaging:
+    name: Packaging build
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the core
+        run: pip install -e ".[api]"
+      - name: Install the interface
+        working-directory: web
+        run: npm ci
+      - name: Install the shell
+        working-directory: desktop
+        run: npm ci
+      - name: Build the installer
+        run: node scripts/package.mjs
+      - name: Check the installer exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l build/installer/
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-installer
+          path: build/installer/*.exe
+          if-no-files-found: error
