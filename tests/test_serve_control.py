@@ -409,7 +409,7 @@ class ServerStartTests(unittest.TestCase):
         body = ""
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(f"{record.url}/api/health", timeout=2) as response:
+                with urllib.request.urlopen(f"{record.url}/api/v1/health", timeout=2) as response:
                     body = response.read().decode("utf-8")
                     break
             except (urllib.error.URLError, ConnectionError):

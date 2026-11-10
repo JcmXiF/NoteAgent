@@ -8,6 +8,7 @@ would have refused, and a cancel reaches the same registry the query claimed.
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 
@@ -30,6 +31,8 @@ from noteagent.sessions.legacy import MigrationReport
 from noteagent.sessions.trace import SessionTrace
 from noteagent.wiki.agent_tools import wiki_tools
 
+logger = logging.getLogger(__name__)
+
 
 def active_layout(deps: AppDeps) -> ProjectLayout | None:
     """The project the default store reads, when no store was injected."""
@@ -43,13 +46,18 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
         ) from err
 
 
+def _default_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
+    """The project's own store, with the clock and ids the app was built with."""
+    return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+
+
 def project_sessions(deps: AppDeps) -> SessionStore:
     """The store of the active project, or the one a test injected."""
     if deps.sessions is not None:
         return deps.sessions
     layout = active_layout(deps)
     assert layout is not None
-    return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+    return _default_store(deps, layout)
 
 
 def migrate_sessions(store: SessionStore) -> MigrationReport | None:
@@ -57,6 +65,31 @@ def migrate_sessions(store: SessionStore) -> MigrationReport | None:
     if isinstance(store, JsonlSessionStore):
         return store.ensure_migrated()
     return None
+
+
+def migrate_active_project_chats(deps: AppDeps) -> None:
+    """Bring an upgraded project's old chats across as the core starts.
+
+    The list and open routes migrate lazily too, but an upgrade should not wait
+    for somebody to open a conversation before the old ones exist. A test that
+    injected its own store owns its migration, and a core with no project yet
+    has nothing to migrate: both are normal starts, not failures.
+    """
+    if deps.sessions is not None:
+        return
+    try:
+        layout = get_active_layout()
+    except ProjectNotConfiguredError:
+        return
+    except (OSError, ValueError) as err:
+        logger.warning("the active project cannot be read at startup: %s", err)
+        return
+    try:
+        migrate_sessions(_default_store(deps, layout))
+    except OSError as err:
+        # A project the process cannot read is reported when a route needs it;
+        # it must not keep the core from starting.
+        logger.warning("old chats cannot be migrated at startup: %s", err)
 
 
 def open_session_store(
@@ -74,7 +107,7 @@ def open_session_store(
     if store is None:
         resolved = layout or active_layout(deps)
         assert resolved is not None
-        store = JsonlSessionStore(resolved, clock=deps.clock, ids=deps.ids)
+        store = _default_store(deps, resolved)
     if isinstance(store, JsonlSessionStore):
         # A conversation opened by its old id may not have been through a list
         # first; the marker makes this a file-existence check on later calls.

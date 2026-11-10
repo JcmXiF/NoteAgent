@@ -119,6 +119,17 @@ jobs:
       - name: Check the built runtime version
         run: node scripts/version.mjs check-runtime build/runtime/core/src/noteagent/__init__.py
 
+      - name: Smoke the packaged core
+        run: node scripts/smoke-packaged.mjs
+
+      - name: Keep the smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packaging-smoke
+          path: build/smoke-packaged
+          if-no-files-found: ignore
+
       - name: Check the installer exists
         shell: bash
         env:

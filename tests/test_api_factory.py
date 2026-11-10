@@ -69,10 +69,14 @@ class AppFactoryTests(unittest.TestCase):
         self.assertIs(app.state.deps, deps)
 
     def test_the_kernel_health_route_answers_through_the_factory(self) -> None:
+        from noteagent import __version__
+
         client = TestClient(create_app(_deps()))
         response = client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(
+            response.json(), {"status": "ok", "version": __version__}
+        )
 
     def test_the_existing_health_route_still_answers(self) -> None:
         client = TestClient(create_app(_deps()))

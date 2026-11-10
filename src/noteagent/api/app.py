@@ -108,6 +108,7 @@ from noteagent.api.session_access import (
     claim_job,
     enter_wait_for_job,
     job_wait_for_body,
+    migrate_active_project_chats,
     migrate_sessions,
     open_session_store,
     project_sessions,
@@ -598,6 +599,9 @@ async def _app_lifespan(_app: FastAPI):
         install_view()
     except (CodedError, OSError):
         pass
+
+    # An upgrade brings the old chats across before the socket answers.
+    migrate_active_project_chats(_app.state.deps)
 
     stop = asyncio.Event()
 

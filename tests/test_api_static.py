@@ -87,7 +87,7 @@ class NoBuildTests(unittest.TestCase):
 
     def test_the_api_still_answers_without_a_build(self) -> None:
         # A build is about the interface, not about the service being useful: the
-        # shell looks for /api/health before it loads any page.
+        # shell asks the API for health before it loads any page.
         with served(None) as client:
             response = client.get("/api/health")
 
