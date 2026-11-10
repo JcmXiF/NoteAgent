@@ -84,6 +84,33 @@ class RunResult:
 EventSink: TypeAlias = Callable[[RunEvent], None]
 
 
+@dataclass(frozen=True, slots=True)
+class RunRef:
+    """Which run, in which session: the identity a trace records against."""
+
+    session_id: str
+    run_id: str
+
+
+@runtime_checkable
+class TraceSink(Protocol):
+    """Where a run's steps are recorded for support, separately from its content.
+
+    The sink sees the same events as the interface, and the implementation
+    decides what may be written down. It is a collaborator of the runtime, not
+    one of its five calls: it never changes what the run does, and a failure in
+    it must not end the run.
+    """
+
+    def started(self, run: RunRef) -> None:
+        """A run claimed its session and is about to begin."""
+        ...
+
+    def record(self, run: RunRef, event: RunEvent) -> None:
+        """One event of the run, to be reduced to its recordable fields."""
+        ...
+
+
 @runtime_checkable
 class AgentRuntime(Protocol):
     """The kernel's external seam (ADR-0037).

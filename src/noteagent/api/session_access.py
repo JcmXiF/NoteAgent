@@ -27,6 +27,7 @@ from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
+from noteagent.sessions.trace import SessionTrace
 from noteagent.wiki.agent_tools import wiki_tools
 
 
@@ -134,6 +135,9 @@ def session_runtime(
         clock=deps.clock,
         ids=deps.ids,
         registry=deps.runs,
+        # A run against a real project writes a content-free trace beside its
+        # session; a test store with no project has nowhere to put one.
+        trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
     )
 
 

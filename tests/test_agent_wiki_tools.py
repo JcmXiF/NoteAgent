@@ -6,6 +6,7 @@ material, ``notes/`` is the reader's own layer, and neither is a wiki page.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,56 @@ class WikiToolTests(unittest.TestCase):
         )
         for tool in self.registry.enabled():
             self.assertEqual(tool.side_effect, "read")
+
+    def test_no_write_or_shell_tool_is_offered(self) -> None:
+        names = {tool.name for tool in self.registry.enabled()}
+
+        self.assertFalse(
+            names
+            & {
+                "write",
+                "run",
+                "shell",
+                "bash",
+                "exec",
+                "python",
+                "fetch",
+                "web_fetch",
+            }
+        )
+        # ``propose`` travels as a function call but is a control action: the
+        # runtime intercepts it, and no handler can start the job it names.
+        self.assertIsNone(self.registry.get("propose"))
+
+    def test_traversal_spellings_are_not_pages(self) -> None:
+        for target in (
+            "../../etc/passwd",
+            "wiki/../../raw/secret.md",
+            "/etc/passwd",
+            r"C:\Windows\win.ini",
+            "./../raw/secret.md",
+            "..%2f..%2fraw/secret.md",
+        ):
+            with self.subTest(target=target):
+                result = self.dispatch(
+                    "wiki_read", json.dumps({"slug": target})
+                )
+                self.assertTrue(result.meta.get("missing"))
+                self.assertNotIn("秘密", result.content)
+
+    def test_a_symlink_out_of_the_wiki_is_not_a_page(self) -> None:
+        outside = self.layout.root / "outside.md"
+        outside.write_text("# Outside\n\n秘密。", encoding="utf-8")
+        link = self.layout.wiki / "escape.md"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("this platform does not create symlinks here")
+
+        result = self.dispatch("wiki_read", '{"slug": "escape"}')
+
+        self.assertTrue(result.meta.get("missing"))
+        self.assertNotIn("秘密", result.content)
 
     def test_a_page_is_read_by_slug_with_its_title_and_body(self) -> None:
         result = self.dispatch("wiki_read", '{"slug": "concepts/entropy"}')

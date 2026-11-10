@@ -390,6 +390,9 @@ class KernelRuntimeTests(unittest.TestCase):
         wait = runtime.wait_state("s1")
         assert wait is not None
         self.assertEqual(wait.status, "proposed")
+        # Nothing started the job: only the person, pressing the button in the
+        # interface that owns it, can give the wait a job id.
+        self.assertFalse(wait.job_id)
         self.assertEqual(
             [tool["function"]["name"] for tool in model.requests[0].tools],
             ["propose"],

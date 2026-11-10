@@ -306,6 +306,60 @@ class RenderedHtmlTests(unittest.TestCase):
         self.assertEqual(capture.fidelity, "failed")
         self.assertEqual(capture.reasons, ("unsupported_url",))
 
+    def test_a_private_address_is_never_requested(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError(f"unexpected request {request.url}")
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        for url in (
+            "http://127.0.0.1:8765/api/v1/sessions",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://localhost/admin",
+        ):
+            with self.subTest(url=url):
+                capture = web_fetch(url, client=client)
+                self.assertEqual(capture.fidelity, "failed")
+                self.assertEqual(capture.reasons, ("unsafe_url",))
+        client.close()
+
+    def test_a_redirect_to_a_private_address_is_not_followed(self) -> None:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            return httpx.Response(
+                302,
+                headers={"location": "http://169.254.169.254/latest/meta-data/"},
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        capture = web_fetch("https://example.com/redirect", client=client)
+        client.close()
+
+        self.assertEqual(capture.fidelity, "failed")
+        self.assertEqual(capture.reasons, ("unsafe_url",))
+        self.assertEqual(seen, ["https://example.com/redirect"])
+
+    def test_a_private_image_address_is_not_downloaded(self) -> None:
+        seen: list[str] = []
+        page = ARTICLE_HTML.replace(
+            "<h1>相对熵</h1>",
+            '<h1>相对熵</h1><p><img src="http://127.0.0.1:8765/private.png"></p>',
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            return httpx.Response(
+                200, text=page, headers={"content-type": "text/html"}
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        capture = web_fetch("https://example.com/page", client=client)
+        client.close()
+
+        self.assertNotIn("http://127.0.0.1:8765/private.png", seen)
+        self.assertGreaterEqual(capture.images_failed, 1)
+
     def test_keeps_data_uri_images_without_download(self) -> None:
         png = bytes.fromhex(
             "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"

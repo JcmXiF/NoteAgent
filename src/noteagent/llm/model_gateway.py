@@ -33,6 +33,7 @@ from noteagent.agent.model import (
 )
 from noteagent.llm.client import iter_sse_payloads
 from noteagent.llm.config import LlmConfig
+from noteagent.util.redact import redact
 
 
 def openai_body(request: ModelRequest, config: LlmConfig) -> dict[str, Any]:
@@ -84,37 +85,58 @@ def _message(message: Message) -> dict[str, Any]:
 
 
 class OpenAIModelClient:
-    """A ``ModelClient`` for OpenAI and the providers that copy its shape."""
+    """A ``ModelClient`` for OpenAI and the providers that copy its shape.
 
-    def __init__(self, config: LlmConfig) -> None:
+    *client* is a test seam: production leaves it ``None`` and the adapter owns
+    the connection. A caller that injects one also owns its lifecycle.
+    """
+
+    def __init__(
+        self, config: LlmConfig, *, client: httpx.Client | None = None
+    ) -> None:
         self._config = config
         self._url = config.chat_completions_url
+        self._client = client
 
     def stream(self, request: ModelRequest) -> Iterator[ModelEvent]:
+        if self._client is not None:
+            yield from self._stream_with(self._client, request)
+            return
+        with httpx.Client(timeout=self._config.timeout_seconds) as client:
+            yield from self._stream_with(client, request)
+
+    def _stream_with(
+        self, client: httpx.Client, request: ModelRequest
+    ) -> Iterator[ModelEvent]:
         try:
-            with httpx.Client(timeout=self._config.timeout_seconds) as client:
-                with client.stream(
-                    "POST",
-                    self._url,
-                    headers={
-                        "Authorization": f"Bearer {self._config.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=openai_body(request, self._config),
-                ) as response:
-                    if response.status_code >= 400:
-                        detail = response.read().decode("utf-8", errors="replace")
-                        yield ModelErrorEvent(
-                            _error_code(response.status_code, detail),
-                            f"model HTTP {response.status_code}: {detail[:800]}",
-                            retryable=_retryable(response.status_code),
-                        )
-                        return
-                    yield ModelStartEvent(request.model or self._config.model)
-                    yield from _stream_events(response, request)
+            with client.stream(
+                "POST",
+                self._url,
+                headers={
+                    "Authorization": f"Bearer {self._config.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=openai_body(request, self._config),
+            ) as response:
+                if response.status_code >= 400:
+                    detail = response.read().decode("utf-8", errors="replace")
+                    # A proxy or provider may quote the request, key included,
+                    # in its error body. This message reaches the transcript and
+                    # the interface, so the key is removed here, at the boundary.
+                    detail = redact(detail, (self._config.api_key,))
+                    yield ModelErrorEvent(
+                        _error_code(response.status_code, detail),
+                        f"model HTTP {response.status_code}: {detail[:800]}",
+                        retryable=_retryable(response.status_code),
+                    )
+                    return
+                yield ModelStartEvent(request.model or self._config.model)
+                yield from _stream_events(response, request)
         except httpx.HTTPError as err:
             yield ModelErrorEvent(
-                "model_error", f"model request failed: {err}", retryable=True
+                "model_error",
+                redact(f"model request failed: {err}", (self._config.api_key,)),
+                retryable=True,
             )
 
 

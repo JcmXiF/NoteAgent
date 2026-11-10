@@ -117,6 +117,31 @@ class OpenAIStreamTests(unittest.TestCase):
         self.assertTrue(events[-1].retryable)
 
 
+class ProviderErrorTests(unittest.TestCase):
+    def test_a_provider_error_never_repeats_the_key(self) -> None:
+        key = "sk-live-1234567890"
+        config = LlmConfig(
+            base_url="https://model.test/v1",
+            api_key=key,
+            model="default-model",
+        )
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401,
+                text=json.dumps({"error": f"invalid api key {key}"}),
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        self.addCleanup(client.close)
+
+        events = list(OpenAIModelClient(config, client=client).stream(_request()))
+
+        self.assertIsInstance(events[-1], ModelErrorEvent)
+        self.assertNotIn(key, events[-1].message)
+        self.assertIn("[redacted]", events[-1].message)
+
+
 class OpenAIBodyTests(unittest.TestCase):
     def test_the_request_becomes_the_wire_shape(self) -> None:
         body = openai_body(_request(), _config())

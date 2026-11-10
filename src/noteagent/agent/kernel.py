@@ -8,6 +8,7 @@ the next round starts from what the log now says.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator
 from threading import Event, Lock
 
@@ -25,6 +26,7 @@ from noteagent.agent.events import (
     DoneEvent,
     ErrorEvent,
     ObservationEvent,
+    RunEvent,
     StatusEvent,
     TokenEvent,
     WaitEvent,
@@ -53,8 +55,10 @@ from noteagent.agent.runtime import (
     Resume,
     Retry,
     RunCancelled,
+    RunRef,
     RunRequest,
     RunResult,
+    TraceSink,
     UserInput,
     busy_message,
 )
@@ -71,6 +75,8 @@ from noteagent.agent.wait_store import (
     current_wait,
     has_resumed,
 )
+
+logger = logging.getLogger(__name__)
 
 #: An answer stopped mid-stream is kept only as far as this. A cancellation must
 #: not be able to put an unbounded partial into the log.
@@ -146,11 +152,13 @@ class KernelRuntime:
         clock: Clock | None = None,
         ids: Ids | None = None,
         registry: RunRegistry | None = None,
+        trace: TraceSink | None = None,
         model_name: str = "",
         max_tool_rounds: int = 6,
         compaction: CompactionLimits | None = None,
     ) -> None:
         self._model = model
+        self._trace = trace
         self._sessions = sessions
         self._tools = tools or ToolRegistry()
         # A wait is read from the same log as the turns, so the default keeps
@@ -169,12 +177,45 @@ class KernelRuntime:
         session_id = request.session_id
         cancel = self._registry.claim(session_id)
         run_id = self._ids.new_id("run")
+        sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
             if isinstance(request, Resume):
                 return self._run_resume(request, sink, run_id, cancel)
             return self._run_user(request, sink, run_id, cancel)
         finally:
             self._registry.release(session_id)
+
+    def _reporting(self, sink: EventSink, run: RunRef) -> EventSink:
+        """The sink a run reports to: the trace first, then the caller.
+
+        Tracing is observation, not a condition of the run. A trace that cannot
+        be written must not stop an answer, so its failure is logged once and
+        the run continues without it.
+        """
+        trace = self._trace
+        if trace is None:
+            return sink
+        warned = False
+
+        def warn(err: Exception) -> None:
+            nonlocal warned
+            if not warned:
+                warned = True
+                logger.warning("the session trace cannot be written: %s", err)
+
+        try:
+            trace.started(run)
+        except Exception as err:
+            warn(err)
+
+        def report(event: RunEvent) -> None:
+            try:
+                trace.record(run, event)
+            except Exception as err:
+                warn(err)
+            sink(event)
+
+        return report
 
     def cancel(self, session_id: str) -> None:
         self._registry.cancel(session_id)

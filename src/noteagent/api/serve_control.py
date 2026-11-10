@@ -20,6 +20,7 @@ mistaken for the one on the preferred port.
 from __future__ import annotations
 
 import atexit
+import ipaddress
 import json
 import os
 import re
@@ -61,6 +62,27 @@ class AlreadyServing(RuntimeError):
         self.pids = list(pids)
         owners = ", ".join(str(pid) for pid in self.pids)
         super().__init__(f"already serving on port {port} (pid {owners})")
+
+
+class NotLocalOnly(RuntimeError):
+    """The server was asked to listen somewhere other than this machine."""
+
+    def __init__(self, host: str) -> None:
+        self.host = host
+        super().__init__(
+            f"{host} is not a loopback address; this server is local-only"
+        )
+
+
+def is_loopback_host(host: str) -> bool:
+    """Whether *host* names this machine's loopback interface."""
+    name = host.strip().strip("[]").rstrip(".").lower()
+    if name == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(name.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -191,8 +213,11 @@ def bind_listener(host: str, port: int, *, fallback: bool = False) -> socket.soc
 
     The socket is bound here, before the server starts, so the port this returns
     is the port the server will serve on — no window in which somebody else can
-    take it in between.
+    take it in between. The address must be loopback: the API has no password,
+    so any other interface would expose the whole wiki to the network.
     """
+    if not is_loopback_host(host):
+        raise NotLocalOnly(host)
     try:
         return _listen(host, port)
     except OSError as err:
@@ -453,11 +478,13 @@ __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "AlreadyServing",
+    "NotLocalOnly",
     "PortBusy",
     "ServerRecord",
     "bind_listener",
     "clear_record",
     "found_servers",
+    "is_loopback_host",
     "looks_like_noteagent",
     "parse_listening_pids",
     "pids_listening",

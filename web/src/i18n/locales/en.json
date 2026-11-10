@@ -972,6 +972,7 @@
     "empty": "No text was extracted",
     "truncated": "The page was too large and got cut off",
     "unsupported_url": "Not an http(s) link",
+    "unsafe_url": "This machine or a private network is not fetched",
     "unsupported_media": "Not an HTML page",
     "missing_images": "Some images could not be localized",
     "invalid_pdf": "This PDF could not be opened",

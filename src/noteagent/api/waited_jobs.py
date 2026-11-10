@@ -16,6 +16,7 @@ from noteagent.agent.jobs import JobResult
 from noteagent.agent.store import WaitStore
 from noteagent.api.sse import EmitFn, WorkerFn, iter_job_sse
 from noteagent.util.cancel import JobCancelled
+from noteagent.util.redact import environment_secrets, redact
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,12 @@ def _failed(job: str, err: Exception) -> JobResult:
         summary="",
         # A job error is a sentence for the log and the model; it is bounded
         # because a traceback or a provider body must not grow the transcript
-        # without limit.
-        error=(str(err) or type(err).__name__)[:500],
+        # without limit. It can also outlive this process inside the session's
+        # wait_completed, so a configured key is taken out first.
+        error=redact(
+            (str(err) or type(err).__name__)[:500],
+            environment_secrets(),
+        ),
     )
 
 

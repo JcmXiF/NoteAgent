@@ -16,6 +16,7 @@ import httpx
 
 from noteagent.llm.config import LlmConfig
 from noteagent.util.cancel import check_cancelled
+from noteagent.util.redact import redact
 
 
 class LlmError(RuntimeError):
@@ -180,6 +181,15 @@ class LlmClient:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
 
+    def _redacted(self, text: str) -> str:
+        """The provider's words with this connection's key taken out.
+
+        A proxy may quote the request it rejected, key included. These errors
+        reach job results and therefore the session, so the key is removed
+        before the sentence leaves this client.
+        """
+        return redact(text, (self.config.api_key,))
+
     def chat(
         self,
         messages: list[ChatMessage],
@@ -269,18 +279,20 @@ class LlmClient:
                     json=self._body(messages, stream=False, tools=tools),
                 )
         except httpx.HTTPError as err:
-            raise LlmError(f"LLM request failed: {err}") from err
+            raise LlmError(self._redacted(f"LLM request failed: {err}")) from err
 
         if response.status_code >= 400:
             raise LlmError(
-                f"LLM HTTP {response.status_code}: {response.text[:800]}"
+                f"LLM HTTP {response.status_code}: "
+                f"{self._redacted(response.text[:800])}"
             )
 
         try:
             payload = response.json()
         except json.JSONDecodeError as err:
             raise LlmError(
-                f"LLM returned non-JSON body: {response.text[:400]}"
+                f"LLM returned non-JSON body: "
+                f"{self._redacted(response.text[:400])}"
             ) from err
 
         choices = payload.get("choices") or []
@@ -329,7 +341,8 @@ class LlmClient:
                     if response.status_code >= 400:
                         body = response.read().decode("utf-8", errors="replace")
                         raise LlmError(
-                            f"LLM HTTP {response.status_code}: {body[:800]}"
+                            f"LLM HTTP {response.status_code}: "
+                            f"{self._redacted(body[:800])}"
                         )
                     for event in iter_sse_payloads(response):
                         choices = event.get("choices") or []
@@ -366,7 +379,7 @@ class LlmClient:
                                 if isinstance(fn.get("arguments"), str):
                                     slot["arguments"] += fn["arguments"]
         except httpx.HTTPError as err:
-            raise LlmError(f"LLM stream failed: {err}") from err
+            raise LlmError(self._redacted(f"LLM stream failed: {err}")) from err
 
         tool_calls = tuple(
             ToolCall(

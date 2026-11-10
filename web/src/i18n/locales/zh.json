@@ -972,6 +972,7 @@
     "empty": "没有读到正文",
     "truncated": "页面太大，只读到了一部分",
     "unsupported_url": "不是 http(s) 链接",
+    "unsafe_url": "不访问本机或内网地址",
     "unsupported_media": "不是网页",
     "missing_images": "部分图片未能保存",
     "invalid_pdf": "这份 PDF 无法打开",

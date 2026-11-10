@@ -144,6 +144,10 @@ class ProjectLayout:
         """The JSONL file one session is stored in."""
         return self.sessions_dir / f"{session_id}.jsonl"
 
+    def session_events_path(self, session_id: str) -> Path:
+        """The trace file beside a session: what ran, never what was said."""
+        return self.sessions_dir / f"{session_id}.events.jsonl"
+
     @property
     def chat_limits(self) -> Path:
         return self.config / "chat-limits.json"

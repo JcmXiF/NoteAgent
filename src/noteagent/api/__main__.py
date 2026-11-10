@@ -17,6 +17,7 @@ from noteagent.api.serve_control import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     AlreadyServing,
+    NotLocalOnly,
     PortBusy,
     bind_listener,
     found_servers,
@@ -59,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
         where = f" at {existing[0].url}" if existing else ""
         print(f"{err}{where}", flush=True)
         return 0
+    except NotLocalOnly as err:
+        print(f"{err}. Use --host 127.0.0.1.", file=sys.stderr, flush=True)
+        return 1
     except PortBusy as err:
         print(
             f"{err}. Try another port with --port, or: noteagent serve stop --port {args.port}",

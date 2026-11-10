@@ -271,7 +271,7 @@ class JsonlSessionStore:
             raise FileNotFoundError(f"session not found: {ident}")
         with SESSION_LOCK:
             path.unlink()
-            events = path.with_name(f"{ident}.events.jsonl")
+            events = self._layout.session_events_path(ident)
             if events.is_file():
                 events.unlink()
             self._refresh_index()
