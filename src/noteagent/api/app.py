@@ -27,17 +27,6 @@ from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
 from noteagent.acquire.types import ProviderNotConfiguredError
 from noteagent.api.attention import attention_payload
-from noteagent.api.chat import (
-    delete_conversation_payload,
-    get_conversation_payload,
-    get_limits_payload,
-    iter_chat_query_sse,
-    list_chats_payload,
-    post_conversation_payload,
-    put_conversation_payload,
-    put_limits_payload,
-    rename_conversation_payload,
-)
 from noteagent.api.clips import get_clips_payload, put_clips_payload
 from noteagent.api.deep_search import iter_act_sse
 from noteagent.api.deps import AppDeps
@@ -398,26 +387,6 @@ class ClipCollectionBody(BaseModel):
     targetSlug: str = ""
 
 
-class ChatMessageBody(BaseModel):
-    id: str = Field(..., min_length=1, max_length=80)
-    role: str = Field(..., min_length=1, max_length=16)
-    content: str = ""
-    createdAt: str = ""
-
-
-class ChatPutBody(BaseModel):
-    title: str = ""
-    messages: list[ChatMessageBody] = Field(default_factory=list, max_length=2000)
-
-
-class ChatCreateBody(BaseModel):
-    title: str = ""
-
-
-class ChatRenameBody(BaseModel):
-    title: str = Field(default="", max_length=2_000)
-
-
 class NoteCreateBody(BaseModel):
     page: str = Field(..., min_length=1, max_length=500)
     body: str = ""
@@ -453,21 +422,7 @@ class PageRestoreBody(BaseModel):
     baseRevision: str = ""
 
 
-class ChatLimitsBody(BaseModel):
-    historyLimit: int = Field(..., ge=1, le=200)
-    maxMessages: int = Field(..., ge=1, le=2000)
-    maxContentChars: int = Field(..., ge=200, le=100_000)
-    maxConversations: int = Field(..., ge=1, le=200)
-    maxTitleChars: int = Field(..., ge=16, le=240)
-    maxBriefChars: int = Field(default=6_000, ge=0, le=40_000)
-    maxIndexChars: int = Field(default=12_000, ge=200, le=80_000)
-    maxOpenPages: int = Field(default=6, ge=1, le=30)
-    maxPageChars: int = Field(default=8_000, ge=200, le=40_000)
-    maxPagesChars: int = Field(default=24_000, ge=200, le=120_000)
-    maxToolRounds: int = Field(default=6, ge=1, le=20)
-
-
-class ChatQueryBody(BaseModel):
+class SessionQueryBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=100_000)
 
 
@@ -758,7 +713,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/v1/sessions/{session_id}/query")
     def kernel_session_query(
-        session_id: str, body: ChatQueryBody
+        session_id: str, body: SessionQueryBody
     ) -> StreamingResponse:
         """Ask one question; the answer arrives as it is written."""
         layout = active_layout(deps)
@@ -1292,84 +1247,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def project_brief_put(name: str, body: BriefBody) -> dict[str, object]:
         return save_brief(require_project_layout(name), body.text)
 
-    @app.get("/api/projects/{name}/chat-limits")
-    def project_chat_limits_get(name: str) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return get_limits_payload(layout)
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.put("/api/projects/{name}/chat-limits")
-    def project_chat_limits_put(name: str, body: ChatLimitsBody) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return put_limits_payload(layout, body.model_dump())
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.get("/api/projects/{name}/chats")
-    def project_chats_list(name: str) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return list_chats_payload(layout)
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.post("/api/projects/{name}/chats")
-    def project_chats_create(
-        name: str, body: ChatCreateBody = Body(default_factory=ChatCreateBody)
-    ) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return post_conversation_payload(layout, body.model_dump())
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.get("/api/projects/{name}/chats/{conversation_id}")
-    def project_chat_get(name: str, conversation_id: str) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return get_conversation_payload(layout, conversation_id)
-        except FileNotFoundError as err:
-            raise http_error(err, 404) from err
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.put("/api/projects/{name}/chats/{conversation_id}")
-    def project_chat_put(
-        name: str, conversation_id: str, body: ChatPutBody
-    ) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return put_conversation_payload(layout, conversation_id, body.model_dump())
-        except FileNotFoundError as err:
-            raise http_error(err, 404) from err
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.patch("/api/projects/{name}/chats/{conversation_id}")
-    def project_chat_rename(
-        name: str, conversation_id: str, body: ChatRenameBody
-    ) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return rename_conversation_payload(layout, conversation_id, body.model_dump())
-        except FileNotFoundError as err:
-            raise http_error(err, 404) from err
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
-    @app.delete("/api/projects/{name}/chats/{conversation_id}")
-    def project_chat_delete(name: str, conversation_id: str) -> dict[str, object]:
-        layout = require_project_layout(name)
-        try:
-            return delete_conversation_payload(layout, conversation_id)
-        except FileNotFoundError as err:
-            raise http_error(err, 404) from err
-        except ValueError as err:
-            raise http_error(err, 400) from err
-
     @app.get("/api/projects/{name}/notes")
     def project_notes_list(
         name: str,
@@ -1422,30 +1299,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise http_error(err, 404) from err
         except ValueError as err:
             raise http_error(err, 400) from err
-
-    @app.post("/api/projects/{name}/chats/{conversation_id}/query")
-    def project_chat_query(
-        name: str, conversation_id: str, body: ChatQueryBody
-    ) -> StreamingResponse:
-        layout = require_project_layout(name)
-        try:
-            ensure_llm_configured()
-            get_conversation_payload(layout, conversation_id)
-        except LlmConfigError as err:
-            raise http_error(err, 503) from err
-        except FileNotFoundError as err:
-            raise http_error(err, 404) from err
-        except ValueError as err:
-            raise http_error(err, 400) from err
-        return StreamingResponse(
-            iter_chat_query_sse(layout, conversation_id, body.content),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
 
     @app.post("/api/projects/{name}/topic-map")
     def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:

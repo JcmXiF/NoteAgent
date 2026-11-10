@@ -534,16 +534,13 @@
     "createFailed": "Could not start a conversation",
     "deleteFailed": "Could not delete the conversation",
     "askFailed": "That question was not answered",
-    "askPlaceholder": "Ask, or have the assistant look something up or write",
+    "askPlaceholder": "Ask, or have the assistant look something up",
     "askHint": "Enter sends; Shift + Enter starts a new line.",
-    "tooLong": "Too long — keep it under {{max}} characters",
     "send": "Ask",
     "stop": "Stop",
-    "stopped": "Stopped waiting. The model call in progress may still finish, and then it stops.",
     "aborted": "Stopped before this answer was finished.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
-    "answered": "Answered",
     "remark": {
       "save": "Save as a remark",
       "saving": "Saving…",
@@ -554,50 +551,7 @@
       "saveFailed": "Could not save this answer as a remark"
     },
     "step": {
-      "think": "Thinking",
-      "tool": "Looking things up",
-      "answer": "Answering"
-    },
-    "limits": {
-      "title": "Conversation limits",
-      "unsaved": "Unsaved",
-      "intro": "These values set how much is included with each question and how much the assistant may read. Changes take effect once saved.",
-      "loading": "Reading…",
-      "save": "Save",
-      "saving": "Saving…",
-      "discard": "Discard",
-      "ready": "Ready to save",
-      "range": "Between {{min}} and {{max}}",
-      "loadFailed": "Could not read these limits",
-      "saveFailed": "Could not save them",
-      "group": {
-        "conversation": "This conversation",
-        "context": "What the assistant is told",
-        "reading": "What it may read"
-      },
-      "unit": {
-        "messages": "messages",
-        "chars": "chars",
-        "conversations": "conversations",
-        "pages": "pages",
-        "rounds": "rounds"
-      },
-      "historyLimit": "Recent messages carried",
-      "historyLimitHint": "Only the most recent messages are included; older ones are left out.",
-      "maxMessages": "Messages kept per conversation",
-      "maxContentChars": "Longest question",
-      "maxTitleChars": "Longest conversation title",
-      "maxConversations": "Conversations kept",
-      "maxBriefChars": "Project brief, first",
-      "maxBriefCharsHint": "Zero leaves the project description out.",
-      "maxIndexChars": "Note index, first",
-      "contextHint": "Characters taken from the start of the project's file and given with every question.",
-      "maxOpenPages": "Pages opened at once",
-      "maxPageChars": "Read from one page",
-      "maxPagesChars": "Read in total",
-      "maxPagesCharsHint": "The most body text one answer may read in total.",
-      "maxToolRounds": "Look-up rounds",
-      "maxToolRoundsHint": "How many rounds of lookup the assistant may take."
+      "tool": "Looking things up"
     },
     "activity": {
       "think": "Thinking",
@@ -605,17 +559,13 @@
       "answer": "Writing the answer"
     },
     "view": {
-      "empty": "No conversation open",
       "emptyHint": "Start a conversation on the left to begin asking.",
       "firstAsk": "Ask below; the answer appears here."
     },
     "looked": {
-      "toSources": "Add to what to fetch",
       "missing": "not found",
-      "notSource": "a result, not a source yet",
       "failed": "did not work",
       "title": "What the answer looked at",
-      "reading": "reading now",
       "truncated": "cut short",
       "timeout": "timed out",
       "omitted": "some left out",
@@ -664,17 +614,6 @@
       "stop": "Stop waiting",
       "stopping": "Stopping…",
       "stopFailed": "Could not stop this wait"
-    },
-    "gate": {
-      "title": "Writing pages",
-      "waitingTitle": "Nothing is written yet",
-      "waitingBody": "Writing goes by what you tick in the plan board. The assistant can suggest; only you can decide.",
-      "nothingBody": "The assistant wanted to plan pages, but nothing has been selected to plan from yet.",
-      "wroteTitle": "Written from what you ticked",
-      "wroteBody": "The pages you confirmed are in the notes now. The written files are listed in the panel.",
-      "openSources": "Go and select passages",
-      "goCompile": "Go and compile",
-      "seeWritten": "See what was written"
     }
   },
   "browse": {
@@ -1289,8 +1228,6 @@
       "loadFailed": "The description could not be read.",
       "manage": "To create or delete a project, close settings and use the sidebar.",
       "switchBlocked": "Save or discard this description before switching projects.",
-      "chatLimits": "How much one chat may read is adjusted at the bottom of the chat sidebar.",
-      "openChat": "Go to chat",
       "tooLong": "Keep the description within {{limit}} characters."
     },
     "appearance": {

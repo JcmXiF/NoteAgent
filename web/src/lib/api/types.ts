@@ -421,56 +421,7 @@ export type IngestRecoveryPayload = {
   last: CompletedRoundPayload | null;
 };
 
-/* ------------------------------------------------------------------- Chat */
-
-export type ChatTurn = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt: string;
-  /** What the answer was built from; absent on a question and on older turns. */
-  cards?: ObservationPayload[];
-};
-
-export type ChatLimits = {
-  historyLimit: number;
-  maxMessages: number;
-  maxContentChars: number;
-  maxConversations: number;
-  maxTitleChars: number;
-  maxBriefChars: number;
-  maxIndexChars: number;
-  maxOpenPages: number;
-  maxPageChars: number;
-  maxPagesChars: number;
-  maxToolRounds: number;
-};
-
-/** How far each knob may be turned, as the core reports it. */
-export type ChatLimitBounds = Record<keyof ChatLimits, { min: number; max: number }>;
-
-/**
- * The limits and the ranges they may take.
- *
- * The ranges travel with the values so that a view showing the knobs can say what is
- * wrong with one without keeping its own copy of the numbers, which would be a copy
- * that can drift away from what the core enforces.
- */
-export type ChatLimitsPayload = ChatLimits & { bounds?: ChatLimitBounds };
-
-export type ChatSummary = {
-  id: string;
-  title: string;
-  updatedAt: string;
-  messageCount: number;
-};
-
-export type ChatConversation = {
-  id: string;
-  title: string;
-  updatedAt: string;
-  messages: ChatTurn[];
-};
+/* ----------------------------------------------------------------- Sessions */
 
 /** One visible turn of a JSONL session, as the core projects it. */
 export type SessionTurn = {
@@ -534,9 +485,4 @@ export type SessionPayload = {
     messages: SessionMessage[];
     diagnostics: SessionDiagnostic[];
   };
-};
-
-export type ChatListPayload = {
-  limits: ChatLimitsPayload;
-  conversations: ChatSummary[];
 };

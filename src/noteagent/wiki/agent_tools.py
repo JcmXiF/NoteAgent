@@ -40,7 +40,7 @@ _READ_DESCRIPTION = (
     "Call it once per page; several calls in one round run in parallel. "
     "Wiki pages only: never raw/ or notes/."
 )
-_SEARCH_DESCRIPTION = (
+SEARCH_DESCRIPTION = (
     "Search this project's wiki pages by slug, title, or body text. "
     "Returns page slugs and short excerpts. Excerpts are locators, not quotes: "
     "wiki_read a page before relying on it. "
@@ -61,7 +61,7 @@ _READ_PARAMETERS = {
     "additionalProperties": False,
 }
 
-_SEARCH_PARAMETERS = {
+SEARCH_PARAMETERS = {
     "type": "object",
     "properties": {
         "query": {
@@ -117,8 +117,8 @@ def wiki_tools(
             ),
             ToolSpec(
                 name=SEARCH,
-                description=_SEARCH_DESCRIPTION,
-                parameters=_SEARCH_PARAMETERS,
+                description=SEARCH_DESCRIPTION,
+                parameters=SEARCH_PARAMETERS,
                 side_effect="read",
                 timeout_s=15.0,
                 output_limits=OutputLimits(
@@ -329,4 +329,11 @@ def _check_cancel(context: ToolContext) -> None:
         raise RunCancelled("the run was cancelled")
 
 
-__all__ = ["SEARCH", "WIKI_READ", "WikiToolLimits", "wiki_tools"]
+__all__ = [
+    "SEARCH",
+    "SEARCH_DESCRIPTION",
+    "SEARCH_PARAMETERS",
+    "WIKI_READ",
+    "WikiToolLimits",
+    "wiki_tools",
+]

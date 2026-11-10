@@ -148,19 +148,6 @@ class ProjectLayout:
         """The trace file beside a session: what ran, never what was said."""
         return self.sessions_dir / f"{session_id}.events.jsonl"
 
-    @property
-    def chat_limits(self) -> Path:
-        return self.config / "chat-limits.json"
-
-    @property
-    def legacy_chat_limits(self) -> Path:
-        """Where limits lived before they moved out of program state."""
-        return self.meta / "chat-limits.json"
-
-    def chat_path(self, conversation_id: str) -> Path:
-        """The file one chat conversation is stored in."""
-        return self.chats_dir / f"{conversation_id}.json"
-
 
 def default_layout(project_root: Path | str) -> ProjectLayout:
     """The layout of the project at *project_root*."""

@@ -57,6 +57,7 @@ export function SessionViewHost({ slot }: { slot: PaneSlot }) {
   return (
     <SessionView
       sessionId={currentId}
+      slot={slot}
       onOpenLink={(target) => {
         followLink(target, slot);
       }}

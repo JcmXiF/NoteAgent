@@ -15,8 +15,6 @@ from unittest.mock import patch
 
 from noteagent.api.ingest import run_ingest_job
 from noteagent.api.topic_gate import run_ingest_confirmed_job, run_topic_map_job
-from noteagent.chat.query import run_query
-from noteagent.chat.store import create_conversation
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
@@ -24,7 +22,6 @@ from noteagent.ingest.clips import (
     save_clip_store,
 )
 from noteagent.ingest.topic_map import map_clips
-from noteagent.llm.client import LlmTurn, ToolCall
 from noteagent.llm.config import LlmConfig
 from noteagent.project.init import init_project
 from noteagent.wiki.deep_search import act_session
@@ -60,76 +57,6 @@ class _LoadOnce:
         if self.calls > 1:
             raise AssertionError("the job re-read the mutable configuration")
         return self.config
-
-
-class _ChatClient:
-    def __init__(self, script: list[LlmTurn]) -> None:
-        self.script = list(script)
-
-    def complete(self, _messages, **_kwargs) -> LlmTurn:
-        return self.script.pop(0)
-
-
-_TOOL_CALL = ToolCall(
-    id="call-1",
-    name="wiki_read",
-    arguments='{"targets": ["concepts/entropy"]}',
-)
-
-
-class ChatSnapshotTests(unittest.TestCase):
-    def test_a_turn_keeps_its_connection_through_tool_rounds(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            created = create_conversation(layout, "t")
-            loader = _LoadOnce(CONFIG_A)
-            seen: list[LlmConfig] = []
-            client = _ChatClient(
-                [
-                    LlmTurn(content="", tool_calls=(_TOOL_CALL,)),
-                    LlmTurn(content="answer"),
-                ]
-            )
-
-            with (
-                patch("noteagent.chat.query.load_llm_config", loader),
-                patch(
-                    "noteagent.chat.query.LlmClient",
-                    lambda config: seen.append(config) or client,
-                ),
-                patch("noteagent.chat.query.observe_tool", lambda *a, **k: ()),
-            ):
-                run_query(layout, created.id, "什么是熵")
-
-            self.assertEqual(loader.calls, 1)
-            self.assertEqual(seen, [CONFIG_A])
-
-    def test_the_next_turn_uses_the_connection_active_then(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            created = create_conversation(layout, "t")
-            configs = [CONFIG_A, CONFIG_B]
-            loads: list[LlmConfig] = []
-            seen: list[LlmConfig] = []
-
-            def load() -> LlmConfig:
-                config = configs[len(loads)]
-                loads.append(config)
-                return config
-
-            def make_client(config: LlmConfig) -> _ChatClient:
-                seen.append(config)
-                return _ChatClient([LlmTurn(content="answer")])
-
-            with (
-                patch("noteagent.chat.query.load_llm_config", load),
-                patch("noteagent.chat.query.LlmClient", make_client),
-            ):
-                run_query(layout, created.id, "first")
-                run_query(layout, created.id, "second")
-
-            self.assertEqual(loads, [CONFIG_A, CONFIG_B])
-            self.assertEqual(seen, [CONFIG_A, CONFIG_B])
 
 
 class IngestSnapshotTests(unittest.TestCase):

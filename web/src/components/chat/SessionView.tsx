@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SendHorizontal, Square } from "lucide-react";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { SaveRemark } from "@/components/chat/SaveRemark";
 import { SessionCards } from "@/components/chat/SessionCards";
 import { WaitCard } from "@/components/chat/WaitCard";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,8 @@ import {
   postSessionWaitCancel,
 } from "@/lib/api/sessions";
 import type { SessionPayload } from "@/lib/api/types";
+import { questionBefore } from "@/lib/chat";
+import type { PaneSlot } from "@/stores/layout-store";
 import { cn } from "@/lib/utils";
 
 type Activity = "think" | "tool" | "answer";
@@ -31,11 +34,14 @@ type Activity = "think" | "tool" | "answer";
  */
 export function SessionView({
   sessionId,
+  slot,
   onOpenLink = () => {},
   onOpenInterface = () => {},
   onSessionChanged = () => {},
 }: {
   sessionId: string;
+  /** The pane the session is drawn in, for the views a saved remark opens. */
+  slot: PaneSlot;
   /** A wiki link in an answer; absent leaves the link inert. */
   onOpenLink?: (target: string) => void;
   /** Opening the interface a wait points at, carrying the wait it needs. */
@@ -260,7 +266,7 @@ export function SessionView({
           </p>
         ) : null}
 
-        {session.messages.map((turn) => (
+        {session.messages.map((turn, index) => (
           <article
             key={turn.id}
             className={cn("mb-3", turn.isStep ? "text-muted-foreground" : undefined)}
@@ -275,6 +281,13 @@ export function SessionView({
                 <ChatMarkdown body={turn.content} onOpenLink={onOpenLink} />
                 {turn.cards?.length ? (
                   <SessionCards observations={turn.cards} onOpen={onOpenLink} />
+                ) : null}
+                {!turn.isStep && turn.stopReason !== "aborted" ? (
+                  <SaveRemark
+                    answer={turn.content}
+                    question={questionBefore(session.messages, index)}
+                    slot={slot}
+                  />
                 ) : null}
               </>
             )}

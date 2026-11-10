@@ -1,7 +1,7 @@
 """The kernel is reusable only while it stays ignorant of the product.
 
-The wiki, ingestion, acquisition and the old chat are adapters at the kernel's
-seams. Importing one from inside the kernel would turn the seam into a direct
+The wiki, ingestion and acquisition are adapters at the kernel's seams.
+Importing one from inside the kernel would turn the seam into a direct
 dependency and make the kernel impossible to test or reuse on its own.
 """
 
@@ -21,7 +21,6 @@ KERNEL = ROOT / "src" / "noteagent" / "agent"
 FORBIDDEN = (
     "noteagent.acquire",
     "noteagent.api",
-    "noteagent.chat",
     "noteagent.ingest",
     "noteagent.llm",
     "noteagent.project",

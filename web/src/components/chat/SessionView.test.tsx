@@ -95,6 +95,7 @@ async function draw(
     root.render(
       <SessionView
         sessionId={sessionId}
+        slot="main"
         onOpenLink={onOpenLink}
         onOpenInterface={onOpenInterface}
         onSessionChanged={onSessionChanged}
@@ -134,6 +135,17 @@ describe("a session read from its log", () => {
     expect(host.textContent).toContain("什么是熵？");
     expect(host.textContent).toContain("熵衡量不确定性。");
     expect(host.textContent).toContain(i18n.t("chat.step.tool"));
+  });
+
+  it("offers to keep the answer as a remark, but not its preamble", async () => {
+    vi.mocked(fetchSession).mockResolvedValue(payload);
+
+    await draw();
+
+    const save = [...host.querySelectorAll("button")].filter((button) =>
+      button.textContent?.includes(i18n.t("chat.remark.save")),
+    );
+    expect(save).toHaveLength(1);
   });
 
   it("shows a new answer as it is written, then the committed session", async () => {
@@ -287,6 +299,29 @@ describe("a session read from its log", () => {
 
     expect(host.textContent).toContain("熵是信");
     expect(host.textContent).toContain(i18n.t("chat.aborted"));
+  });
+
+  it("does not offer to keep an answer that was stopped", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      messages: [
+        payload.messages[0],
+        {
+          id: "e6",
+          role: "assistant",
+          content: "熵是信",
+          createdAt: "2026-11-10T09:00:05Z",
+          stopReason: "aborted",
+        },
+      ],
+    });
+
+    await draw();
+
+    const save = [...host.querySelectorAll("button")].filter((button) =>
+      button.textContent?.includes(i18n.t("chat.remark.save")),
+    );
+    expect(save).toHaveLength(0);
   });
 
   it("says when the session is still answering somewhere else", async () => {

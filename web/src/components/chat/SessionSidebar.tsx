@@ -7,7 +7,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { DeleteChatDialog } from "@/components/chat/DeleteChatDialog";
+import { DeleteSessionDialog } from "@/components/chat/DeleteSessionDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { IconTip } from "@/components/ui/tooltip";
@@ -220,8 +220,8 @@ export function SessionSidebar() {
         </ul>
       )}
 
-      <DeleteChatDialog
-        conversation={asking}
+      <DeleteSessionDialog
+        session={asking}
         onClose={() => setAsking(null)}
         onDelete={(id) => remove(id)}
       />

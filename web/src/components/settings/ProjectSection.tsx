@@ -7,7 +7,6 @@ import { fetchBrief, saveBrief, type ProjectBrief } from "@/lib/api/settings";
 import { errorMessage } from "@/lib/api/client";
 import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/layout-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
 /**
@@ -22,7 +21,6 @@ export function ProjectSection({ onDirty }: { onDirty: (dirty: boolean) => void 
   const projects = useWorkspaceStore((state) => state.projects);
   const current = useWorkspaceStore((state) => state.current);
   const select = useWorkspaceStore((state) => state.select);
-  const openModule = useLayoutStore((state) => state.openModule);
 
   const [brief, setBrief] = useState<ProjectBrief | null>(null);
   const [draft, setDraft] = useState("");
@@ -181,17 +179,6 @@ export function ProjectSection({ onDirty }: { onDirty: (dirty: boolean) => void 
           />
         </>
       ) : null}
-
-      <p className="text-sm text-muted-foreground">
-        {t("settings.project.chatLimits")}{" "}
-        <button
-          type="button"
-          className="underline-offset-2 hover:underline"
-          onClick={() => openModule("chat")}
-        >
-          {t("settings.project.openChat")}
-        </button>
-      </p>
     </SettingsSection>
   );
 }

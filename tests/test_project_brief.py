@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from noteagent.chat.limits import default_limits, limits_to_dict, load_limits, save_limits
 from noteagent.io.read_source import SourceDocument
 from noteagent.project.init import init_project
 from noteagent.prompts.analysis import build_analysis_prompt
@@ -67,27 +65,6 @@ class BriefTests(unittest.TestCase):
             prompt = build_analysis_prompt(doc, layout)
             self.assertIn("Write compactly", prompt.system)
             self.assertNotIn("secret schema text", prompt.system)
-
-
-class ChatLimitsTests(unittest.TestCase):
-    def test_limits_live_in_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            save_limits(layout, default_limits())
-            self.assertTrue(layout.chat_limits.is_file())
-            self.assertEqual(layout.chat_limits.parent.name, "config")
-            self.assertFalse(layout.meta.joinpath("chat-limits.json").exists())
-
-    def test_legacy_limits_are_read(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            payload = limits_to_dict(default_limits())
-            payload["maxBriefChars"] = 1_234
-            layout.meta.mkdir(parents=True, exist_ok=True)
-            layout.legacy_chat_limits.write_text(
-                json.dumps(payload), encoding="utf-8"
-            )
-            self.assertEqual(load_limits(layout).max_brief_chars, 1_234)
 
 
 if __name__ == "__main__":

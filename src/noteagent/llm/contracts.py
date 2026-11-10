@@ -213,24 +213,6 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
         ),
     ),
     ModelCall(
-        name="chat-turn",
-        source="chat/query.py",
-        given=frozenset({"question", "history", "wiki-context", "tool-catalog", "limits"}),
-        checks=(
-            PostCheck("known-tool", "gate", frozenset({"tool-catalog"})),
-            PostCheck("tool-arguments", "gate", frozenset({"tool-catalog"})),
-            PostCheck("round-limits", "clamp", frozenset({"limits"})),
-        ),
-    ),
-    ModelCall(
-        # The same turn again, without tools: a model that does not support them is
-        # asked to answer directly rather than failing the whole question.
-        name="chat-turn-plain",
-        source="chat/query.py",
-        given=frozenset({"question", "history", "wiki-context", "limits"}),
-        checks=(PostCheck("round-limits", "clamp", frozenset({"limits"})),),
-    ),
-    ModelCall(
         # The kernel loop. Its checks are the ones the loop itself applies: the
         # tool catalog decides what may run, and the round limit decides when it
         # must answer from what it has.

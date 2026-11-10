@@ -1051,9 +1051,33 @@ def probe_search(
 
 #: One short request that must produce a tool call.
 _TOOL_CHECK_PROMPT = (
-    "Call the search tool with query 'preflight' and scope 'wiki'. "
-    "Do not answer in prose."
+    "Call the search tool with query 'preflight'. Do not answer in prose."
 )
+
+
+def _tool_check_tools() -> list[dict[str, object]]:
+    """The search tool as the agent offers it, without a project to run it on.
+
+    The probe checks whether the model can call a function and use its result,
+    so it offers the same contract the live registry does. Imported here because
+    the settings module loads at startup; the probe is the only caller.
+    """
+    from noteagent.wiki.agent_tools import (
+        SEARCH,
+        SEARCH_DESCRIPTION,
+        SEARCH_PARAMETERS,
+    )
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": SEARCH,
+                "description": SEARCH_DESCRIPTION,
+                "parameters": SEARCH_PARAMETERS,
+            },
+        }
+    ]
 
 
 class ToolCallingUnsupported(CodedError):
@@ -1193,15 +1217,10 @@ def _tool_call_check(
     *,
     poster: Callable[..., Any] | None = None,
 ) -> dict[str, object]:
-    """Ask for a tool call, then answer after its result, as chat does."""
-    # Imported here: the settings module is loaded at startup, and the tool
-    # catalogue is not part of starting the app.
-    from noteagent.chat.tools import openai_tools
-
-    tools = openai_tools()
+    """Ask for a tool call, then answer after its result, as the agent does."""
     common = {
         "model": config.model,
-        "tools": tools,
+        "tools": _tool_check_tools(),
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
         "stream": False,
