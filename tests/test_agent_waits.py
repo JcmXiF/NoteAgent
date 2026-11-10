@@ -1,0 +1,230 @@
+"""A session's one wait, read back from the events the log committed."""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_fakes import FixedClock, SequentialIds
+from noteagent.agent.jobs import JobArtifact, JobResult
+from noteagent.agent.wait import WaitState
+from noteagent.agent.wait_store import SessionWaitStore
+from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.jsonl import JsonlSessionStore
+
+
+class SessionWaitStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sessions = JsonlSessionStore(
+            ProjectLayout(Path(self._tmp.name)),
+            clock=FixedClock(),
+            ids=SequentialIds(),
+        )
+        self.sessions.create("s1")
+        self.waits = SessionWaitStore(self.sessions)
+
+    def propose(
+        self,
+        wait_id: str = "w1",
+        job: str = "plan",
+        interface: str = "source",
+    ) -> WaitState:
+        self.waits.propose(
+            "s1",
+            WaitState(
+                wait_id=wait_id,
+                job=job,  # type: ignore[arg-type]
+                interface=interface,  # type: ignore[arg-type]
+                status="proposed",
+                proposed_at="2026-11-10T09:00:00Z",
+                completion=f"start_{job}",
+                intent="plan entropy",
+            ),
+        )
+        current = self.waits.current("s1")
+        assert current is not None
+        return current
+
+    def test_a_proposal_is_the_current_wait(self) -> None:
+        wait = self.propose()
+
+        self.assertEqual(wait.wait_id, "w1")
+        self.assertEqual(wait.job, "plan")
+        self.assertEqual(wait.interface, "source")
+        self.assertEqual(wait.status, "proposed")
+        self.assertEqual(wait.completion, "start_plan")
+        self.assertEqual(wait.intent, "plan entropy")
+        self.assertEqual(wait.proposed_at, "2026-11-10T09:00:00Z")
+
+    def test_entering_keeps_what_was_proposed_and_names_the_job(self) -> None:
+        self.propose()
+
+        self.waits.enter("s1", "w1", "job-9")
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "entered")
+        self.assertEqual(wait.job, "plan")
+        self.assertEqual(wait.interface, "source")
+        self.assertEqual(wait.intent, "plan entropy")
+        self.assertEqual(wait.job_id, "job-9")
+
+    def test_cancelling_leaves_the_last_wait_cancelled(self) -> None:
+        self.propose()
+
+        self.waits.cancel("s1", "w1", "stopped from the chat")
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "cancelled")
+
+    def test_completing_keeps_the_summary_and_the_artifacts(self) -> None:
+        self.propose()
+        self.waits.enter("s1", "w1", "job-9")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(
+                job="plan",
+                status="succeeded",
+                summary="planned 3 pages",
+                artifacts=(
+                    JobArtifact("write", "concepts/entropy", "Entropy"),
+                    JobArtifact("mention", "concepts/information", "Information"),
+                ),
+            ),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "completed")
+        self.assertEqual(wait.result_summary, "planned 3 pages")
+        self.assertEqual(wait.job_id, "job-9")
+        self.assertEqual(
+            [(item.kind, item.id, item.label) for item in wait.artifacts],
+            [
+                ("write", "concepts/entropy", "Entropy"),
+                ("mention", "concepts/information", "Information"),
+            ],
+        )
+
+    def test_finishing_the_same_wait_twice_keeps_one_result(self) -> None:
+        self.propose()
+        self.waits.enter("s1", "w1", "job-9")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="succeeded", summary="planned 1 page"),
+        )
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="failed", summary="a second delivery"),
+        )
+
+        completed = [
+            entry
+            for entry in self.sessions.load("s1").entries
+            if entry["type"] == "wait_completed"
+        ]
+        self.assertEqual(len(completed), 1)
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "completed")
+        self.assertEqual(wait.result_summary, "planned 1 page")
+
+    def test_a_cancelled_job_is_recorded_as_cancelled(self) -> None:
+        self.propose()
+        self.waits.enter("s1", "w1", "job-9")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="cancelled", summary="stopped"),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "cancelled")
+        self.assertEqual(wait.job_id, "job-9")
+
+    def test_finishing_a_superseded_wait_does_nothing(self) -> None:
+        self.propose("w1")
+        self.waits.cancel("s1", "w1")
+        self.propose("w2", "compile", "plan_board")
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="succeeded", summary="an old plan"),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.wait_id, "w2")
+        self.assertEqual(wait.status, "proposed")
+        self.assertFalse(
+            any(
+                entry["type"] == "wait_completed"
+                for entry in self.sessions.load("s1").entries
+            )
+        )
+
+    def test_a_failed_job_is_a_failed_wait_with_its_error(self) -> None:
+        self.propose()
+
+        self.waits.finish(
+            "s1",
+            "w1",
+            JobResult(job="plan", status="failed", summary="", error="out of budget"),
+        )
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.status, "failed")
+        self.assertEqual(wait.error, "out of budget")
+
+    def test_a_new_proposal_supersedes_the_previous_wait(self) -> None:
+        self.propose("w1")
+        self.waits.cancel("s1", "w1")
+
+        wait = self.propose("w2", "compile", "plan_board")
+
+        self.assertEqual(wait.wait_id, "w2")
+        self.assertEqual(wait.job, "compile")
+        self.assertEqual(wait.status, "proposed")
+
+    def test_an_event_for_an_older_wait_does_not_move_the_current_one(self) -> None:
+        self.propose("w1")
+        self.waits.cancel("s1", "w1")
+        self.propose("w2", "compile", "plan_board")
+
+        self.waits.enter("s1", "w1", "job-old")
+        self.waits.cancel("s1", "w1")
+
+        wait = self.waits.current("s1")
+        assert wait is not None
+        self.assertEqual(wait.wait_id, "w2")
+        self.assertEqual(wait.status, "proposed")
+        self.assertEqual(wait.job, "compile")
+
+    def test_the_wait_events_are_entries_the_log_keeps(self) -> None:
+        self.propose()
+
+        entries = self.sessions.load("s1").entries
+
+        self.assertEqual(entries[-1]["type"], "wait_proposed")
+        self.assertEqual(entries[-1]["id"], "w1")
+        self.assertEqual(entries[-1]["completion"], "start_plan")
+
+    def test_a_session_without_wait_events_has_no_wait(self) -> None:
+        self.assertIsNone(self.waits.current("s1"))
+
+
+if __name__ == "__main__":
+    unittest.main()

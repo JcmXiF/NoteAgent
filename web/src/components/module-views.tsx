@@ -7,8 +7,8 @@
  */
 import type { ComponentType } from "react";
 import type { ModuleId } from "@/modules";
-import { ChatSidebar } from "@/components/chat/ChatSidebar";
-import { ChatView } from "@/components/chat/ChatView";
+import { SessionSidebar } from "@/components/chat/SessionSidebar";
+import { SessionViewHost } from "@/components/chat/SessionViewHost";
 import { BrowseSearch } from "@/components/browse/BrowseSearch";
 import { BrowseView } from "@/components/browse/BrowseView";
 import { SourceSidebar } from "@/components/source/SourceSidebar";
@@ -38,7 +38,7 @@ type ModuleViews = {
 };
 
 const VIEWS: Partial<Record<ModuleId, ModuleViews>> = {
-  chat: { Sidebar: ChatSidebar, Content: ChatView },
+  chat: { Sidebar: SessionSidebar, Content: SessionViewHost },
   sources: { Sidebar: SourceSidebar, Content: SourceView },
   docs: { Sidebar: DocsSidebar, Content: DocsView },
   notes: { Sidebar: NotesSidebar, Content: NotesView },

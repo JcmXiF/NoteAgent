@@ -118,9 +118,15 @@ installer. Nothing on the target machine needs Python or Node.
 ```powershell
 node scripts/package.mjs          # installer
 node scripts/package.mjs --dir    # unpacked app, faster to iterate on
+node scripts/smoke-packaged.mjs   # start the packaged core and check it end to end
 ```
 
-The installer lands in `build/installer/`. The packaged app keeps its files apart:
+The installer lands in `build/installer/`. The smoke runs the core from
+`build/runtime/core`, so run a build first; it starts that core, migrates an old chat at
+startup, asks `/api/v1/health` for the version, loads the built interface, and runs one chat +
+wait flow with a scripted model. No provider key or network is involved.
+
+The packaged app keeps its files apart:
 
 | What | Where |
 |---|---|
@@ -139,8 +145,9 @@ The menu opens each of those folders; the same menu follows the system language.
 | `src/noteagent/` | The Python core: ingest, wiki compilation, chat, acquisition, HTTP API |
 | `web/` | The frontend (Vite + React + TypeScript) |
 | `desktop/` | The Electron shell: application window, startup screens, guest browser |
-| `scripts/` | Release build: the interface copied into the Python package, the bundled Python runtime, and the order the two must be done in |
+| `scripts/` | Release build: the interface copied into the Python package, the bundled Python runtime, the order the two must be done in, and the packaged-core smoke |
 | `tests/` | Python tests |
+| `evals/` | Deterministic behaviour evals: the HTTP API, a scripted model, a temporary project |
 | `projects/` | Wiki projects — **not in git**; each holds `config/`, `raw/`, `wiki/` |
 
 The Python core is the only place business logic lives. The frontend calls the HTTP API; it never
@@ -161,8 +168,11 @@ shells out to the CLI, and it never decides what gets written.
 
 Bug fixes and small corrections are welcome as a pull request; a new feature is worth an issue
 first, since this project has a deliberately narrow idea of what it is. The checks to run before
-opening one — `unittest`, the Markdown checker, `typecheck`/`test`/`lint`/`build` — are listed in
-[`docs/development.md`](docs/development.md); CI runs the same commands.
+opening one — `unittest`, the behaviour evals, the Markdown checker,
+`typecheck`/`test`/`lint`/`build` — are listed in
+[`docs/development.md`](docs/development.md); CI runs the same commands. The evals run with
+`python -m evals` from the repository root; every case uses a temporary project and a scripted
+model, so no key or network is needed.
 
 - One concern per change, and do not reformat code you are not changing.
 - Logic that can be reasoned about without a browser gets a test next to it.

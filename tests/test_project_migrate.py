@@ -237,17 +237,6 @@ class MigrationTests(unittest.TestCase):
             },
         }
         _write(root / ".noteagent/ingest-cache.json", json.dumps(cache))
-        _write(
-            root / ".noteagent/chat-limits.json",
-            json.dumps(
-                {
-                    "version": 1,
-                    "historyLimit": 4,
-                    "maxPurposeChars": 1_500,
-                    "maxSchemaChars": 900,
-                }
-            ),
-        )
         _write(root / "purpose.md", "This wiki explains thermodynamics.\n")
         _write(root / "schema.md", "concepts/ entities/ queries/\n")
 
@@ -359,12 +348,6 @@ class MigrationTests(unittest.TestCase):
             (self.root / "config/brief.md").read_text(encoding="utf-8").strip(),
             "This wiki explains thermodynamics.",
         )
-        limits = json.loads(
-            (self.root / "config/chat-limits.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(limits["maxBriefChars"], 1_500)
-        self.assertEqual(limits["historyLimit"], 4)
-        self.assertFalse((self.root / ".noteagent/chat-limits.json").exists())
 
         index = (self.root / "wiki/index.md").read_text(encoding="utf-8")
         self.assertIn("[[entropy]]", index)
@@ -467,25 +450,6 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(findings[0].severity, "warning")
         self.assertIn("noteagent project migrate", findings[0].message)
         self.assertEqual(findings[0].path, "raw/sources")
-
-    def test_legacy_limits_out_of_range_keep_their_neighbours(self) -> None:
-        _write(
-            self.root / ".noteagent/chat-limits.json",
-            json.dumps(
-                {
-                    "version": 1,
-                    "historyLimit": 4,
-                    "maxPurposeChars": 999_999,
-                    "maxSchemaChars": 900,
-                }
-            ),
-        )
-        migrate_project(self.layout)
-        limits = json.loads(
-            (self.root / "config/chat-limits.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(limits["historyLimit"], 4)
-        self.assertEqual(limits["maxBriefChars"], 40_000)
 
     def test_missing_brief_is_left_missing(self) -> None:
         _write(self.root / "raw/sources/web/example.com/page.html", "<html></html>")

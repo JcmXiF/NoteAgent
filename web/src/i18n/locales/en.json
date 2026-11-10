@@ -529,17 +529,18 @@
       "submit": "Delete conversation"
     },
     "listFailed": "Could not read the conversations",
+    "migrationFailed": "Some old conversations could not be imported ({{count}}). They are still in the project.",
     "openFailed": "Could not open that conversation",
     "createFailed": "Could not start a conversation",
     "deleteFailed": "Could not delete the conversation",
     "askFailed": "That question was not answered",
-    "askPlaceholder": "Ask, or have the assistant look something up or write",
+    "askPlaceholder": "Ask, or have the assistant look something up",
     "askHint": "Enter sends; Shift + Enter starts a new line.",
-    "tooLong": "Too long — keep it under {{max}} characters",
     "send": "Ask",
     "stop": "Stop",
-    "stopped": "Stopped waiting. The model call in progress may still finish, and then it stops.",
-    "answered": "Answered",
+    "aborted": "Stopped before this answer was finished.",
+    "busy": "This conversation is still answering in another tab. Reload when it finishes.",
+    "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
       "save": "Save as a remark",
       "saving": "Saving…",
@@ -550,50 +551,7 @@
       "saveFailed": "Could not save this answer as a remark"
     },
     "step": {
-      "think": "Thinking",
-      "tool": "Looking things up",
-      "answer": "Answering"
-    },
-    "limits": {
-      "title": "Conversation limits",
-      "unsaved": "Unsaved",
-      "intro": "These values set how much is included with each question and how much the assistant may read. Changes take effect once saved.",
-      "loading": "Reading…",
-      "save": "Save",
-      "saving": "Saving…",
-      "discard": "Discard",
-      "ready": "Ready to save",
-      "range": "Between {{min}} and {{max}}",
-      "loadFailed": "Could not read these limits",
-      "saveFailed": "Could not save them",
-      "group": {
-        "conversation": "This conversation",
-        "context": "What the assistant is told",
-        "reading": "What it may read"
-      },
-      "unit": {
-        "messages": "messages",
-        "chars": "chars",
-        "conversations": "conversations",
-        "pages": "pages",
-        "rounds": "rounds"
-      },
-      "historyLimit": "Recent messages carried",
-      "historyLimitHint": "Only the most recent messages are included; older ones are left out.",
-      "maxMessages": "Messages kept per conversation",
-      "maxContentChars": "Longest question",
-      "maxTitleChars": "Longest conversation title",
-      "maxConversations": "Conversations kept",
-      "maxBriefChars": "Project brief, first",
-      "maxBriefCharsHint": "Zero leaves the project description out.",
-      "maxIndexChars": "Note index, first",
-      "contextHint": "Characters taken from the start of the project's file and given with every question.",
-      "maxOpenPages": "Pages opened at once",
-      "maxPageChars": "Read from one page",
-      "maxPagesChars": "Read in total",
-      "maxPagesCharsHint": "The most body text one answer may read in total.",
-      "maxToolRounds": "Look-up rounds",
-      "maxToolRoundsHint": "How many rounds of lookup the assistant may take."
+      "tool": "Looking things up"
     },
     "activity": {
       "think": "Thinking",
@@ -601,28 +559,61 @@
       "answer": "Writing the answer"
     },
     "view": {
-      "empty": "No conversation open",
       "emptyHint": "Start a conversation on the left to begin asking.",
       "firstAsk": "Ask below; the answer appears here."
     },
     "looked": {
-      "toSources": "Add to what to fetch",
       "missing": "not found",
-      "notSource": "a result, not a source yet",
       "failed": "did not work",
       "title": "What the answer looked at",
-      "reading": "reading now"
+      "truncated": "cut short",
+      "timeout": "timed out",
+      "omitted": "some left out",
+      "hits": "{{count}} hits"
     },
-    "gate": {
-      "title": "Writing pages",
-      "waitingTitle": "Nothing is written yet",
-      "waitingBody": "Writing goes by what you tick in the plan board. The assistant can suggest; only you can decide.",
-      "nothingBody": "The assistant wanted to plan pages, but nothing has been selected to plan from yet.",
-      "wroteTitle": "Written from what you ticked",
-      "wroteBody": "The pages you confirmed are in the notes now. The written files are listed in the panel.",
-      "openSources": "Go and select passages",
-      "goCompile": "Go and compile",
-      "seeWritten": "See what was written"
+    "wait": {
+      "title": "Waiting on you",
+      "job": {
+        "plan": "Plan",
+        "compile": "Compile"
+      },
+      "interface": {
+        "source": "the source page",
+        "plan_board": "the plan board",
+        "compile_board": "the compile board"
+      },
+      "where": "This happens in {{place}}.",
+      "completion": {
+        "start_plan": "Start the plan with the original button there.",
+        "start_compile": "Start the compile with the original button there.",
+        "start": "Start it with the original button there."
+      },
+      "open": {
+        "source": "Go to the source page",
+        "plan_board": "Go to the plan board",
+        "compile_board": "Go to the compile board",
+        "default": "Go there"
+      },
+      "status": {
+        "proposed": "Waiting for you to start it.",
+        "entered": "The job has started.",
+        "completed": "The job finished.",
+        "failed": "The job failed.",
+        "cancelled": "Stopped."
+      },
+      "enteredHint": "The job belongs to its own interface now; stop it there.",
+      "result": "Result",
+      "resultCount": "{{count}} pages",
+      "artifact": {
+        "write": "write",
+        "mention": "mention",
+        "skip": "skip",
+        "written": "written"
+      },
+      "jobFailedHint": "The job failed; ask in the chat to try it again.",
+      "stop": "Stop waiting",
+      "stopping": "Stopping…",
+      "stopFailed": "Could not stop this wait"
     }
   },
   "browse": {
@@ -920,6 +911,7 @@
     "empty": "No text was extracted",
     "truncated": "The page was too large and got cut off",
     "unsupported_url": "Not an http(s) link",
+    "unsafe_url": "This machine or a private network is not fetched",
     "unsupported_media": "Not an HTML page",
     "missing_images": "Some images could not be localized",
     "invalid_pdf": "This PDF could not be opened",
@@ -1236,8 +1228,6 @@
       "loadFailed": "The description could not be read.",
       "manage": "To create or delete a project, close settings and use the sidebar.",
       "switchBlocked": "Save or discard this description before switching projects.",
-      "chatLimits": "How much one chat may read is adjusted at the bottom of the chat sidebar.",
-      "openChat": "Go to chat",
       "tooLong": "Keep the description within {{limit}} characters."
     },
     "appearance": {
@@ -1329,6 +1319,27 @@
     "openFolder": "Could not open that folder",
     "deleteProject": "Could not delete the project",
     "code": {
+      "model_error": "The assistant did not answer. Try again.",
+      "cancelled": "Stopped.",
+      "busy": "This conversation is already answering. Wait for it to finish.",
+      "internal": "Something went wrong. Try again.",
+      "wait": {
+        "notFound": "That wait is no longer the session's current one.",
+        "notCancelable": "The job has already started; stop it in its own interface.",
+        "contextIncomplete": "A job started from the chat needs both its session and its wait.",
+        "wrongJob": "This wait belongs to a different job.",
+        "alreadyStarted": "This wait has already been started."
+      },
+      "job": {
+        "busy": "Another job is already running. Wait for it to finish."
+      },
+      "compaction_failed": "The earlier conversation could not be summarized. Try again.",
+      "context_overflow": "The conversation is too long for the model's window.",
+      "session": {
+        "exists": "That session already exists.",
+        "notFound": "That session is no longer there.",
+        "invalidId": "That session name cannot be used."
+      },
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
       },

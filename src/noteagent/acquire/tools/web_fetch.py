@@ -55,6 +55,7 @@ from noteagent.acquire.tools.fetchers.html import (
     html_to_markdown,
     media_skip_reason,
 )
+from noteagent.acquire.tools.url_guard import UnsafeURL
 from noteagent.acquire.types import Capture
 
 TOOL_NAME = "web_fetch"
@@ -567,6 +568,15 @@ def web_fetch(
             client=client,
             max_bytes=max_bytes,
             accept=accept,
+        )
+    except UnsafeURL as err:
+        # The guard refused an address before any request was made (including a
+        # redirect an otherwise public page pointed at).
+        return _failed(
+            cleaned,
+            method="unsafe_url",
+            reason="unsafe_url",
+            title=str(err)[:120],
         )
     except FetchRequestError as err:
         return _failed(

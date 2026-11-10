@@ -2,7 +2,6 @@ import { useActivityStore } from "@/stores/activity-store";
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useBrowseStore } from "@/stores/browse-store";
 import { useClipsStore } from "@/stores/clips-store";
-import { useChatStore } from "@/stores/chat-store";
 import { useCompileStore } from "@/stores/compile-store";
 import { useDeepSearchStore } from "@/stores/deep-search-store";
 import { useDocsReads } from "@/stores/docs-reads";
@@ -48,7 +47,6 @@ export function installDevBridge(): void {
         browse: useBrowseStore,
         clips: useClipsStore,
         compile: useCompileStore,
-        chat: useChatStore,
         deepSearch: useDeepSearchStore,
         docs: useDocsStore,
         docsReads: useDocsReads,

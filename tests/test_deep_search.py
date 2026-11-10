@@ -9,9 +9,6 @@ from unittest.mock import patch
 from noteagent.acquire.run_search import WebSearchRun
 from noteagent.acquire.types import CandidateCard
 from noteagent.api.topic_gate import run_topic_map_job
-from noteagent.chat.limits import default_limits
-from noteagent.chat.skills import list_skills
-from noteagent.chat.tools import observe_tool
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
@@ -618,22 +615,6 @@ class DeepSearchRoundTests(unittest.TestCase):
                 act_session(layout, {"action": "redo", "step": 5})
             self.assertEqual(undo.exception.code, "search.cannotUndo")
             act_session(layout, {"action": "end"})
-
-    def test_chat_run_no_longer_has_deep_search(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            obs = observe_tool(
-                "run",
-                layout,
-                {"job": "deep_search"},
-                default_limits(),
-            )[0]
-            self.assertTrue(obs.meta.get("error"))
-            self.assertIn("doctor or fetch", obs.content)
-
-    def test_chat_has_no_deep_search_skill(self) -> None:
-        names = {item.name for item in list_skills()}
-        self.assertNotIn("deep-search", names)
 
     def test_one_round_at_a_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

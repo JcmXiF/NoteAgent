@@ -136,17 +136,17 @@ class ProjectLayout:
         return self.meta / "chats"
 
     @property
-    def chat_limits(self) -> Path:
-        return self.config / "chat-limits.json"
+    def sessions_dir(self) -> Path:
+        """Append-only transcripts, one file per session."""
+        return self.meta / "sessions"
 
-    @property
-    def legacy_chat_limits(self) -> Path:
-        """Where limits lived before they moved out of program state."""
-        return self.meta / "chat-limits.json"
+    def session_path(self, session_id: str) -> Path:
+        """The JSONL file one session is stored in."""
+        return self.sessions_dir / f"{session_id}.jsonl"
 
-    def chat_path(self, conversation_id: str) -> Path:
-        """The file one chat conversation is stored in."""
-        return self.chats_dir / f"{conversation_id}.json"
+    def session_events_path(self, session_id: str) -> Path:
+        """The trace file beside a session: what ran, never what was said."""
+        return self.sessions_dir / f"{session_id}.events.jsonl"
 
 
 def default_layout(project_root: Path | str) -> ProjectLayout:

@@ -17,7 +17,9 @@ const os = require("node:os");
 const path = require("node:path");
 
 const RECORDS_DIR = path.join(os.tmpdir(), "noteagent-serve");
-const HEALTH_PATH = "/api/health";
+// The versioned route is the one the new core serves and the interface uses.
+// Asking for it means a shell cannot mistake an older core for a ready one.
+const HEALTH_PATH = "/api/v1/health";
 
 function recordPath(pid, dir = RECORDS_DIR) {
   return path.join(dir, `${pid}.json`);

@@ -12,6 +12,10 @@ import {
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useClipsStore } from "@/stores/clips-store";
 import { useDeepSearchStore } from "@/stores/deep-search-store";
+import {
+  rearmOnBusy,
+  useWaitContextStore,
+} from "@/stores/wait-context-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import i18n from "@/i18n";
 
@@ -55,6 +59,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     // A round carries its own intent; the everyday pass uses what the reader typed.
     const intent = inRound ? (round?.intent ?? "").trim() : clips.intent.trim();
     set({ running: true });
+    // A press that came from a chat wait carries that wait into the job; the
+    // endpoint records the entry and the result under it.
+    const wait = useWaitContextStore.getState().take("plan");
 
     const work = () =>
       runAsActivity({
@@ -107,6 +114,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           const map = await planTopicMap(project, {
             intent,
             ...(scope ? { sourceIdentity: scope } : {}),
+            ...(wait ? { wait } : {}),
             onStatus: (message, stepId) => {
               // Developer wording from the backend goes to the log, not the
               // screen; the progress sentence is the frontend's.
@@ -131,7 +139,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
     try {
       await work();
-    } catch {
+    } catch (err) {
+      // The wait is still proposed when another job made the press busy, so
+      // the next press must carry it again.
+      rearmOnBusy(err, wait);
       // Reported on the job already.
     } finally {
       set({ running: false });

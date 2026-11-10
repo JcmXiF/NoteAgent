@@ -78,9 +78,9 @@ test("an IPv6 address is bracketed in the url", () => {
   assert.equal(urlFor("127.0.0.1", 8765), "http://127.0.0.1:8765");
 });
 
-test("health is asked for at the core's own endpoint", () => {
-  assert.equal(healthUrl("http://127.0.0.1:8791"), "http://127.0.0.1:8791/api/health");
-  assert.equal(healthUrl("http://127.0.0.1:8791/"), "http://127.0.0.1:8791/api/health");
+test("health is asked for at the versioned endpoint the new core serves", () => {
+  assert.equal(healthUrl("http://127.0.0.1:8791"), "http://127.0.0.1:8791/api/v1/health");
+  assert.equal(healthUrl("http://127.0.0.1:8791/"), "http://127.0.0.1:8791/api/v1/health");
 });
 
 test("a core that answers for itself is ready", async () => {

@@ -17,6 +17,7 @@ from pathlib import Path
 from noteagent.api import serve_control
 from noteagent.api.serve_control import (
     AlreadyServing,
+    NotLocalOnly,
     PortBusy,
     ServerRecord,
     bind_listener,
@@ -119,6 +120,22 @@ class RecordTests(unittest.TestCase):
 
         self.assertFalse(record_path(999999).exists())
         self.assertTrue(record_path(os.getpid()).exists())
+
+
+class LocalOnlyBindTests(unittest.TestCase):
+    def test_a_non_loopback_host_is_refused(self) -> None:
+        # No password protects this API: a socket on another interface would be
+        # the whole internet's write access to the wiki.
+        for host in ("0.0.0.0", "192.168.1.5", "example.com", "::"):
+            with self.subTest(host=host):
+                with self.assertRaises(NotLocalOnly):
+                    bind_listener(host, _free_port())
+
+    def test_the_loopback_forms_are_accepted(self) -> None:
+        for host in ("127.0.0.1", "localhost", "127.0.0.2"):
+            with self.subTest(host=host):
+                sock = bind_listener(host, _free_port())
+                sock.close()
 
 
 class PortTests(unittest.TestCase):
@@ -392,7 +409,7 @@ class ServerStartTests(unittest.TestCase):
         body = ""
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(f"{record.url}/api/health", timeout=2) as response:
+                with urllib.request.urlopen(f"{record.url}/api/v1/health", timeout=2) as response:
                     body = response.read().decode("utf-8")
                     break
             except (urllib.error.URLError, ConnectionError):

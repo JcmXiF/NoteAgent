@@ -26,12 +26,14 @@ from noteagent.acquire.search_config import (
 )
 from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
+from noteagent.project.layout import ProjectLayout
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.credentials import SEARCH_KEY, llm_key
 from noteagent.settings.effective import forget_applied
 from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
 from noteagent.settings.install import (
+    _tool_check_tools,
     apply_install,
     deep_check,
     install_view,
@@ -40,6 +42,7 @@ from noteagent.settings.install import (
     probe_search,
 )
 from noteagent.util.refusal import Refusal
+from noteagent.wiki.agent_tools import wiki_tools
 from fakes import FakeCredentials
 
 
@@ -1582,3 +1585,14 @@ class ProfileSettingsApiTests(unittest.TestCase):
             self.assertEqual(refused.status_code, 400, refused.text)
             self.assertEqual(refused.json()["code"], "settings.invalid")
             self.assertEqual(client.get("/api/settings").json()["profiles"], [])
+
+
+class ToolProbeTests(unittest.TestCase):
+    def test_the_probe_offers_the_live_search_contract(self) -> None:
+        layout = ProjectLayout(Path.cwd())
+        live = [
+            tool
+            for tool in wiki_tools(layout).model_tools()
+            if tool["function"]["name"] == "search"
+        ]
+        self.assertEqual(_tool_check_tools(), live)

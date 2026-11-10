@@ -9,6 +9,7 @@ import trafilatura
 from trafilatura.settings import use_config
 
 from noteagent.acquire.adapters.sniff import sniff_media_type
+from noteagent.acquire.tools.url_guard import guarded_get
 
 FETCH_USER_AGENT = (
     "NoteAgent/0.1 (local personal wiki; +http://127.0.0.1; html extract)"
@@ -87,11 +88,20 @@ def fetch_url_document(
     own_client = client is None
     http = client or httpx.Client(
         timeout=timeout_seconds,
-        follow_redirects=True,
+        # Redirects are walked by the guard, which checks each address before
+        # the request is made; letting httpx follow them would fetch the target
+        # first and ask afterwards.
+        follow_redirects=False,
         headers=headers,
     )
     try:
-        response = http.get(url, headers=headers)
+        response = guarded_get(
+            http,
+            url,
+            headers=headers,
+            resolve_dns=own_client,
+            timeout=timeout_seconds,
+        )
     except httpx.HTTPError as err:
         raise FetchRequestError(str(err)[:300]) from err
     finally:

@@ -529,17 +529,18 @@
       "submit": "删除会话"
     },
     "listFailed": "无法读取会话列表",
+    "migrationFailed": "有 {{count}} 个旧对话没能导入，旧文件仍保留在项目里。",
     "openFailed": "无法打开这个会话",
     "createFailed": "新建会话失败",
     "deleteFailed": "删除会话失败",
     "askFailed": "本次提问未得到回答",
-    "askPlaceholder": "提问，或让助手去查找、去写作",
+    "askPlaceholder": "提问，或让助手去查找",
     "askHint": "回车发送；Shift + 回车换行。",
-    "tooLong": "太长了，请控制在 {{max}} 字以内",
     "send": "发送",
     "stop": "停止生成",
-    "stopped": "已停止等待。正在进行的模型调用可能仍会完成，此后不再继续。",
-    "answered": "已作答",
+    "aborted": "这条回答没有写完就停止了。",
+    "busy": "这个会话正在另一个标签页里作答；结束后刷新即可看到。",
+    "compacted": "较早的轮次已压缩成摘要，以便放进模型窗口；原始记录仍保留在日志里。",
     "remark": {
       "save": "存为备注",
       "saving": "正在保存…",
@@ -550,50 +551,7 @@
       "saveFailed": "这段回答未能保存为备注"
     },
     "step": {
-      "think": "思考",
-      "tool": "查找",
-      "answer": "回答"
-    },
-    "limits": {
-      "title": "对话参数",
-      "unsaved": "未保存",
-      "intro": "这些数值决定每次提问带入多少内容、助手可读取多少内容。修改后需保存才生效。",
-      "loading": "正在读取…",
-      "save": "保存",
-      "saving": "保存中…",
-      "discard": "放弃改动",
-      "ready": "可以保存",
-      "range": "请填 {{min}}–{{max}}",
-      "loadFailed": "无法读取这些参数",
-      "saveFailed": "保存失败",
-      "group": {
-        "conversation": "这一场对话",
-        "context": "交给助手的项目背景",
-        "reading": "打开笔记的预算"
-      },
-      "unit": {
-        "messages": "条",
-        "chars": "字",
-        "conversations": "个",
-        "pages": "页",
-        "rounds": "轮"
-      },
-      "historyLimit": "每次带上的历史消息",
-      "historyLimitHint": "只带入最近的消息，更早的不进入提示。",
-      "maxMessages": "一个会话最多存",
-      "maxContentChars": "一次提问最长",
-      "maxTitleChars": "会话标题最长",
-      "maxConversations": "最多保留会话",
-      "maxBriefChars": "项目简介取前",
-      "maxBriefCharsHint": "0 表示不带上项目简介。",
-      "maxIndexChars": "笔记索引取前",
-      "contextHint": "从项目文件开头截取的字符数，随每次提问交给助手。",
-      "maxOpenPages": "一次最多打开",
-      "maxPageChars": "单页最多读",
-      "maxPagesChars": "合计最多读",
-      "maxPagesCharsHint": "单次回答可读取的正文总量上限。",
-      "maxToolRounds": "最多查几轮",
-      "maxToolRoundsHint": "助手最多往返查找的轮数。"
+      "tool": "查找"
     },
     "activity": {
       "think": "正在思考",
@@ -601,28 +559,61 @@
       "answer": "正在作答"
     },
     "view": {
-      "empty": "还没有会话",
       "emptyHint": "在左侧新建会话即可开始提问。",
       "firstAsk": "在下方提问，回答会显示在这里。"
     },
     "looked": {
-      "toSources": "加入待获取",
       "missing": "没找到",
-      "notSource": "只是结果，还不是资料",
       "failed": "没成功",
       "title": "回答查看过的内容",
-      "reading": "正在读"
+      "truncated": "已截断",
+      "timeout": "超时",
+      "omitted": "部分命中未显示",
+      "hits": "{{count}} 个命中"
     },
-    "gate": {
-      "title": "写页",
-      "waitingTitle": "还没有写入任何内容",
-      "waitingBody": "写入以计划板上勾选的页面为依据；助手只负责建议，决定由你做出。",
-      "nothingBody": "助手想整理篇目，但还没有可供整理的选中内容。",
-      "wroteTitle": "已按你勾选的页写入",
-      "wroteBody": "你确认的页面已写入笔记；写入的文件列在右侧面板。",
-      "openSources": "去选段落",
-      "goCompile": "去编译",
-      "seeWritten": "看写入结果"
+    "wait": {
+      "title": "等待你开始",
+      "job": {
+        "plan": "规划",
+        "compile": "编译"
+      },
+      "interface": {
+        "source": "资料页",
+        "plan_board": "计划板",
+        "compile_board": "编译板"
+      },
+      "where": "这一步在{{place}}进行。",
+      "completion": {
+        "start_plan": "在原界面按原按钮开始规划。",
+        "start_compile": "在原界面按原按钮开始编译。",
+        "start": "在原界面按原按钮开始。"
+      },
+      "open": {
+        "source": "去资料页",
+        "plan_board": "去计划板",
+        "compile_board": "去编译板",
+        "default": "去那里"
+      },
+      "status": {
+        "proposed": "还在等你开始。",
+        "entered": "作业已经开始。",
+        "completed": "作业已完成。",
+        "failed": "作业失败了。",
+        "cancelled": "已停下。"
+      },
+      "enteredHint": "作业现在归原界面管理；要停下请到那里操作。",
+      "result": "结果",
+      "resultCount": "{{count}} 页",
+      "artifact": {
+        "write": "写入",
+        "mention": "提及",
+        "skip": "跳过",
+        "written": "已写入"
+      },
+      "jobFailedHint": "作业失败了；可以在对话里让它重试。",
+      "stop": "停下等待",
+      "stopping": "正在停下…",
+      "stopFailed": "无法停下这次等待"
     }
   },
   "browse": {
@@ -920,6 +911,7 @@
     "empty": "没有读到正文",
     "truncated": "页面太大，只读到了一部分",
     "unsupported_url": "不是 http(s) 链接",
+    "unsafe_url": "不访问本机或内网地址",
     "unsupported_media": "不是网页",
     "missing_images": "部分图片未能保存",
     "invalid_pdf": "这份 PDF 无法打开",
@@ -1236,8 +1228,6 @@
       "loadFailed": "说明没有读出来。",
       "manage": "新建或删除项目，请关闭设置后在侧栏操作。",
       "switchBlocked": "先保存或放弃这段说明，再换项目。",
-      "chatLimits": "单次问答可读取的内容量，可在问答侧栏底部调整。",
-      "openChat": "去问答",
       "tooLong": "说明不能超过 {{limit}} 个字符。"
     },
     "appearance": {
@@ -1329,6 +1319,27 @@
     "openFolder": "无法打开这个文件夹",
     "deleteProject": "删除项目失败",
     "code": {
+      "model_error": "助手没有作答，请重试。",
+      "cancelled": "已停止。",
+      "busy": "这个会话正在作答，请等它结束。",
+      "internal": "出了点问题，请重试。",
+      "wait": {
+        "notFound": "这条等待已经不是会话当前的那一条了。",
+        "notCancelable": "作业已经开始；请到原界面停止。",
+        "contextIncomplete": "从对话发起的作业需要同时带上会话和等待。",
+        "wrongJob": "这条等待属于另一个作业。",
+        "alreadyStarted": "这条等待已经启动过了。"
+      },
+      "job": {
+        "busy": "另一个作业正在运行，请等它结束。"
+      },
+      "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
+      "context_overflow": "对话太长，超出了模型窗口。",
+      "session": {
+        "exists": "这个会话已经存在。",
+        "notFound": "这个会话已经不在了。",
+        "invalidId": "这个会话名不能使用。"
+      },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
       },

@@ -5,7 +5,7 @@
  * a rename on either side has to be mirrored here.
  */
 
-import type { ObservationPayload } from "@/lib/api/client";
+import type { ObservationPayload, WaitPayload } from "@/lib/api/client";
 
 export type ProjectInfo = {
   name: string;
@@ -421,58 +421,68 @@ export type IngestRecoveryPayload = {
   last: CompletedRoundPayload | null;
 };
 
-/* ------------------------------------------------------------------- Chat */
+/* ----------------------------------------------------------------- Sessions */
 
-export type ChatTurn = {
+/** One visible turn of a JSONL session, as the core projects it. */
+export type SessionTurn = {
   id: string;
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  /** What the answer was built from; absent on a question and on older turns. */
+  /** What the answer was built from, as the run's tool cards. */
   cards?: ObservationPayload[];
+  stopReason?: string;
+  /** The assistant was calling a tool; its words are a preamble, not the answer. */
+  isStep?: boolean;
 };
 
-export type ChatLimits = {
-  historyLimit: number;
-  maxMessages: number;
-  maxContentChars: number;
-  maxConversations: number;
-  maxTitleChars: number;
-  maxBriefChars: number;
-  maxIndexChars: number;
-  maxOpenPages: number;
-  maxPageChars: number;
-  maxPagesChars: number;
-  maxToolRounds: number;
+export type SessionDiagnostic = {
+  kind: string;
+  entryId: string;
+  message: string;
 };
 
-/** How far each knob may be turned, as the core reports it. */
-export type ChatLimitBounds = Record<keyof ChatLimits, { min: number; max: number }>;
+export type SessionMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  toolCalls?: { id: string; name: string; arguments: string }[];
+  toolCallId?: string;
+  name?: string;
+};
 
-/**
- * The limits and the ranges they may take.
- *
- * The ranges travel with the values so that a view showing the knobs can say what is
- * wrong with one without keeping its own copy of the numbers, which would be a copy
- * that can drift away from what the core enforces.
- */
-export type ChatLimitsPayload = ChatLimits & { bounds?: ChatLimitBounds };
-
-export type ChatSummary = {
+/** One row of the versioned session list. */
+export type SessionSummary = {
   id: string;
   title: string;
   updatedAt: string;
   messageCount: number;
 };
 
-export type ChatConversation = {
+/** What the one-time old-chat migration did, when it had something to say. */
+export type SessionMigration = {
+  migrated: number;
+  failed?: { id: string; error: string }[];
+};
+
+export type SessionListPayload = {
+  sessions: SessionSummary[];
+  migration?: SessionMigration;
+};
+
+/** The transcript, and the same log read the way the model will see it. */
+export type SessionPayload = {
   id: string;
   title: string;
   updatedAt: string;
-  messages: ChatTurn[];
-};
-
-export type ChatListPayload = {
-  limits: ChatLimitsPayload;
-  conversations: ChatSummary[];
+  /** Whether a run is in progress, as of this read. */
+  state: { busy: boolean };
+  /** The one collaboration node this session is waiting on, if any. */
+  wait?: WaitPayload | null;
+  messages: SessionTurn[];
+  derived: {
+    sections: Record<string, string>;
+    summary: string;
+    messages: SessionMessage[];
+    diagnostics: SessionDiagnostic[];
+  };
 };

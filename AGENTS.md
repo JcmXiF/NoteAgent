@@ -10,4 +10,10 @@ Five canonical roles map to the default label strings. See `docs/agents/triage-l
 
 ### Domain docs
 
-Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: `docs/GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Development
+
+One-command checks: `node scripts/check.mjs`; details in `docs/development.md`.
+Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; tool
+contracts: `docs/tool-contract.md`.

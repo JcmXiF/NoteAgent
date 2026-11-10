@@ -111,6 +111,33 @@ class OriginTests(unittest.TestCase):
         self.assertEqual(client.get("/api/health").status_code, 200)
 
 
+class CorsTests(unittest.TestCase):
+    """There is no CORS policy because there is no cross-origin caller.
+
+    The development interface forwards /api from the same origin, so a page
+    that needs a CORS header is not one this app serves. Refusing the origin
+    (and never answering a preflight) is stricter than a dev-only allowlist.
+    """
+
+    def test_responses_carry_no_cross_origin_permission(self) -> None:
+        response = _client().get("/api/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("access-control-allow-origin", response.headers)
+
+    def test_a_preflight_from_another_site_is_refused(self) -> None:
+        response = _client().options(
+            WRITE,
+            headers={
+                "Origin": "https://notes.example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("access-control-allow-origin", response.headers)
+
+
 class NoOriginTests(unittest.TestCase):
     def test_a_write_without_an_origin_is_let_through(self) -> None:
         # No browser marks a page's request this way; tools and the test client do.

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from noteagent.util.redact import environment_secrets, redact_value
+
 if TYPE_CHECKING:
     # Annotation-only. Importing it at runtime would pull in the whole
     # ``noteagent.project`` package (whose modules import this one back).
@@ -91,6 +93,9 @@ class RunLogger:
         for key, value in fields.items():
             if value is not None:
                 payload[key] = value
+        # A provider error or a tool message may have been built around a key;
+        # the log is the last place that can still take it out.
+        payload = redact_value(payload, environment_secrets())
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:

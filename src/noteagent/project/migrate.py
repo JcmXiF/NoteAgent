@@ -23,12 +23,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from noteagent.chat.limits import (
-    default_limits,
-    limits_bounds,
-    limits_from_dict,
-    save_limits,
-)
 from noteagent.ingest.frontmatter import format_scalar, unquote_scalar
 from noteagent.ingest.compile_cache import read_records, write_records
 from noteagent.ingest.update_index import rebuild_wiki_index
@@ -124,7 +118,6 @@ class MigrationPlan:
     legacy_folders: tuple[str, ...] = ()
     #: ``purpose.md`` when it is the only copy of the brief.
     brief_from: str = ""
-    limits_move: bool = False
     cache_drops: tuple[str, ...] = ()
     collisions: tuple[Collision, ...] = ()
     #: Old raw identity -> new raw identity.
@@ -150,7 +143,6 @@ class MigrationPlan:
             or self.drops
             or self.legacy_folders
             or self.brief_from
-            or self.limits_move
             or self.cache_drops
         )
 
@@ -171,7 +163,6 @@ class MigrationResult:
     dropped_files: tuple[str, ...] = ()
     dropped_folders: tuple[str, ...] = ()
     brief_written: bool = False
-    limits_moved: bool = False
     cache_dropped: tuple[str, ...] = ()
     collisions: tuple[Collision, ...] = ()
     index_rebuilt: bool = False
@@ -189,7 +180,6 @@ class MigrationResult:
             or self.dropped_files
             or self.dropped_folders
             or self.brief_written
-            or self.limits_moved
             or self.cache_dropped
             or self.index_rebuilt
         )
@@ -219,7 +209,6 @@ def plan_migration(layout: ProjectLayout) -> MigrationPlan:
     )
     drops, brief_from = _retired_files(layout)
     legacy_folders = _legacy_folders(layout)
-    limits_move = layout.legacy_chat_limits.is_file()
 
     return MigrationPlan(
         raw_moves=raw_moves,
@@ -230,7 +219,6 @@ def plan_migration(layout: ProjectLayout) -> MigrationPlan:
         drops=drops,
         legacy_folders=legacy_folders,
         brief_from=brief_from,
-        limits_move=limits_move,
         cache_drops=cache_drops,
         collisions=tuple(sorted(collisions, key=lambda item: item.target.casefold())),
         raw_targets=raw_targets,
@@ -291,7 +279,6 @@ def migrate_project(layout: ProjectLayout, *, dry_run: bool = False) -> Migratio
             rewritten_stores.append(relative)
 
     brief_written = _carry_brief(layout, plan.brief_from)
-    limits_moved = _carry_limits(layout) if plan.limits_move else False
     for relative in plan.drops:
         (layout.root / relative).unlink(missing_ok=True)
 
@@ -341,7 +328,6 @@ def migrate_project(layout: ProjectLayout, *, dry_run: bool = False) -> Migratio
         dropped_files=plan.drops,
         dropped_folders=tuple(dropped_folders),
         brief_written=brief_written,
-        limits_moved=limits_moved,
         cache_dropped=plan.cache_drops,
         collisions=plan.collisions,
         index_rebuilt=True,
@@ -383,12 +369,6 @@ def format_migration_result(result: MigrationResult) -> str:
             if result.dry_run
             else "- brief: created config/brief.md from purpose.md"
         )
-    if result.limits_moved:
-        lines.append(
-            "- chat limits: would move to config/chat-limits.json"
-            if result.dry_run
-            else "- chat limits: moved to config/chat-limits.json"
-        )
     if result.index_rebuilt:
         lines.append("- wiki/index.md rebuilt")
     elif result.dry_run and result.changed:
@@ -415,7 +395,6 @@ def _result_from_plan(plan: MigrationPlan, *, dry_run: bool) -> MigrationResult:
         dropped_files=plan.drops,
         dropped_folders=plan.legacy_folders,
         brief_written=bool(plan.brief_from),
-        limits_moved=plan.limits_move,
         cache_dropped=plan.cache_drops,
         collisions=plan.collisions,
     )
@@ -817,53 +796,6 @@ def _carry_brief(layout: ProjectLayout, purpose: str) -> bool:
     layout.config.mkdir(parents=True, exist_ok=True)
     layout.brief.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
     return True
-
-
-def _carry_limits(layout: ProjectLayout) -> bool:
-    """Move the limits out of program state, folding the two old brief knobs into one."""
-    legacy = layout.legacy_chat_limits
-    if not legacy.is_file():
-        return False
-    if layout.chat_limits.is_file():
-        # A limits file already in the new place is the one the person edited.
-        legacy.unlink(missing_ok=True)
-        return False
-    try:
-        raw = json.loads(legacy.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise ValueError("chat limits must be an object")
-        limits = limits_from_dict(_fold_brief_knobs(raw))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        limits = default_limits()
-    save_limits(layout, limits)
-    legacy.unlink(missing_ok=True)
-    return True
-
-
-def _fold_brief_knobs(raw: dict[str, object]) -> dict[str, object]:
-    """``maxPurposeChars`` and ``maxSchemaChars`` become the one ``maxBriefChars``.
-
-    Values are clamped to the range the core enforces rather than rejected: an
-    old file may hold a number this version narrowed, and dropping every other
-    setting because of one is not a migration a person asked for.
-    """
-    folded = dict(raw)
-    bounds = limits_bounds()
-    brief: int | None = None
-    for key in ("maxPurposeChars", "maxSchemaChars"):
-        value = folded.pop(key, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            brief = value if brief is None else max(brief, value)
-    if brief is not None:
-        low, high = bounds["maxBriefChars"]["min"], bounds["maxBriefChars"]["max"]
-        folded["maxBriefChars"] = max(low, min(high, brief))
-    for key, span in bounds.items():
-        value = folded.get(key)
-        if isinstance(value, bool) or not isinstance(value, int):
-            folded.pop(key, None)
-            continue
-        folded[key] = max(span["min"], min(span["max"], value))
-    return folded
 
 
 def _move_all(root: Path, moves: tuple[Move, ...]) -> None:

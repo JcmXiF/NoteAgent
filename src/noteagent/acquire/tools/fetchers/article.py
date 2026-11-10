@@ -15,6 +15,7 @@ from noteagent.acquire.tools.fetchers.html import (
     FETCH_USER_AGENT,
     extract_page_title,
 )
+from noteagent.acquire.tools.url_guard import UnsafeURL, guarded_get
 
 MAX_ASSET_BYTES = 5_000_000
 MAX_ASSETS = 40
@@ -247,7 +248,12 @@ def localize_images(
                 _mark_missing_image(el)
                 continue
             absolute = urljoin(page_url, src)
-            data_uri = _download_image_data_uri(http, absolute, referer=page_url)
+            data_uri = _download_image_data_uri(
+                http,
+                absolute,
+                referer=page_url,
+                resolve_dns=own_client,
+            )
             if data_uri is None:
                 failed += 1
                 _mark_missing_image(el)
@@ -384,6 +390,7 @@ def _download_image_data_uri(
     url: str,
     *,
     referer: str,
+    resolve_dns: bool = True,
 ) -> str | None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -394,8 +401,14 @@ def _download_image_data_uri(
         "Referer": referer,
     }
     try:
-        response = client.get(url, headers=headers, timeout=ASSET_TIMEOUT)
-    except httpx.HTTPError:
+        response = guarded_get(
+            client,
+            url,
+            headers=headers,
+            resolve_dns=resolve_dns,
+            timeout=ASSET_TIMEOUT,
+        )
+    except (httpx.HTTPError, UnsafeURL):
         return None
     if not httpx.codes.is_success(response.status_code):
         return None

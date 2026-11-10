@@ -5,7 +5,6 @@
 export * from "@/lib/api/types";
 
 export * as acquireApi from "@/lib/api/acquire";
-export * as chatApi from "@/lib/api/chat";
 export * as clipsApi from "@/lib/api/clips";
 export * as deepSearchApi from "@/lib/api/deep-search";
 export * as filesApi from "@/lib/api/files";
