@@ -25,7 +25,7 @@ PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "judge.md"
 DIMENSIONS = JUDGE_DIMENSIONS
 MAX_RAW = 4000
 JUDGE_TEMPERATURE = 0.0
-JUDGE_MAX_TOKENS = 1024
+JUDGE_MAX_TOKENS = 4096
 
 
 class JudgeClient(Protocol):
@@ -171,7 +171,12 @@ def judge_case(
         ChatMessage("user", build_user_prompt(case, conversation)),
     ]
     try:
-        turn = client.complete(messages, tools=None)
+        turn = client.complete(
+            messages,
+            tools=None,
+            fallback_reasoning=False,
+            response_format={"type": "json_object"},
+        )
     except Exception as err:  # noqa: BLE001 - the case records the failure
         return JudgeVerdict(
             error=f"judge_error: {_redact(str(err), secret)}",

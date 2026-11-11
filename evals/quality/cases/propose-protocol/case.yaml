@@ -1,7 +1,7 @@
 name: propose-protocol
 title: 提议协作而不是直接写
 turns:
-  - "把这两篇笔记整理成一个对比页。"
+  - "把 Attention 和 Transformer 这两篇笔记整理成一个对比页。"
 assertions:
   wait: proposed
   max_tool_rounds: 4

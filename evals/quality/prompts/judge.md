@@ -40,3 +40,7 @@ Return only this JSON object, with no code fences and no extra keys:
 
 `verdict` is exactly "pass" or "fail". `evidence` is a list of short quotes from
 the answer or the wiki; it may be empty.
+
+Do not write any analysis, plan or explanation. The first character of your reply
+must be "{" and the last must be "}". Keep each reason to one sentence and each
+evidence list to at most two short quotes.

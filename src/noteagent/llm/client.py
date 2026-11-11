@@ -220,6 +220,7 @@ class LlmClient:
         on_token: Callable[[str], None] | None = None,
         fallback_reasoning: bool = True,
         cancel: Event | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmTurn:
         """One completions turn. ``tools`` is the OpenAI tools array, or None."""
         check_cancelled(cancel)
@@ -228,12 +229,14 @@ class LlmClient:
                 messages,
                 tools=tools,
                 fallback_reasoning=fallback_reasoning,
+                response_format=response_format,
             )
         return self._complete_stream(
             messages,
             tools=tools,
             on_token=on_token,
             fallback_reasoning=fallback_reasoning,
+            response_format=response_format,
         )
 
     def _headers(self) -> dict[str, str]:
@@ -249,6 +252,7 @@ class LlmClient:
         *,
         stream: bool,
         tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """The request body for either kind of call."""
         body: dict[str, Any] = {
@@ -261,6 +265,8 @@ class LlmClient:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        if response_format is not None:
+            body["response_format"] = response_format
         return body
 
     def _complete_once(
@@ -269,6 +275,7 @@ class LlmClient:
         *,
         tools: list[dict[str, Any]] | None,
         fallback_reasoning: bool,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmTurn:
         """One non-streamed call: the whole answer inside a single response."""
         try:
@@ -276,7 +283,12 @@ class LlmClient:
                 response = client.post(
                     self.config.chat_completions_url,
                     headers=self._headers(),
-                    json=self._body(messages, stream=False, tools=tools),
+                    json=self._body(
+                        messages,
+                        stream=False,
+                        tools=tools,
+                        response_format=response_format,
+                    ),
                 )
         except httpx.HTTPError as err:
             raise LlmError(self._redacted(f"LLM request failed: {err}")) from err
@@ -325,6 +337,7 @@ class LlmClient:
         tools: list[dict[str, Any]] | None,
         on_token: Callable[[str], None],
         fallback_reasoning: bool,
+        response_format: dict[str, Any] | None = None,
     ) -> LlmTurn:
         """One streamed call: tokens go to *on_token* as they arrive."""
         chunks: list[str] = []
@@ -336,7 +349,12 @@ class LlmClient:
                     "POST",
                     self.config.chat_completions_url,
                     headers=self._headers(),
-                    json=self._body(messages, stream=True, tools=tools),
+                    json=self._body(
+                        messages,
+                        stream=True,
+                        tools=tools,
+                        response_format=response_format,
+                    ),
                 ) as response:
                     if response.status_code >= 400:
                         body = response.read().decode("utf-8", errors="replace")

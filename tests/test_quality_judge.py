@@ -115,6 +115,10 @@ class JudgeRequestTests(unittest.TestCase):
         self.assertIn("每个事实断言都能在 seeded wiki 中找到依据", text)
         self.assertNotIn("tool_result", text)
         self.assertNotIn("secret-key", text)
+        self.assertEqual(
+            client.kwargs["response_format"], {"type": "json_object"}
+        )
+        self.assertIs(client.kwargs["fallback_reasoning"], False)
 
     def test_no_assistant_answer_skips_the_judge(self) -> None:
         case = load_case(CASE_DIR)

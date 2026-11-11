@@ -27,9 +27,11 @@ class FakeJudge:
     def __init__(self, content: str = ALL_PASS) -> None:
         self.content = content
         self.requests: list[list[object]] = []
+        self.kwargs: dict[str, object] = {}
 
     def complete(self, messages, **kwargs) -> LlmTurn:
         self.requests.append(list(messages))
+        self.kwargs = kwargs
         return LlmTurn(content=self.content)
 
 
