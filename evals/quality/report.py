@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from evals.quality.assertions import AssertionResult
+from evals.quality.judge import JudgeVerdict
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,14 +26,23 @@ class AgentInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class JudgeInfo:
+    """The judge connection, as the report may show it."""
+
+    model: str
+    temperature: float
+
+
+@dataclass(frozen=True, slots=True)
 class CaseSummary:
-    """One case's verdict and the assertions behind it."""
+    """One case's verdict, the assertions behind it, and the judge's reading."""
 
     name: str
     title: str
     passed: bool
     duration_s: float
     assertions: tuple[AssertionResult, ...]
+    judge: JudgeVerdict | None = None
     error: str = ""
 
 
@@ -44,6 +54,7 @@ class QualityReport:
     duration_s: float
     agent: AgentInfo
     cases: tuple[CaseSummary, ...]
+    judge: JudgeInfo | None = None
 
 
 def public_base_url(value: str) -> str:
@@ -72,6 +83,20 @@ def write_report(report: QualityReport, path: Path) -> Path:
             "baseUrl": public_base_url(report.agent.base_url),
             "temperature": report.agent.temperature,
         },
+        "judge": (
+            None
+            if report.judge is None
+            else {
+                "model": report.judge.model,
+                "temperature": report.judge.temperature,
+                "prompts": {
+                    case.name: case.judge.prompt_sha256
+                    for case in report.cases
+                    if case.judge is not None
+                    and case.judge.prompt_sha256
+                },
+            }
+        ),
         "cases": [
             {
                 "name": case.name,
@@ -81,6 +106,9 @@ def write_report(report: QualityReport, path: Path) -> Path:
                 "assertions": [
                     item.to_payload() for item in case.assertions
                 ],
+                "judge": (
+                    None if case.judge is None else case.judge.to_payload()
+                ),
                 "error": case.error,
             }
             for case in report.cases
@@ -96,6 +124,7 @@ def write_report(report: QualityReport, path: Path) -> Path:
 __all__ = [
     "AgentInfo",
     "CaseSummary",
+    "JudgeInfo",
     "QualityReport",
     "public_base_url",
     "write_report",

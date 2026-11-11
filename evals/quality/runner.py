@@ -23,6 +23,12 @@ from evals.quality.assertions import (
     evaluate,
 )
 from evals.quality.cases import CaseSpec
+from evals.quality.judge import (
+    JudgeClient,
+    JudgeVerdict,
+    judge_case,
+    make_judge_client,
+)
 from evals.quality.report import CaseSummary
 
 from noteagent.agent.model import ModelClient
@@ -36,6 +42,7 @@ def run_case(
     artifacts_root: Path,
     *,
     model: ModelClient | None = None,
+    judge_client: JudgeClient | None = None,
 ) -> CaseSummary:
     """Run one case; *model* is the test seam, production leaves it ``None``."""
     started = time.monotonic()
@@ -51,6 +58,7 @@ def run_case(
     session: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = []
     assertions: tuple[AssertionResult, ...] = ()
+    judge: JudgeVerdict | None = None
     error = ""
 
     with tempfile.TemporaryDirectory(
@@ -88,6 +96,12 @@ def run_case(
                 events=_events(turns),
             )
             assertions = evaluate(spec.assertions, evidence)
+            judge = judge_case(
+                spec,
+                entries,
+                client=judge_client or make_judge_client(config),
+                secret=config.api_key,
+            )
         except Exception:
             error = traceback.format_exc()
         finally:
@@ -95,13 +109,20 @@ def run_case(
                 _copy_artifacts(run, session_id, target)
                 run.close()
 
-    passed = bool(assertions) and all(item.passed for item in assertions) and not error
+    passed = (
+        bool(assertions)
+        and all(item.passed for item in assertions)
+        and judge is not None
+        and judge.passed
+        and not error
+    )
     result = CaseSummary(
         name=spec.name,
         title=spec.title,
         passed=passed,
         duration_s=time.monotonic() - started,
         assertions=assertions,
+        judge=judge,
         error=error,
     )
     _write_case_json(
@@ -157,6 +178,11 @@ def _write_case_json(
         "assertions": [
             item.to_payload() for item in result.assertions
         ],
+        "judge": (
+            None
+            if result.judge is None
+            else result.judge.to_payload()
+        ),
         "turns": turns,
         "entries": entries,
         "trace": trace,
@@ -165,6 +191,15 @@ def _write_case_json(
     }
     (target / "case.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (target / "judge.json").write_text(
+        json.dumps(
+            None if result.judge is None else result.judge.to_payload(),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 

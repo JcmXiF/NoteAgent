@@ -146,3 +146,26 @@ class LoadCasesTests(unittest.TestCase):
             cases = load_cases(root)
 
             self.assertEqual([case.name for case in cases], ["a-case", "b-case"])
+
+
+class ShippedCaseTests(unittest.TestCase):
+    def test_the_shipped_cases_load(self) -> None:
+        root = (
+            Path(__file__).resolve().parent.parent
+            / "evals"
+            / "quality"
+            / "cases"
+        )
+
+        cases = load_cases(root)
+
+        self.assertEqual(
+            [case.name for case in cases],
+            ["cross-page-gap", "propose-protocol", "single-page-qa"],
+        )
+        by_name = {case.name: case for case in cases}
+        self.assertEqual(
+            by_name["propose-protocol"].assertions.wait, "proposed"
+        )
+        for case in cases:
+            self.assertTrue(case.wiki)

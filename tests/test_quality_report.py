@@ -8,12 +8,24 @@ import unittest
 from pathlib import Path
 
 from evals.quality.assertions import AssertionResult
+from evals.quality.judge import DimensionVerdict, JudgeVerdict
 from evals.quality.report import (
     AgentInfo,
     CaseSummary,
+    JudgeInfo,
     QualityReport,
     public_base_url,
     write_report,
+)
+
+JUDGE = JudgeVerdict(
+    dimensions=(
+        DimensionVerdict("grounding", "pass", "有依据", ("熵",)),
+        DimensionVerdict("completeness", "pass", "答全"),
+        DimensionVerdict("uncertainty", "pass", "不猜测"),
+    ),
+    raw='{"grounding": {"verdict": "pass"}}',
+    prompt_sha256="abc123",
 )
 
 
@@ -37,8 +49,10 @@ def report() -> QualityReport:
                         "tools_any", True, ["wiki_read"], ["wiki_read"]
                     ),
                 ),
+                judge=JUDGE,
             ),
         ),
+        judge=JudgeInfo(model="a-model", temperature=0.0),
     )
 
 
@@ -74,6 +88,18 @@ class WriteReportTests(unittest.TestCase):
             )
             self.assertEqual(payload["cases"][0]["name"], "sample-case")
             self.assertTrue(payload["cases"][0]["assertions"][0]["passed"])
+            self.assertEqual(payload["judge"]["model"], "a-model")
+            self.assertEqual(payload["judge"]["temperature"], 0.0)
+            self.assertEqual(
+                payload["judge"]["prompts"],
+                {"sample-case": "abc123"},
+            )
+            judge = payload["cases"][0]["judge"]
+            self.assertTrue(judge["passed"])
+            self.assertEqual(
+                judge["dimensions"][0]["dimension"], "grounding"
+            )
+            self.assertIn("raw", judge)
 
     def test_the_report_never_contains_a_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

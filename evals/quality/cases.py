@@ -21,7 +21,7 @@ from noteagent.ingest.frontmatter import parse_page, unquote_scalar
 #: The final wait states a case may assert: no wait, or one of the kernel's.
 WAIT_STATES = ("absent", *get_args(WaitStatus))
 
-_JUDGE_DIMENSIONS = ("grounding", "completeness", "uncertainty")
+JUDGE_DIMENSIONS = ("grounding", "completeness", "uncertainty")
 _ASSERTION_KEYS = (
     "tools_any",
     "tools_all",
@@ -250,8 +250,8 @@ def _assertions(value: Any, path: Path) -> AssertionSpec:
 def _judge(value: Any, path: Path) -> JudgeSpec:
     if not isinstance(value, Mapping):
         raise CaseError(f"{path}: judge must be a mapping")
-    _reject_unknown(value, _JUDGE_DIMENSIONS, path, "judge dimension")
-    missing = [name for name in _JUDGE_DIMENSIONS if name not in value]
+    _reject_unknown(value, JUDGE_DIMENSIONS, path, "judge dimension")
+    missing = [name for name in JUDGE_DIMENSIONS if name not in value]
     if missing:
         raise CaseError(
             f"{path}: judge is missing dimension(s): {', '.join(missing)}"
@@ -311,6 +311,7 @@ __all__ = [
     "AssertionSpec",
     "CaseError",
     "CaseSpec",
+    "JUDGE_DIMENSIONS",
     "JudgeRule",
     "JudgeSpec",
     "WAIT_STATES",
