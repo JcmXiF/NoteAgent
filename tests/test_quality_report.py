@@ -52,7 +52,11 @@ def report() -> QualityReport:
                 judge=JUDGE,
             ),
         ),
-        judge=JudgeInfo(model="a-model", temperature=0.0),
+        judge=JudgeInfo(
+            model="a-model",
+            temperature=0.0,
+            prompt_sha256="global",
+        ),
     )
 
 
@@ -90,6 +94,9 @@ class WriteReportTests(unittest.TestCase):
             self.assertTrue(payload["cases"][0]["assertions"][0]["passed"])
             self.assertEqual(payload["judge"]["model"], "a-model")
             self.assertEqual(payload["judge"]["temperature"], 0.0)
+            self.assertEqual(
+                payload["judge"]["prompt_sha256"], "global"
+            )
             self.assertEqual(
                 payload["judge"]["prompts"],
                 {"sample-case": "abc123"},

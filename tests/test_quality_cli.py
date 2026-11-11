@@ -95,6 +95,8 @@ class CiGateTests(unittest.TestCase):
                         tmp,
                         "--report",
                         str(Path(tmp) / "report.json"),
+                        "--baseline",
+                        str(Path(tmp) / "baseline.json"),
                     ],
                     runner=fake_runner,
                 )
@@ -115,6 +117,8 @@ class CiGateTests(unittest.TestCase):
                         tmp,
                         "--report",
                         str(Path(tmp) / "report.json"),
+                        "--baseline",
+                        str(Path(tmp) / "baseline.json"),
                     ],
                     runner=fake_runner,
                 )
@@ -172,6 +176,8 @@ class ReportWiringTests(unittest.TestCase):
                         tmp,
                         "--report",
                         str(report),
+                        "--baseline",
+                        str(Path(tmp) / "baseline.json"),
                     ],
                     runner=fake_runner,
                 )
@@ -186,6 +192,77 @@ class ReportWiringTests(unittest.TestCase):
             self.assertTrue(payload["cases"][0]["passed"])
             self.assertEqual(payload["judge"]["model"], "m")
             self.assertEqual(payload["judge"]["temperature"], 0.0)
+
+
+@unittest.skipIf(main is None, "fastapi not installed")
+class BaselineWiringTests(unittest.TestCase):
+    def test_the_first_run_creates_the_baseline_and_html(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / "baseline.json"
+            report = Path(tmp) / "report.json"
+            with patch.dict(os.environ, {}, clear=True), patch(
+                "noteagent.settings.install.install_view"
+            ), patch(
+                "noteagent.llm.config.load_llm_config",
+                return_value=LlmConfig("https://api.example.com/v1", "k", "m"),
+            ):
+                code, out, _err = run(
+                    [
+                        "--case",
+                        "single-page-qa",
+                        "--artifacts",
+                        tmp,
+                        "--report",
+                        str(report),
+                        "--baseline",
+                        str(baseline),
+                        "--save-baseline",
+                    ],
+                    runner=fake_runner,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(baseline.is_file())
+            self.assertTrue(report.with_suffix(".html").is_file())
+            self.assertIn("html:", out)
+            payload = json.loads(baseline.read_text(encoding="utf-8"))
+            self.assertTrue(payload["cases"]["single-page-qa"]["passed"])
+            page = report.with_suffix(".html").read_text(encoding="utf-8")
+            self.assertIn("Baseline saved at", page)
+
+    def test_the_second_run_reports_the_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / "baseline.json"
+            report = Path(tmp) / "report.json"
+            args = [
+                "--case",
+                "single-page-qa",
+                "--artifacts",
+                tmp,
+                "--report",
+                str(report),
+                "--baseline",
+                str(baseline),
+            ]
+            with patch.dict(os.environ, {}, clear=True), patch(
+                "noteagent.settings.install.install_view"
+            ), patch(
+                "noteagent.llm.config.load_llm_config",
+                return_value=LlmConfig("https://api.example.com/v1", "k", "m"),
+            ):
+                first, _out, _err = run(
+                    [*args, "--save-baseline"], runner=fake_runner
+                )
+                second, out, _err = run(args, runner=fake_runner)
+
+            self.assertEqual(first, 0)
+            self.assertEqual(second, 0)
+            self.assertIn(
+                "baseline: 1 unchanged, 0 fixed, 0 regressed, 0 new",
+                out,
+            )
+            page = report.with_suffix(".html").read_text(encoding="utf-8")
+            self.assertIn("Compared with the baseline from", page)
 
 
 @unittest.skipIf(main is None, "fastapi not installed")

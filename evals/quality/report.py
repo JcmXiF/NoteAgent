@@ -31,6 +31,7 @@ class JudgeInfo:
 
     model: str
     temperature: float
+    prompt_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,25 +71,47 @@ def public_base_url(value: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+def connection_payload(report: QualityReport) -> dict[str, object]:
+    """The agent and judge connection shape shared by report and baseline."""
+    return {
+        "agent": {
+            "model": report.agent.model,
+            "base_url": public_base_url(report.agent.base_url),
+            "temperature": report.agent.temperature,
+        },
+        "judge": (
+            {}
+            if report.judge is None
+            else {
+                "model": report.judge.model,
+                "temperature": report.judge.temperature,
+            }
+        ),
+    }
+
+
 def write_report(report: QualityReport, path: Path) -> Path:
     """Write *report* as JSON, creating its directory."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    connection = connection_payload(report)
+    agent = connection["agent"]
+    assert isinstance(agent, dict)
     payload = {
         "schema": 1,
         "startedAt": report.started_at,
         "durationSeconds": round(report.duration_s, 3),
         "agent": {
-            "model": report.agent.model,
-            "baseUrl": public_base_url(report.agent.base_url),
-            "temperature": report.agent.temperature,
+            "model": agent["model"],
+            "baseUrl": agent["base_url"],
+            "temperature": agent["temperature"],
         },
         "judge": (
             None
             if report.judge is None
             else {
-                "model": report.judge.model,
-                "temperature": report.judge.temperature,
+                **connection["judge"],
+                "prompt_sha256": report.judge.prompt_sha256,
                 "prompts": {
                     case.name: case.judge.prompt_sha256
                     for case in report.cases
@@ -126,6 +149,7 @@ __all__ = [
     "CaseSummary",
     "JudgeInfo",
     "QualityReport",
+    "connection_payload",
     "public_base_url",
     "write_report",
 ]

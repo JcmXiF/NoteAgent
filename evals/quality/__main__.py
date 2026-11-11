@@ -16,6 +16,13 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from evals.quality.baseline import (
+    STATUSES,
+    BaselineError,
+    compare,
+    load_baseline,
+    save_baseline,
+)
 from evals.quality.calibrate import (
     CalibrationEntry,
     CalibrationError,
@@ -23,9 +30,11 @@ from evals.quality.calibrate import (
     load_calibration,
 )
 from evals.quality.cases import CaseError, CaseSpec, load_cases
+from evals.quality.html_report import write_html
 from evals.quality.judge import (
     JUDGE_TEMPERATURE,
     JudgeClient,
+    global_prompt_sha256,
     make_judge_client,
 )
 from evals.quality.report import (
@@ -42,6 +51,7 @@ CASES_DIR = Path(__file__).resolve().parent / "cases"
 CALIBRATION_PATH = (
     Path(__file__).resolve().parent / "calibrate" / "answers.yaml"
 )
+BASELINE_PATH = Path("build") / "evals" / "quality" / "baseline.json"
 RUNS_DIR = Path("build") / "evals" / "quality" / "runs"
 
 
@@ -77,6 +87,19 @@ def _parser() -> argparse.ArgumentParser:
         "--report",
         default="",
         help="where to write report.json (default: inside the run directory)",
+    )
+    parser.add_argument(
+        "--baseline",
+        default="",
+        help=(
+            "the baseline file "
+            "(default: build/evals/quality/baseline.json)"
+        ),
+    )
+    parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="replace the baseline with this run",
     )
     return parser
 
@@ -251,10 +274,46 @@ def main(
         ),
         cases=tuple(results),
         judge=JudgeInfo(
-            model=config.model, temperature=JUDGE_TEMPERATURE
+            model=config.model,
+            temperature=JUDGE_TEMPERATURE,
+            prompt_sha256=global_prompt_sha256(),
         ),
     )
     path = write_report(report, report_path)
+    baseline_path = Path(args.baseline) if args.baseline else BASELINE_PATH
+    baseline_exists = baseline_path.is_file()
+    baseline = None
+    if baseline_exists:
+        try:
+            baseline = load_baseline(baseline_path)
+        except BaselineError as err:
+            print(f"baseline: {err}", file=sys.stderr)
+    delta = compare(report, baseline) if baseline is not None else None
+    if baseline is None and not baseline_exists and not args.case:
+        save_baseline(baseline_path, report)
+        baseline_note = f"Baseline created at {baseline_path}."
+    elif args.save_baseline:
+        save_baseline(baseline_path, report)
+        baseline_note = f"Baseline saved at {baseline_path}."
+    elif baseline is None and not baseline_exists:
+        baseline_note = (
+            "No baseline yet; pass --save-baseline to save this "
+            "single-case run."
+        )
+    elif baseline is not None:
+        baseline_note = (
+            f"Compared with the baseline from {baseline.created_at}."
+        )
+    else:
+        baseline_note = "Baseline could not be read; no comparison."
+    html_path = write_html(
+        report,
+        report_path.with_suffix(".html"),
+        artifacts_root=artifacts,
+        delta=delta,
+        baseline_note=baseline_note,
+    )
+
     passed = sum(1 for result in results if result.passed)
     failed = len(results) - passed
     print(
@@ -262,7 +321,27 @@ def main(
         f"in {report.duration_s:.1f}s",
         flush=True,
     )
+    if delta is not None:
+        counts = ", ".join(
+            f"{sum(1 for item in delta.cases if item.status == status)} "
+            f"{status}"
+            for status in STATUSES
+        )
+        print(f"baseline: {counts}", flush=True)
+        if delta.config_changes:
+            print(
+                "  config changed: "
+                + ", ".join(delta.config_changes),
+                flush=True,
+            )
+        if delta.prompt_changes:
+            print(
+                "  judge prompt changed: "
+                + ", ".join(delta.prompt_changes),
+                flush=True,
+            )
     print(f"report: {path}", flush=True)
+    print(f"html:   {html_path}", flush=True)
     return 0 if failed == 0 else 1
 
 

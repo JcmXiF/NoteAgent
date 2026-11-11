@@ -64,6 +64,14 @@ class JudgeVerdict:
             and all(item.verdict == "pass" for item in self.dimensions)
         )
 
+    def verdicts(self) -> dict[str, str]:
+        """The dimension verdicts, or empty when the judge did not decide."""
+        if self.error or self.skipped:
+            return {}
+        return {
+            item.dimension: item.verdict for item in self.dimensions
+        }
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
@@ -131,6 +139,13 @@ def prompt_digest(prompt: str, requirements: str) -> str:
     """The instructions the judge read: the prompt and the case's rules."""
     return hashlib.sha256(
         (prompt + "\n\n" + requirements).encode("utf-8")
+    ).hexdigest()
+
+
+def global_prompt_sha256() -> str:
+    """The hash of the judge's shared instructions, without case rules."""
+    return hashlib.sha256(
+        PROMPT_PATH.read_text(encoding="utf-8").encode("utf-8")
     ).hexdigest()
 
 
@@ -325,6 +340,7 @@ __all__ = [
     "JudgeVerdict",
     "build_user_prompt",
     "conversation_from",
+    "global_prompt_sha256",
     "judge_case",
     "judge_config",
     "make_judge_client",
