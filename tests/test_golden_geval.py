@@ -205,6 +205,28 @@ class JudgeTests(unittest.TestCase):
         self.assertIn("## Key points", text)
         self.assertIn("要点一", text)
 
+    def test_the_judge_sees_the_wiki_index_and_purpose(self) -> None:
+        client = FakeJudge()
+
+        judge(
+            case(),
+            "answer",
+            [page()],
+            client=client,
+            wiki_index=("concepts/x — X",),
+            purpose="信息论 wiki",
+        )
+
+        text = "\n".join(
+            message.content
+            for request in client.requests
+            for message in request
+        )
+        self.assertIn("## Wiki index", text)
+        self.assertIn("concepts/x — X", text)
+        self.assertIn("## Wiki purpose", text)
+        self.assertIn("信息论 wiki", text)
+
     def test_the_judge_config_is_temperature_zero(self) -> None:
         config = judge_config(
             LlmConfig(

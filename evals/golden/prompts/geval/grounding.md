@@ -17,6 +17,13 @@ your reason in the language of the question and answer.
 4. Discount hedged or explicitly marked outside knowledge only if the answer
    presents it as part of the wiki answer.
 
+## Wiki index
+
+The request includes the full wiki index and the project purpose. An absence
+claim ("the wiki has no page about X") is grounded when the index has no
+matching page; do not require a page body to support a negative. Citing the
+project purpose or scope is allowed when it appears in the request.
+
 ## Anchors
 
 - 1: most claims are unsupported or invented

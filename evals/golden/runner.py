@@ -129,6 +129,14 @@ class QueryRun:
             if not item.error
         }
 
+    @property
+    def quality_warning(self) -> bool:
+        """Any dimension scored 1–2; the run still ran, but quality is weak."""
+        return any(
+            not item.error and item.score <= 2
+            for item in self.verdict.scores
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class VariantRun:
@@ -162,6 +170,8 @@ class PairedCase:
     strict_passed: bool
     base_trace_passed: bool
     strict_trace_passed: bool
+    base_quality_warning: bool = False
+    strict_quality_warning: bool = False
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -177,6 +187,8 @@ class PairedCase:
             "strictPassed": self.strict_passed,
             "baseTracePassed": self.base_trace_passed,
             "strictTracePassed": self.strict_trace_passed,
+            "baseQualityWarning": self.base_quality_warning,
+            "strictQualityWarning": self.strict_quality_warning,
         }
 
 
@@ -488,6 +500,8 @@ def pair_variants(
                 strict_passed=strict_query.passed,
                 base_trace_passed=base_query.trace_passed,
                 strict_trace_passed=strict_query.trace_passed,
+                base_quality_warning=base_query.quality_warning,
+                strict_quality_warning=strict_query.quality_warning,
             )
         )
 
@@ -593,6 +607,11 @@ def _run_one(
             judge_pages(golden, case, evidence),
             client=judge_client,
             secret=secret,
+            wiki_index=tuple(
+                f"{page.slug} — {page.title}"
+                for page in golden.corpus.pages
+            ),
+            purpose=golden.corpus.purpose,
         )
 
     result = QueryRun(

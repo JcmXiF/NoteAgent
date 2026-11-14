@@ -202,6 +202,9 @@ def _variant_payload(
         "promptSha256": record.prompt_sha256,
         "gitCommit": record.git_commit,
         "counts": counts(record.queries),
+        "qualityWarnings": sum(
+            1 for query in run.queries if query.quality_warning
+        ),
         "means": means_by_dimension(record.queries),
         "distribution": distribution_by_dimension(record.queries),
         "byType": _by_slice(run.queries, "type"),
@@ -221,6 +224,7 @@ def _query_payload(query: QueryRun) -> dict[str, object]:
         "passed": query.passed,
         "tracePassed": query.trace_passed,
         "judgeOk": query.judge_ok,
+        "qualityWarning": query.quality_warning,
         "error": query.error,
         "scores": [
             {
@@ -314,13 +318,16 @@ def _variant_page(
 ) -> str:
     totals = counts(record.queries)
     means = means_by_dimension(record.queries)
+    warnings = sum(
+        1 for query in run.queries if query.quality_warning
+    )
     parts = [
         _header(
             f"Golden eval — {run.variant}",
             record,
             extra=[("Variant", run.variant)],
         ),
-        _summary_badges(totals, means),
+        _summary_badges(totals, means, warnings),
         "<h2>By type</h2>",
         _slice_table(_by_slice(run.queries, "type"), "Type"),
         "<h2>By difficulty</h2>",
@@ -431,18 +438,23 @@ def _header(
 def _summary_badges(
     totals: Mapping[str, int],
     means: Mapping[str, float | None],
+    quality_warnings: int = 0,
 ) -> str:
     return (
         '<section class="summary">'
-        f'<span class="badge pass">{totals["passed"]} passed</span>'
+        f'<span class="badge pass">{totals["passed"]} ran</span>'
         f'<span class="badge fail">{totals["queries"] - totals["passed"]}'
-        " not passed</span>"
+        " failed</span>"
         f'<span class="muted">trace: {totals["tracePassed"]} passed / '
         f'{totals["traceFailed"]} failed</span>'
         f'<span class="muted">judge errors: {totals["judgeErrors"]}'
         "</span>"
+        f'<span class="badge warn">{quality_warnings} quality warnings'
+        "</span>"
         f'<span class="muted">means: '
         f'{_mean_text(means)}</span>'
+        '<span class="muted">ran = trace + judge completed; quality '
+        "warning = any dimension ≤2</span>"
         "</section>"
     )
 
@@ -482,6 +494,9 @@ def _variant_table(
     rows = []
     for run, record in zip(runs, records, strict=True):
         totals = counts(record.queries)
+        warnings = sum(
+            1 for query in run.queries if query.quality_warning
+        )
         rows.append(
             "<tr>"
             f"<td>{_escape(run.variant)}</td>"
@@ -489,6 +504,7 @@ def _variant_table(
             f"<td>{totals['passed']}</td>"
             f"<td>{totals['tracePassed']}/{totals['traceFailed']}</td>"
             f"<td>{totals['judgeErrors']}</td>"
+            f"<td>{warnings}</td>"
             f"<td>{_escape(_mean_text(means_by_dimension(record.queries)))}"
             "</td>"
             "</tr>"
@@ -497,9 +513,10 @@ def _variant_table(
         [
             "Variant",
             "Queries",
-            "Passed",
+            "Ran",
             "Trace pass/fail",
             "Judge errors",
+            "Quality warnings",
             "Means",
         ],
         rows,
@@ -535,8 +552,10 @@ def _paired_section(paired: PairedSummary) -> str:
             f"<td>{case.mean_delta:+.3f}</td>"
             f'<td><span class="badge {_escape(case.winner)}">'
             f"{_escape(case.winner)}</span></td>"
-            f"<td>{'PASS' if case.base_passed else 'FAIL'}</td>"
-            f"<td>{'PASS' if case.strict_passed else 'FAIL'}</td>"
+            f"<td>{'RAN' if case.base_passed else 'FAIL'}</td>"
+            f"<td>{'RAN' if case.strict_passed else 'FAIL'}</td>"
+            f"<td>{_quality_badge(case.base_quality_warning)}</td>"
+            f"<td>{_quality_badge(case.strict_quality_warning)}</td>"
             "</tr>"
         )
     return "\n".join(
@@ -556,8 +575,10 @@ def _paired_section(paired: PairedSummary) -> str:
                     "Strict",
                     "Delta",
                     "Winner",
-                    "Base pass",
-                    "Strict pass",
+                    "Base ran",
+                    "Strict ran",
+                    "Base quality",
+                    "Strict quality",
                 ],
                 rows,
             ),
@@ -594,12 +615,17 @@ def _paired_slice_table(
 
 
 def _case_section(query: QueryRun) -> str:
-    verdict = "PASS" if query.passed else "FAIL"
+    verdict = "RAN" if query.passed else "FAIL"
     badge = "pass" if query.passed else "fail"
     scores = " ".join(
         f"{item.dimension[0]}={item.soft:.2f}"
         for item in query.verdict.scores
         if not item.error
+    )
+    warning = (
+        ' <span class="badge warn">quality warning</span>'
+        if query.quality_warning
+        else ""
     )
     open_attr = "" if query.passed else " open"
     parts = [
@@ -607,7 +633,8 @@ def _case_section(query: QueryRun) -> str:
         f'<summary><span class="badge {badge}">{verdict}</span> '
         f"{_escape(query.case.id)} "
         f'<span class="muted">{_escape(query.case.question)}</span> '
-        f'<span class="muted">{_escape(scores)}</span></summary>',
+        f'<span class="muted">{_escape(scores)}</span>{warning}'
+        "</summary>",
         '<div class="case-body">',
         f"<p><strong>Question</strong> {_escape(query.case.question)}</p>",
         '<h4>Answer</h4>',
@@ -865,6 +892,12 @@ def _score_text(scores: Mapping[str, float]) -> str:
         for dimension in DIMENSIONS
         if dimension in scores
     ) or "—"
+
+
+def _quality_badge(warning: bool) -> str:
+    if warning:
+        return '<span class="badge warn">warning</span>'
+    return "ok"
 
 
 def _fmt(value: float | None) -> str:

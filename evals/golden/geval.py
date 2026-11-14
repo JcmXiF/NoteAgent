@@ -110,20 +110,31 @@ def judge(
     *,
     client: ScoreClient,
     secret: str = "",
+    wiki_index: Sequence[str] = (),
+    purpose: str = "",
 ) -> GevalVerdict:
     """Grade *answer* on the three dimensions, one call each."""
     prompts = {
         name: (PROMPT_DIR / f"{name}.md").read_text(encoding="utf-8")
         for name in DIMENSIONS
     }
-    digest = prompt_digest(prompts, case)
+    digest = prompt_digest(
+        prompts, case, wiki_index=wiki_index, purpose=purpose
+    )
     scores: list[DimensionScore] = []
     for name in DIMENSIONS:
         messages = [
             ChatMessage("system", prompts[name]),
             ChatMessage(
                 "user",
-                build_user_prompt(case, answer, pages, name),
+                build_user_prompt(
+                    case,
+                    answer,
+                    pages,
+                    name,
+                    wiki_index=wiki_index,
+                    purpose=purpose,
+                ),
             ),
         ]
         try:
@@ -157,8 +168,17 @@ def build_user_prompt(
     answer: str,
     pages: Sequence[CorpusPage],
     dimension: str,
+    *,
+    wiki_index: Sequence[str] = (),
+    purpose: str = "",
 ) -> str:
-    parts = ["## Question", case.question, "## Wiki pages"]
+    parts = ["## Question", case.question]
+    if purpose:
+        parts.extend(["## Wiki purpose", purpose])
+    if wiki_index:
+        parts.append("## Wiki index")
+        parts.extend(f"- {item}" for item in wiki_index)
+    parts.append("## Wiki pages")
     for page in pages:
         parts.extend([f"### {page.slug} — {page.title}", page.body])
     if dimension == "coverage":
@@ -181,14 +201,24 @@ def shared_prompt_sha256() -> str:
 
 
 def prompt_digest(
-    prompts: dict[str, str], case: GoldenQuery
+    prompts: dict[str, str],
+    case: GoldenQuery,
+    *,
+    wiki_index: Sequence[str] = (),
+    purpose: str = "",
 ) -> str:
     """The instructions and the case rules the judge read."""
     digest = hashlib.sha256()
     for name in DIMENSIONS:
         digest.update(prompts[name].encode("utf-8"))
         digest.update(b"\0")
-    for value in (case.question, *case.key_points, *case.forbidden):
+    for value in (
+        case.question,
+        *case.key_points,
+        *case.forbidden,
+        purpose,
+        *wiki_index,
+    ):
         digest.update(value.encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()

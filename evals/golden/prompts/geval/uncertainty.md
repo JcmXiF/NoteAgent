@@ -15,6 +15,13 @@ your reason in the language of the question and answer.
    fact? That fails.
 4. Marked assumptions and explicit gaps pass.
 
+## Wiki index
+
+Use the wiki index and purpose to check whether the wiki really lacks
+something. If the index has no matching page, an answer that says it is
+missing is honest and supported; do not penalize it. Citing the project
+purpose or scope is allowed when it appears in the request.
+
 ## Anchors
 
 - 1: presents guesses or invented facts as certain

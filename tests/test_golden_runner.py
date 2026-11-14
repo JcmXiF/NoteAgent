@@ -300,6 +300,34 @@ class RunVariantTests(unittest.TestCase):
             self.assertEqual(rows[0]["trace_failed"], "0")
             self.assertEqual(rows[0]["grounding_mean"], "4.0")
 
+    def test_a_low_dimension_adds_a_quality_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            golden = tiny_golden(root)
+            run = run_variant(
+                golden,
+                CONFIG,
+                root / "run",
+                variant="base",
+                model=FakeModelClient("X 的定义。"),
+                judge_client=FakeJudge((1, 4, 4)),
+            )
+            record = record_for(run, golden, CONFIG)
+            json_path = root / "run" / "report.json"
+            html_path = root / "run" / "report.html"
+
+            payload = write_variant_report(
+                run, record, [], json_path=json_path, html_path=html_path
+            )
+
+            self.assertTrue(run.queries[0].passed)
+            self.assertTrue(run.queries[0].quality_warning)
+            self.assertEqual(payload["qualityWarnings"], 1)
+            self.assertTrue(payload["queries"][0]["qualityWarning"])
+            self.assertIn(
+                "quality warning", html_path.read_text(encoding="utf-8")
+            )
+
     def test_the_report_escapes_answers_and_uses_no_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
