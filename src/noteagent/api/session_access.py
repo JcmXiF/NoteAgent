@@ -168,6 +168,7 @@ def session_runtime(
         clock=deps.clock,
         ids=deps.ids,
         registry=deps.runs,
+        max_turns=deps.max_turns,
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.
         trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,

@@ -107,6 +107,7 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
+from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
@@ -627,10 +628,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         body: SessionTitleBody = Body(default_factory=SessionTitleBody),
     ) -> dict[str, object]:
         """Start an empty session, which the list can then open."""
+        layout = active_layout(deps)
         store = project_sessions(deps)
         session_id = deps.ids.new_id("s")
         try:
             store.create(session_id, body.title)
+            if deps.seed_system_sections:
+                ensure_default_sections(store, session_id, layout)
         except FileExistsError as err:
             raise CodedHTTPException(
                 409,
@@ -720,6 +724,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         store = open_session_store(deps, session_id, layout=layout)
         if session_busy(deps, session_id):
             raise _session_busy_refusal(session_id)
+        if deps.seed_system_sections:
+            ensure_default_sections(store, session_id, layout)
         reconcile_session(deps, store, layout, session_id)
         waits = session_waits(deps, store)
         try:

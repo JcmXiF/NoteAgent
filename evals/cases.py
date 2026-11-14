@@ -357,58 +357,54 @@ def mixed_propose_rejected(run: CaseRun) -> None:
     run.equal("the session is not waiting", api.get_session(session)["wait"], None)
 
 
-def max_tool_rounds(run: CaseRun) -> None:
-    """At the tool-round budget the model is asked once more, without tools."""
+def turn_budget(run: CaseRun) -> None:
+    """One coding-agent-style turn bound, not a tool-round budget."""
     scripts = [
         FauxModelClient.tool_call(
             f"t{index}", "wiki_read", '{"slug": "concepts/entropy"}'
         ).script
-        for index in range(6)
+        for index in range(3)
     ]
-    scripts.append(
-        FauxModelClient.text("从读到的页面看，熵衡量不确定性。").script
-    )
     model = FauxModelClient(*scripts)
-    api = run.start(model)
+    api = run.start(model, max_turns=2)
     session = api.create_session()
     reply = api.query(session, "多读几遍熵")
 
     run.equal(
-        "every round before the budget ran",
+        "two tool rounds ran",
         len(reply.events_of("observation")),
-        6,
+        2,
     )
     run.equal(
-        "the model was asked one more time",
+        "the model was called twice",
         len(model.requests),
-        7,
+        2,
     )
-    last = model.requests[-1]
-    run.equal("the last turn offers no tools", last.tools, ())
-    run.check(
-        "the run says it is answering from the tool results",
-        any(
-            data.get("stepId") == "answer"
-            and "tool results" in str(data.get("message") or "")
-            for data in reply.events_of("status")
-        ),
-        "no answering-from-tool-results status was sent",
-    )
+    errors = reply.events_of("error")
+    run.equal("the turn bound is an error", len(errors), 1)
+    if errors:
+        run.equal(
+            "the error code", errors[0].get("code"), "max_turns_exceeded"
+        )
     entries = api.entries(session)
     run.equal(
-        "the log holds every tool result",
-        len([entry for entry in entries if entry.get("role") == "toolResult"]),
-        6,
+        "the partial log is kept",
+        [
+            entry.get("role")
+            for entry in entries
+            if entry.get("type") == "message"
+        ],
+        ["user", "assistant", "toolResult", "assistant", "toolResult"],
     )
-    run.equal(
-        "the answer is committed",
-        entries[-1].get("content"),
-        "从读到的页面看，熵衡量不确定性。",
-    )
-    run.equal(
-        "the run completed",
-        _only_event(reply, "done")["run"]["status"],
-        "completed",
+    run.check(
+        "no final answer was written",
+        not any(
+            entry.get("role") == "assistant"
+            and not entry.get("toolCalls")
+            and entry.get("content")
+            for entry in entries
+        ),
+        "a final assistant message was written",
     )
 
 
@@ -760,9 +756,9 @@ CASES: tuple[Case, ...] = (
         mixed_propose_rejected,
     ),
     Case(
-        "max_tool_rounds",
-        "At the tool-round budget the model answers once more without tools.",
-        max_tool_rounds,
+        "turn_budget",
+        "A run stops at its single turn bound, not a tool-round budget.",
+        turn_budget,
     ),
     Case(
         "compaction_threshold",

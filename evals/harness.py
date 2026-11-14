@@ -246,6 +246,8 @@ class CaseRun:
         model: ModelClient,
         *,
         tools: ToolRegistry | None = None,
+        seed_system_sections: bool = False,
+        max_turns: int = 50,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -255,6 +257,8 @@ class CaseRun:
             model=model,
             tools=tools,
             settings={"model": "faux"},
+            seed_system_sections=seed_system_sections,
+            max_turns=max_turns,
         )
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
