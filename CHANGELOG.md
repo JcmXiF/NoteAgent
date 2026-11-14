@@ -4,6 +4,18 @@ Every release has one section. The release workflow copies the section matching
 the app version into the GitHub Release body, so a version without a section
 cannot be published.
 
+## v0.1.2
+
+- The chat loop is replaced by a general agent harness: each session runs a
+  tool-calling agent that proposes pages and plans for you to approve, and can
+  be stopped and continued later.
+- Sessions are stored one JSONL per conversation, keep the whole transcript
+  even after compaction, and are listed again after a restart.
+- Chats from earlier versions are migrated to the new session store on first
+  launch.
+- The packaged app carries the new core and reports its version through the
+  same health check.
+
 ## v0.1.1
 
 - The app checks for a newer release shortly after it starts and every six
