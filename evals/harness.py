@@ -18,7 +18,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -191,7 +191,12 @@ class CaseRun:
     case's wiki and nobody else's.
     """
 
-    def __init__(self, workdir: Path) -> None:
+    def __init__(
+        self,
+        workdir: Path,
+        *,
+        pages: Iterable[tuple[str, str, str]] | None = None,
+    ) -> None:
         self.repo = workdir / "repo"
         self.repo.mkdir(parents=True)
         self.layout = init_project(self.repo / "projects" / "demo")
@@ -205,7 +210,7 @@ class CaseRun:
         self._patchers: list[Any] = []
         try:
             self._activate()
-            for slug, title, body in _PAGES:
+            for slug, title, body in (_PAGES if pages is None else pages):
                 self.write_page(slug, title, body)
         except Exception:
             # The patches point at this case's temporary folder. A case that
@@ -241,6 +246,8 @@ class CaseRun:
         model: ModelClient,
         *,
         tools: ToolRegistry | None = None,
+        seed_system_sections: bool = False,
+        max_turns: int = 50,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -250,6 +257,8 @@ class CaseRun:
             model=model,
             tools=tools,
             settings={"model": "faux"},
+            seed_system_sections=seed_system_sections,
+            max_turns=max_turns,
         )
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))

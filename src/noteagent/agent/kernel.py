@@ -32,6 +32,7 @@ from noteagent.agent.events import (
     WaitEvent,
 )
 from noteagent.agent.model import (
+    AssistantMessage,
     Message,
     ModelClient,
     ModelEvent,
@@ -99,6 +100,16 @@ SUMMARY_INSTRUCTIONS = (
     "language of the conversation."
 )
 
+#: One recovery note after a provider leaked a tool call as text. The note is
+#: transient; it is not a step budget.
+LEAK_RETRY = (
+    "Your previous response contained tool-call markup instead of an answer. "
+    "Do not write tool-call markup. If the reader asked for a page/job, make "
+    "one valid, lone `propose` call now; otherwise answer in prose from the "
+    "evidence above; if a read tool is still needed, say that the tool budget "
+    "is exhausted and what is missing."
+)
+
 
 class RunRegistry:
     """The sessions with a run, shared by every runtime in the process.
@@ -154,7 +165,10 @@ class KernelRuntime:
         registry: RunRegistry | None = None,
         trace: TraceSink | None = None,
         model_name: str = "",
-        max_tool_rounds: int = 6,
+        #: One safety bound for the whole run: model calls, not tool rounds.
+        #: Coding agents usually expose one turn budget and let the loop end on
+        #: a final answer or a control action.
+        max_turns: int = 50,
         compaction: CompactionLimits | None = None,
     ) -> None:
         self._model = model
@@ -168,7 +182,7 @@ class KernelRuntime:
         self._ids = ids or UuidIds()
         self._registry = registry or RunRegistry()
         self._model_name = model_name
-        self._max_tool_rounds = max_tool_rounds
+        self._max_turns = max_turns
         self._compaction = compaction or CompactionLimits()
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
@@ -307,11 +321,23 @@ class KernelRuntime:
         partial: list[str] = []
         try:
             sink(StatusEvent("thinking", "think"))
-            tool_rounds = 0
+            model_calls = 0
             overflow_retried = False
+            leak_retry_used = False
+            leak_retry_note = False
 
             while True:
                 _check_cancel(cancel)
+                model_calls += 1
+                if model_calls > self._max_turns:
+                    message = (
+                        "the run exceeded "
+                        f"{self._max_turns} model turns"
+                    )
+                    sink(ErrorEvent("max_turns_exceeded", message))
+                    return RunResult(
+                        session_id, run_id, "failed", error=message
+                    )
                 try:
                     self._compact_if_needed(session_id, sink, cancel)
                 except ModelStreamError as err:
@@ -319,10 +345,9 @@ class KernelRuntime:
                         session_id, run_id, sink, err
                     )
                 messages = self._prompt(session_id)
-                forced = tool_rounds >= self._max_tool_rounds
-                if forced:
-                    sink(StatusEvent("answering from the tool results", "answer"))
-                offered = () if forced else self._offered_tools()
+                if leak_retry_note:
+                    messages = messages + (Message("system", LEAK_RETRY),)
+                offered = self._offered_tools()
                 model_request = ModelRequest(
                     model=self._model_name,
                     messages=messages,
@@ -339,6 +364,14 @@ class KernelRuntime:
                     if err.code == "cancelled":
                         # One cancellation path, whichever layer noticed first.
                         raise RunCancelled("run cancelled") from err
+                    if err.code == "tool_call_leak" and not leak_retry_used:
+                        # The adapter could not recover a leaked tool call.
+                        # Ask once more, in prose, with the failure named.
+                        leak_retry_used = True
+                        leak_retry_note = True
+                        sink(TokenEvent("", reset=True))
+                        partial.clear()
+                        continue
                     if err.code == "context_overflow" and not overflow_retried:
                         overflow_retried = True
                         try:
@@ -364,39 +397,19 @@ class KernelRuntime:
                 # This turn answered, so a later overflow (after a tool round,
                 # say) gets its own compaction and retry.
                 overflow_retried = False
-                if assistant.tool_calls and not forced:
+                leak_retry_note = False
+                if assistant.tool_calls:
                     calls = assistant.tool_calls
                     refusal: ToolResult | None = None
                     if len(calls) == 1 and calls[0].name == PROPOSE_NAME:
                         proposal, refusal = self._read_proposal(session_id, calls[0])
                         if proposal is not None:
-                            # A control action is not a tool round: the prose is
-                            # the answer's last words, the wait is the outcome,
-                            # and the run ends here. Nothing is dispatched.
-                            text = assistant.content.strip()
-                            if text:
-                                self._sessions.append(
-                                    session_id,
-                                    {
-                                        "type": "message",
-                                        "role": "assistant",
-                                        "content": text,
-                                        "stopReason": "propose",
-                                    },
-                                )
-                            wait = self._record_wait(session_id, proposal)
-                            sink(WaitEvent(wait))
-                            sink(
-                                DoneEvent(
-                                    {"id": session_id},
-                                    {"id": run_id, "status": "waiting"},
-                                )
-                            )
-                            return RunResult(
+                            return self._wait_for_proposal(
                                 session_id,
                                 run_id,
-                                "waiting",
-                                wait_id=wait.wait_id,
+                                sink,
+                                assistant,
+                                proposal,
                             )
                     # A refused proposal and an ordinary batch share one tail:
                     # the preamble becomes a step, every call gets its result,
@@ -412,7 +425,6 @@ class KernelRuntime:
                         else self._round_results(session_id, run_id, calls, cancel)
                     )
                     self._commit_results(session_id, calls, results, sink)
-                    tool_rounds += 1
                     sink(StatusEvent("thinking", "think"))
                     continue
 
@@ -487,6 +499,41 @@ class KernelRuntime:
         )
         self._waits.propose(session_id, wait)
         return wait
+
+    def _wait_for_proposal(
+        self,
+        session_id: str,
+        run_id: str,
+        sink: EventSink,
+        assistant: AssistantMessage,
+        proposal: Proposal,
+    ) -> RunResult:
+        """Commit the proposal's prose, record the wait, and end the run."""
+        text = assistant.content.strip()
+        if text:
+            self._sessions.append(
+                session_id,
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": text,
+                    "stopReason": "propose",
+                },
+            )
+        wait = self._record_wait(session_id, proposal)
+        sink(WaitEvent(wait))
+        sink(
+            DoneEvent(
+                {"id": session_id},
+                {"id": run_id, "status": "waiting"},
+            )
+        )
+        return RunResult(
+            session_id,
+            run_id,
+            "waiting",
+            wait_id=wait.wait_id,
+        )
 
     def _round_results(
         self,

@@ -44,12 +44,24 @@ class ChatMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenLogprob:
+    """One output token's log probability, with its top alternatives."""
+
+    token: str
+    logprob: float
+    top_logprobs: tuple[tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class LlmTurn:
     """One completions choice: final text and/or tool calls."""
 
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
     finish_reason: str = ""
+    logprobs: tuple[TokenLogprob, ...] = ()
+    #: A reasoning model's thinking, when the provider sends it separately.
+    reasoning: str = ""
 
 
 def _extract_content_delta(
@@ -111,6 +123,39 @@ def _extract_tool_calls(message: dict[str, Any]) -> tuple[ToolCall, ...]:
         else:
             text = json.dumps(arguments, ensure_ascii=False)
         out.append(ToolCall(id=cid, name=name, arguments=text))
+    return tuple(out)
+
+
+def _extract_logprobs(payload: dict[str, Any]) -> tuple[TokenLogprob, ...]:
+    """The output tokens' log probabilities, when the provider returned them."""
+    choices = payload.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ()
+    raw = choices[0].get("logprobs")
+    if not isinstance(raw, dict):
+        return ()
+    content = raw.get("content")
+    if not isinstance(content, list):
+        return ()
+    out: list[TokenLogprob] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        token = item.get("token")
+        logprob = item.get("logprob")
+        if not isinstance(token, str) or not isinstance(logprob, (int, float)):
+            continue
+        top: list[tuple[str, float]] = []
+        alternatives = item.get("top_logprobs")
+        if isinstance(alternatives, list):
+            for alternative in alternatives:
+                if not isinstance(alternative, dict):
+                    continue
+                name = alternative.get("token")
+                value = alternative.get("logprob")
+                if isinstance(name, str) and isinstance(value, (int, float)):
+                    top.append((name, float(value)))
+        out.append(TokenLogprob(token, float(logprob), tuple(top)))
     return tuple(out)
 
 
@@ -220,6 +265,9 @@ class LlmClient:
         on_token: Callable[[str], None] | None = None,
         fallback_reasoning: bool = True,
         cancel: Event | None = None,
+        response_format: dict[str, Any] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> LlmTurn:
         """One completions turn. ``tools`` is the OpenAI tools array, or None."""
         check_cancelled(cancel)
@@ -228,12 +276,18 @@ class LlmClient:
                 messages,
                 tools=tools,
                 fallback_reasoning=fallback_reasoning,
+                response_format=response_format,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
             )
         return self._complete_stream(
             messages,
             tools=tools,
             on_token=on_token,
             fallback_reasoning=fallback_reasoning,
+            response_format=response_format,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
         )
 
     def _headers(self) -> dict[str, str]:
@@ -249,6 +303,9 @@ class LlmClient:
         *,
         stream: bool,
         tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> dict[str, Any]:
         """The request body for either kind of call."""
         body: dict[str, Any] = {
@@ -261,6 +318,12 @@ class LlmClient:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        if response_format is not None:
+            body["response_format"] = response_format
+        if logprobs:
+            body["logprobs"] = True
+            if top_logprobs:
+                body["top_logprobs"] = top_logprobs
         return body
 
     def _complete_once(
@@ -269,6 +332,9 @@ class LlmClient:
         *,
         tools: list[dict[str, Any]] | None,
         fallback_reasoning: bool,
+        response_format: dict[str, Any] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> LlmTurn:
         """One non-streamed call: the whole answer inside a single response."""
         try:
@@ -276,7 +342,14 @@ class LlmClient:
                 response = client.post(
                     self.config.chat_completions_url,
                     headers=self._headers(),
-                    json=self._body(messages, stream=False, tools=tools),
+                    json=self._body(
+                        messages,
+                        stream=False,
+                        tools=tools,
+                        response_format=response_format,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                    ),
                 )
         except httpx.HTTPError as err:
             raise LlmError(self._redacted(f"LLM request failed: {err}")) from err
@@ -307,6 +380,9 @@ class LlmClient:
         content = _extract_message_content(
             payload, fallback_reasoning=fallback_reasoning and not tool_calls
         )
+        reasoning = message.get("reasoning_content")
+        if not isinstance(reasoning, str):
+            reasoning = ""
         if not content.strip() and not tool_calls:
             raise LlmError(
                 "LLM returned empty message content "
@@ -316,6 +392,8 @@ class LlmClient:
             content=content or "",
             tool_calls=tool_calls,
             finish_reason=finish,
+            logprobs=_extract_logprobs(payload),
+            reasoning=reasoning.strip(),
         )
 
     def _complete_stream(
@@ -325,6 +403,9 @@ class LlmClient:
         tools: list[dict[str, Any]] | None,
         on_token: Callable[[str], None],
         fallback_reasoning: bool,
+        response_format: dict[str, Any] | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> LlmTurn:
         """One streamed call: tokens go to *on_token* as they arrive."""
         chunks: list[str] = []
@@ -336,7 +417,14 @@ class LlmClient:
                     "POST",
                     self.config.chat_completions_url,
                     headers=self._headers(),
-                    json=self._body(messages, stream=True, tools=tools),
+                    json=self._body(
+                        messages,
+                        stream=True,
+                        tools=tools,
+                        response_format=response_format,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                    ),
                 ) as response:
                     if response.status_code >= 400:
                         body = response.read().decode("utf-8", errors="replace")

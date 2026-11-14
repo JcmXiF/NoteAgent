@@ -38,3 +38,8 @@ class AppDeps:
     #: One collaboration job at a time, across every session.
     job_gate: JobGate = field(default_factory=JobGate)
     settings: Mapping[str, object] | None = None
+    #: A product session starts with the default role/tools/grounding sections.
+    #: The eval harness turns this off; its cases bring their own sections.
+    seed_system_sections: bool = True
+    #: One safety bound for a run: model turns, not tool rounds.
+    max_turns: int = 50

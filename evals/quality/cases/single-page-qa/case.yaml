@@ -1,0 +1,22 @@
+name: single-page-qa
+title: 单页事实问答
+turns:
+  - "熵和交叉熵的区别是什么？"
+assertions:
+  tools_any: [wiki_read, search]
+  wait: absent
+  max_tool_rounds: 4
+  no_error: true
+judge:
+  grounding:
+    must:
+      - "每个事实断言都能在 seeded wiki 中找到依据"
+    must_not:
+      - "编造 wiki 没有的公式或数字"
+  completeness:
+    must:
+      - "区分熵与交叉熵"
+      - "说明交叉熵 = 熵 + KL 散度"
+  uncertainty:
+    must:
+      - "不把 wiki 没有的内容说成确定事实"

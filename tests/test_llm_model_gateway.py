@@ -13,6 +13,7 @@ from noteagent.agent.model import (
     ModelDoneEvent,
     ModelErrorEvent,
     ModelRequest,
+    ModelStreamError,
     ToolCall,
     collect,
 )
@@ -115,6 +116,89 @@ class OpenAIStreamTests(unittest.TestCase):
         self.assertIsInstance(events[-1], ModelErrorEvent)
         self.assertEqual(events[-1].code, "model_error")
         self.assertTrue(events[-1].retryable)
+
+
+class DSMLRecoveryTests(unittest.TestCase):
+    BLOCK = (
+        "<｜｜DSML｜｜ calls>\n"
+        '<｜｜DSML｜｜ invoke name="wiki_read">\n'
+        '<｜｜DSML｜｜ parameter name="slug" string="true">'
+        "concepts/信息熵</｜｜DSML｜｜ parameter>\n"
+        "</｜｜DSML｜｜ invoke>\n"
+        "</｜｜DSML｜｜ calls>"
+    )
+
+    def _events(self, *chunks: str, secret: str = ""):
+        payloads = [
+            {"choices": [{"delta": {"content": chunk}}]} for chunk in chunks
+        ]
+        payloads.append(
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        )
+        return list(
+            _stream_events(
+                _response(*payloads), _request(), secret=secret
+            )
+        )
+
+    def test_a_leaked_call_is_recovered_from_streamed_chunks(self) -> None:
+        block = self.BLOCK
+        message = collect(
+            self._events(block[:12], block[12:37], block[37:])
+        )
+
+        self.assertEqual(message.content.strip(), "")
+        self.assertEqual(len(message.tool_calls), 1)
+        call = message.tool_calls[0]
+        self.assertEqual(call.name, "wiki_read")
+        self.assertEqual(
+            json.loads(call.arguments), {"slug": "concepts/信息熵"}
+        )
+        self.assertEqual(message.stop_reason, "tool_calls")
+
+    def test_prose_around_the_block_survives(self) -> None:
+        content = "先查。\n" + self.BLOCK + "\n然后回答。"
+        message = collect(
+            self._events(content[:20], content[20:70], content[70:])
+        )
+
+        self.assertIn("先查。", message.content)
+        self.assertIn("然后回答。", message.content)
+        self.assertNotIn("DSML", message.content)
+        self.assertEqual(len(message.tool_calls), 1)
+
+    def test_a_variant_with_ascii_pipes_is_recovered(self) -> None:
+        block = (
+            "<|DSML| tool_calls>\n"
+            '<|DSML| invoke name="search">\n'
+            '<|DSML| parameter name="query" string="true">互信息</|DSML| parameter>\n'
+            "</|DSML| invoke>\n"
+            "</|DSML| tool_calls>"
+        )
+        message = collect(self._events(block))
+
+        self.assertEqual(
+            json.loads(message.tool_calls[0].arguments),
+            {"query": "互信息"},
+        )
+
+    def test_an_unrecoverable_block_is_a_typed_error(self) -> None:
+        block = (
+            '<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="wiki_read">\n'
+            '<｜｜DSML｜｜ parameter name="slug" string="true">'
+            "sk-secret"
+        )
+        with self.assertRaises(ModelStreamError) as raised:
+            collect(self._events(block, secret="sk-secret"))
+
+        self.assertEqual(raised.exception.code, "tool_call_leak")
+        self.assertNotIn("sk-secret", str(raised.exception))
+
+    def test_normal_text_with_a_less_than_sign_is_unchanged(self) -> None:
+        message = collect(self._events("若 x < y，则 H(X) ≤ H(Y)。"))
+
+        self.assertEqual(message.content, "若 x < y，则 H(X) ≤ H(Y)。")
+        self.assertEqual(message.tool_calls, ())
 
 
 class ProviderErrorTests(unittest.TestCase):

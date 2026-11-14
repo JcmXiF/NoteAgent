@@ -8,7 +8,9 @@ the turn.
 
 from __future__ import annotations
 
+import json
 import re
+import uuid
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -131,7 +133,9 @@ class OpenAIModelClient:
                     )
                     return
                 yield ModelStartEvent(request.model or self._config.model)
-                yield from _stream_events(response, request)
+                yield from _stream_events(
+                    response, request, secret=self._config.api_key
+                )
         except httpx.HTTPError as err:
             yield ModelErrorEvent(
                 "model_error",
@@ -140,13 +144,111 @@ class OpenAIModelClient:
             )
 
 
+#: DeepSeek can serialize a tool call as DSML instead of the OpenAI
+#: ``tool_calls`` channel, especially when the request omits the tools array.
+#: The envelope has appeared with full-width bars, ASCII pipes, and no bars.
+_DSML_OPEN = r"<[｜|]{0,2}\s*DSML\s*[｜|]{0,2}"
+_DSML_CLOSE = r"</[｜|]{0,2}\s*DSML\s*[｜|]{0,2}"
+_DSML_TAG = re.compile(
+    r"</?[｜|]{0,2}\s*DSML\s*[｜|]{0,2}\s*"
+    r"(?:calls|tool_calls|function_calls|invoke|parameter)\b[^>]*>",
+    re.IGNORECASE,
+)
+_DSML_INVOKE = re.compile(
+    _DSML_OPEN + r"\s*invoke\s+name=\"([^\"]+)\"\s*>(.*?)"
+    + _DSML_CLOSE + r"\s*invoke\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DSML_PARAMETER = re.compile(
+    _DSML_OPEN
+    + r"\s*parameter\s+name=\"([^\"]+)\""
+    + r"(?:\s+string=\"(true|false)\")?\s*>(.*?)"
+    + _DSML_CLOSE
+    + r"\s*parameter\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_MAX_HELD_PREFIX = 16
+
+
+def _recover_dsml(content: str) -> tuple[str, tuple[ToolCall, ...]]:
+    """Recover complete DSML invokes and remove every DSML tag."""
+    if not _DSML_TAG.search(content):
+        return content, ()
+    calls: list[ToolCall] = []
+    for index, match in enumerate(_DSML_INVOKE.finditer(content), 1):
+        name = match.group(1).strip()
+        if not name:
+            continue
+        arguments: dict[str, object] = {}
+        for parameter in _DSML_PARAMETER.finditer(match.group(2)):
+            key = parameter.group(1).strip()
+            if not key:
+                continue
+            raw = parameter.group(3).strip()
+            if (parameter.group(2) or "true").lower() == "true":
+                arguments[key] = raw
+                continue
+            try:
+                arguments[key] = json.loads(raw)
+            except json.JSONDecodeError:
+                arguments[key] = raw
+        calls.append(
+            ToolCall(
+                id=f"dsml-{uuid.uuid4().hex[:8]}-{index}",
+                name=name,
+                arguments=json.dumps(arguments, ensure_ascii=False),
+            )
+        )
+    # Drop the invoke element before its tags: the parameter values live
+    # between tags and would otherwise survive as prose.
+    cleaned = _DSML_INVOKE.sub("", content)
+    return _DSML_TAG.sub("", cleaned).strip(), tuple(calls)
+
+
+def _hold_index(text: str) -> int:
+    """Hold a tail that could still become a DSML opener."""
+    index = text.rfind("<")
+    if index < 0:
+        return len(text)
+    tail = text[index:]
+    if len(tail) > _MAX_HELD_PREFIX:
+        return len(text)
+    rest = tail[1:].lstrip("｜| \t")
+    if not rest:
+        return index
+    upper = rest.upper()
+    if "DSML".startswith(upper) or upper.startswith("DSML"):
+        return index
+    return len(text)
+
+
+def _unemitted(cleaned: str, emitted: str) -> str:
+    """The part of *cleaned* the caller has not already streamed."""
+    if not emitted:
+        return cleaned
+    common = 0
+    for left, right in zip(cleaned, emitted):
+        if left != right:
+            break
+        common += 1
+    return cleaned[common:]
+
+
 def _stream_events(
-    response: httpx.Response, request: ModelRequest
+    response: httpx.Response,
+    request: ModelRequest,
+    *,
+    secret: str = "",
 ) -> Iterator[ModelEvent]:
     calls: dict[int, dict[str, str]] = {}
+    recovered: list[ToolCall] = []
     finish = ""
     usage: Usage | None = None
     saw_done = False
+    content_parts: list[str] = []
+    pending = ""
+    emitted = ""
+    leak_started = False
 
     def mark_done() -> None:
         nonlocal saw_done
@@ -173,7 +275,30 @@ def _stream_events(
             yield ModelThinkingDelta(reasoning)
         text = delta.get("content")
         if isinstance(text, str) and text:
-            yield ModelTextDelta(text)
+            content_parts.append(text)
+            pending += text
+            if leak_started:
+                continue
+            match = _DSML_TAG.search(pending)
+            if match is not None:
+                prefix = pending[: match.start()]
+                if prefix:
+                    emitted += prefix
+                    yield ModelTextDelta(prefix)
+                pending = pending[match.start() :]
+                leak_started = True
+                continue
+            hold = _hold_index(pending)
+            if hold < len(pending):
+                prefix = pending[:hold]
+                if prefix:
+                    emitted += prefix
+                    yield ModelTextDelta(prefix)
+                pending = pending[hold:]
+            else:
+                emitted += pending
+                yield ModelTextDelta(pending)
+                pending = ""
         for item in delta.get("tool_calls") or []:
             if not isinstance(item, Mapping):
                 continue
@@ -211,6 +336,36 @@ def _stream_events(
         )
         return
 
+    full = "".join(content_parts)
+    if leak_started or _DSML_TAG.search(full):
+        cleaned, recovered_calls = _recover_dsml(full)
+        recovered.extend(recovered_calls)
+        if recovered_calls:
+            suffix = _unemitted(cleaned, emitted)
+            if suffix:
+                yield ModelTextDelta(suffix)
+            finish = "tool_calls"
+        elif calls:
+            # Structured calls arrived beside the markup; keep them, drop the
+            # markup from the preamble.
+            suffix = _unemitted(cleaned, emitted)
+            if suffix:
+                yield ModelTextDelta(suffix)
+        else:
+            snippet = full[:300]
+            if secret:
+                snippet = redact(snippet, (secret,))
+            raise ModelStreamError(
+                "tool_call_leak",
+                "the model wrote tool-call markup instead of an answer: "
+                + snippet,
+                retryable=True,
+            )
+    elif pending:
+        emitted += pending
+        yield ModelTextDelta(pending)
+        pending = ""
+
     for index, slot in sorted(calls.items()):
         if not slot["name"]:
             continue
@@ -221,6 +376,8 @@ def _stream_events(
                 arguments=slot["arguments"] or "{}",
             )
         )
+    for call in recovered:
+        yield ModelToolCallEnd(call)
     if usage is not None:
         yield ModelUsageEvent(usage)
     yield ModelDoneEvent(AssistantMessage(stop_reason=finish, usage=usage))
