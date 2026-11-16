@@ -169,6 +169,10 @@ class FirstSyncTests(IndexCase):
         self.assertEqual(hits[0].page_id, "a")
         self.assertTrue(hits[0].exact)
 
+    def test_the_index_exposes_what_the_retrievers_need(self) -> None:
+        self.assertIs(self.index.embedder, self.embedder)
+        self.assertEqual(self.index.scope, "wiki")
+
     def test_status_is_cold_before_the_first_sync(self) -> None:
         write_page(self.layout, "a", "A", "alpha")
 

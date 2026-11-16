@@ -41,6 +41,7 @@ from noteagent.rag.chunker import (
     wiki_title,
 )
 from noteagent.rag.embedding import EmbeddingClient, EmbeddingError
+from noteagent.rag.filters import sql_string
 from noteagent.wiki.links import wiki_slug_for_path
 
 __all__ = [
@@ -229,6 +230,10 @@ class RetrievalIndex:
     @property
     def scope(self) -> str:
         return self._scope
+
+    @property
+    def embedder(self) -> EmbeddingClient:
+        return self._embedder
 
     @property
     def config_hash(self) -> str:
@@ -519,7 +524,7 @@ class RetrievalIndex:
             if ready
             else (int(old["chunk_count"]) if old is not None else 0)
         )
-        pages.delete(f"unit_id = '{_escape(unit.unit_id)}'")
+        pages.delete(f"unit_id = {sql_string(unit.unit_id)}")
         pages.add(
             [
                 {
@@ -569,7 +574,7 @@ class RetrievalIndex:
         self, chunks, pages, unit_id: str, chunk_count: int
     ) -> None:
         self._delete_chunks(chunks, unit_id, chunk_count)
-        pages.delete(f"unit_id = '{_escape(unit_id)}'")
+        pages.delete(f"unit_id = {sql_string(unit_id)}")
 
     def _delete_chunks(
         self,
@@ -582,7 +587,7 @@ class RetrievalIndex:
         if chunk_count <= start:
             return
         ids = ", ".join(
-            f"'{_escape(f'{unit_id}#{index}')}'"
+            sql_string(f"{unit_id}#{index}")
             for index in range(start, chunk_count)
         )
         chunks.delete(f"chunk_id IN ({ids})")
@@ -706,10 +711,6 @@ def _vector_dim(table) -> int | None:
 
 def _rows(table) -> list[dict]:
     return table.to_arrow().to_pylist()
-
-
-def _escape(value: str) -> str:
-    return value.replace("'", "''")
 
 
 def _utc_now() -> str:
