@@ -18,6 +18,11 @@ dependencies = [
     "pypdfium2>=4.30",
     "python-docx>=1.1",
     "python-pptx>=1.0",
+    # The derived retrieval index. LanceDB's wheel carries the native engine;
+    # pyarrow is imported directly for the table schema, so it is declared
+    # directly too.
+    "lancedb>=0.41,<0.42",
+    "pyarrow>=26.0",
     # The OS credential store for model and search keys. Imported lazily, but
     # the packaged runtime must carry it: without it there is nowhere safe to
     # put a key.

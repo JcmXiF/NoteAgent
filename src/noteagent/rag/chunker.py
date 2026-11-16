@@ -36,6 +36,8 @@ __all__ = [
     "KIND_WIKI",
     "chunk_note",
     "chunk_wiki",
+    "note_page_slug",
+    "wiki_title",
 ]
 
 #: What a chunk came from. The index stores this as ``kind``.
@@ -173,7 +175,7 @@ def chunk_wiki(
 
 def chunk_note(note: Note, *, page_title: str = "") -> Chunk:
     """A note is one chunk; its page, anchor and quote travel with it."""
-    page_id = _page_slug(note.page)
+    page_id = note_page_slug(note.page)
     title = (page_title or "").strip() or page_id.rsplit("/", 1)[-1]
     raw_body = note.body or ""
     body, start, end = _trim(raw_body, 0, len(raw_body))
@@ -192,6 +194,21 @@ def chunk_note(note: Note, *, page_title: str = "") -> Chunk:
         anchor=note.anchor,
         quote=note.quote,
     )
+
+
+def wiki_title(text: str, *, slug: str) -> str:
+    """The title a page shows: its frontmatter title, else the slug's leaf."""
+    return _title(parse_page(text).fields, slug)
+
+
+def note_page_slug(page: str) -> str:
+    """The wiki slug a note's ``page`` field names."""
+    text = (page or "").replace("\\", "/").strip()
+    if text.startswith("wiki/"):
+        text = text[5:]
+    if text.lower().endswith(".md"):
+        text = text[:-3]
+    return text.strip("/")
 
 
 def _title(fields: dict[str, str], slug: str) -> str:
@@ -230,15 +247,6 @@ def _fenced_spans(
 
 def _inside(offset: int, spans: tuple[tuple[int, int], ...]) -> bool:
     return any(start <= offset < end for start, end in spans)
-
-
-def _page_slug(page: str) -> str:
-    text = (page or "").replace("\\", "/").strip()
-    if text.startswith("wiki/"):
-        text = text[5:]
-    if text.lower().endswith(".md"):
-        text = text[:-3]
-    return text.strip("/")
 
 
 def _sections(
