@@ -22,10 +22,14 @@ from dataclasses import dataclass
 __all__ = [
     "Bm25Index",
     "Bm25Params",
+    "DEFAULT_EXACT_BONUS",
     "LexicalDoc",
     "LexicalHit",
     "tokenize",
 ]
+
+#: The score added to an exact slug or title hit in the lexical list.
+DEFAULT_EXACT_BONUS = 10.0
 
 #: CJK ideographs (the common block and extension A).
 _CJK = "㐀-䶿一-鿿"
@@ -67,7 +71,7 @@ class Bm25Params:
     title_weight: float = 2.0
     body_weight: float = 1.0
     #: Added for visibility; the exact tier, not this number, guarantees order.
-    exact_bonus: float = 10.0
+    exact_bonus: float = DEFAULT_EXACT_BONUS
 
     def __post_init__(self) -> None:
         if self.k1 < 0:
