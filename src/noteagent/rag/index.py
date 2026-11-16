@@ -29,6 +29,7 @@ import pyarrow as pa
 from noteagent.ingest.update_index import iter_wiki_content_pages
 from noteagent.notes.store import list_notes
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.bm25 import Bm25Index, Bm25Params, LexicalDoc
 from noteagent.rag.chunker import (
     KIND_NOTE,
     KIND_WIKI,
@@ -320,6 +321,48 @@ class RetrievalIndex:
             chunks=chunk_count,
         )
 
+    def lexical_index(
+        self, *, params: Bm25Params | None = None
+    ) -> Bm25Index:
+        """Build the in-memory BM25F index from the stored chunks.
+
+        A cold, disabled or unreadable index yields an empty lexical index; the
+        caller syncs first, then builds this once and searches it many times.
+        """
+        rows = self._stored_chunks()
+        titles = self._titles()
+        docs = [
+            LexicalDoc.from_row(
+                row, title=titles.get(str(row["page_id"]), "")
+            )
+            for row in rows
+            if self._in_scope(str(row["kind"]))
+        ]
+        return Bm25Index(docs, params=params)
+
+    def _stored_chunks(self) -> list[dict]:
+        if not self._enabled:
+            return []
+        try:
+            db = self._connect(create=False)
+            if db is None or CHUNKS_TABLE not in _table_names(db):
+                return []
+            return _rows(db.open_table(CHUNKS_TABLE))
+        except Exception:  # noqa: BLE001 - a derived index can be missing
+            return []
+
+    def _titles(self) -> dict[str, str]:
+        return {
+            slug: title for slug, _text, title in self._wiki_pages()
+        }
+
+    def _wiki_pages(self) -> list[tuple[str, str, str]]:
+        pages: list[tuple[str, str, str]] = []
+        for relative, text in iter_wiki_content_pages(self._layout):
+            slug = wiki_slug_for_path(relative)
+            pages.append((slug, text, wiki_title(text, slug=slug)))
+        return pages
+
     def sync(self) -> SyncReport:
         """Bring the index in line with the project, page by page."""
         started = time.perf_counter()
@@ -550,9 +593,7 @@ class RetrievalIndex:
     def _current_units(self) -> tuple[_Unit, ...]:
         wiki: list[_Unit] = []
         titles: dict[str, str] = {}
-        for relative, text in iter_wiki_content_pages(self._layout):
-            slug = wiki_slug_for_path(relative)
-            title = wiki_title(text, slug=slug)
+        for slug, text, title in self._wiki_pages():
             titles[slug] = title
             chunks = chunk_wiki(
                 text, slug=slug, limits=self._limits

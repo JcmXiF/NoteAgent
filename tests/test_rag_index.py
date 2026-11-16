@@ -153,6 +153,22 @@ class FirstSyncTests(IndexCase):
         self.assertEqual(report.embedded_chunks, 0)
         self.assertEqual(report.failures, ())
 
+    def test_a_synced_index_builds_the_lexical_index(self) -> None:
+        write_page(
+            self.layout,
+            "a",
+            "Entropy",
+            "entropy measures uncertainty",
+        )
+        self.index.sync()
+
+        lexical = self.index.lexical_index()
+        hits = lexical.search("entropy")
+
+        self.assertTrue(hits)
+        self.assertEqual(hits[0].page_id, "a")
+        self.assertTrue(hits[0].exact)
+
     def test_status_is_cold_before_the_first_sync(self) -> None:
         write_page(self.layout, "a", "A", "alpha")
 
