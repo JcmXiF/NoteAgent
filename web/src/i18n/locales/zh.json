@@ -1434,6 +1434,10 @@
       "llm": {
         "notConfigured": "尚未配置模型服务。请打开设置，填写连接信息。"
       },
+      "rag": {
+        "embeddingNotConfigured": "尚未配置检索索引的 embedding 服务。请打开设置，填写服务地址和模型。",
+        "embeddingFailed": "embedding 服务没有返回可用的向量，本次搜索可能回退到词法检索。"
+      },
       "provider": {
         "notConfigured": "尚未配置网页搜索。请打开设置，选择搜索服务并填写密钥。",
         "misconfigured": "网页搜索的配置不完整，请检查一下设置。",
