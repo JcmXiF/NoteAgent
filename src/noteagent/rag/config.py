@@ -13,6 +13,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from noteagent.rag.env import read_integer, read_number
 from noteagent.settings.credentials import (
     RAG_EMBEDDING_KEY,
     CredentialStore,
@@ -153,21 +154,26 @@ def load_embedding_config(
         ),
         query_prefix=prefix,
         dim=DEFAULT_DIM,
-        batch_size=_integer(
-            source, ENV_BATCH, DEFAULT_BATCH, minimum=1
+        batch_size=read_integer(
+            source, ENV_BATCH, DEFAULT_BATCH,
+            error=EmbeddingConfigError,
         ),
-        concurrency=_integer(
-            source, ENV_CONCURRENCY, DEFAULT_CONCURRENCY, minimum=1
+        concurrency=read_integer(
+            source, ENV_CONCURRENCY, DEFAULT_CONCURRENCY,
+            error=EmbeddingConfigError,
         ),
         api_key=key,
-        retries=_integer(
-            source, ENV_RETRIES, DEFAULT_RETRIES, minimum=0
+        retries=read_integer(
+            source, ENV_RETRIES, DEFAULT_RETRIES, minimum=0,
+            error=EmbeddingConfigError,
         ),
-        query_timeout_s=_number(
-            source, ENV_QUERY_TIMEOUT, DEFAULT_QUERY_TIMEOUT
+        query_timeout_s=read_number(
+            source, ENV_QUERY_TIMEOUT, DEFAULT_QUERY_TIMEOUT,
+            error=EmbeddingConfigError,
         ),
-        page_timeout_s=_number(
-            source, ENV_PAGE_TIMEOUT, DEFAULT_PAGE_TIMEOUT
+        page_timeout_s=read_number(
+            source, ENV_PAGE_TIMEOUT, DEFAULT_PAGE_TIMEOUT,
+            error=EmbeddingConfigError,
         ),
     )
 
@@ -180,43 +186,3 @@ def _stored_key(store: CredentialStore | None) -> str:
         return (chosen.get(RAG_EMBEDDING_KEY) or "").strip()
     except CredentialStoreUnavailable:
         return ""
-
-
-def _integer(
-    source: Mapping[str, str],
-    name: str,
-    default: int,
-    *,
-    minimum: int,
-) -> int:
-    raw = source.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as err:
-        raise EmbeddingConfigError(
-            f"{name} must be an integer, got {raw!r}"
-        ) from err
-    if value < minimum:
-        raise EmbeddingConfigError(
-            f"{name} must be at least {minimum}, got {value}"
-        )
-    return value
-
-
-def _number(
-    source: Mapping[str, str], name: str, default: float
-) -> float:
-    raw = source.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError as err:
-        raise EmbeddingConfigError(
-            f"{name} must be a number, got {raw!r}"
-        ) from err
-    if value <= 0:
-        raise EmbeddingConfigError(f"{name} must be positive, got {value}")
-    return value

@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from noteagent.rag.config import EmbeddingConfigError
 from noteagent.rag.embedding import Vector, normalize_vector
 
-__all__ = ["FakeEmbedder"]
+__all__ = ["FakeEmbedder", "FakeReranker"]
 
 
 class FakeEmbedder:
@@ -48,3 +48,42 @@ class FakeEmbedder:
         return normalize_vector(
             [generator.uniform(-1.0, 1.0) for _ in range(self.dim)]
         )
+
+
+class FakeReranker:
+    """A reranker driven by a callable or a document-to-score mapping.
+
+    With neither, every document scores zero, which keeps the incoming order —
+    useful when a test only cares that the rerank path ran.
+    """
+
+    def __init__(
+        self,
+        scorer: (
+            Callable[[str, str], float] | Mapping[str, float] | None
+        ) = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self._scorer = scorer
+        self.error = error
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def rerank(
+        self, query: str, documents: Sequence[str]
+    ) -> list[float]:
+        items = tuple(documents)
+        self.calls.append((query, items))
+        if self.error is not None:
+            raise self.error
+        if callable(self._scorer):
+            return [
+                float(self._scorer(query, document))
+                for document in items
+            ]
+        if isinstance(self._scorer, Mapping):
+            return [
+                float(self._scorer.get(document, 0.0))
+                for document in items
+            ]
+        return [0.0 for _ in items]

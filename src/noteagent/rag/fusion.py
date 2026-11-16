@@ -71,6 +71,25 @@ class FusedHit:
     lexical: LexicalHit | None = None
     vector: VectorHit | None = None
 
+    @property
+    def document_text(self) -> str:
+        """What the optional reranker reads: the page name and its evidence."""
+        parts: list[str] = [self.page_id]
+        heading = ""
+        texts: list[str] = []
+        if self.lexical is not None:
+            heading = self.lexical.heading_path
+            texts.append(self.lexical.chunk_text)
+        if self.vector is not None:
+            if not heading:
+                heading = self.vector.best.heading_path
+            if self.vector.best.chunk_text not in texts:
+                texts.append(self.vector.best.chunk_text)
+        if heading:
+            parts.append(heading)
+        parts.extend(text for text in texts if text)
+        return "\n".join(part for part in parts if part)
+
 
 @dataclass(frozen=True, slots=True)
 class FusionResult:
