@@ -14,9 +14,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from noteagent.rag.bm25 import DEFAULT_EXACT_BONUS, LexicalHit
+from noteagent.rag.types import (
+    DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_RESULT_LIMIT,
+    Mode,
+    PageKey,
+)
 from noteagent.rag.vector import VectorHit
 
 __all__ = [
@@ -31,11 +37,6 @@ __all__ = [
 ]
 
 DEFAULT_K = 60
-DEFAULT_CANDIDATE_LIMIT = 50
-DEFAULT_RESULT_LIMIT = 20
-
-PageKey = tuple[str, str]
-Mode = Literal["hybrid", "lexical"]
 
 
 class _Ranked(Protocol):
@@ -89,6 +90,28 @@ class FusedHit:
             parts.append(heading)
         parts.extend(text for text in texts if text)
         return "\n".join(part for part in parts if part)
+
+    @property
+    def primary_text(self) -> str:
+        """The best evidence for this page, for the tool's excerpt."""
+        if self.lexical is not None:
+            return self.lexical.chunk_text
+        if self.vector is not None:
+            return self.vector.best.chunk_text
+        return ""
+
+    @property
+    def match_label(self) -> str:
+        """How the search line names this hit's match."""
+        if self.lexical is not None:
+            if self.exact:
+                return "title"
+            if self.lexical.matched:
+                return "+".join(self.lexical.matched)
+            return "body"
+        if self.vector is not None:
+            return "semantic"
+        return "hybrid"
 
 
 @dataclass(frozen=True, slots=True)

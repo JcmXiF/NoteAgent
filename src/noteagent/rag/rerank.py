@@ -10,20 +10,27 @@ place and record why in the result.
 from __future__ import annotations
 
 import math
-import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
 
-from noteagent.rag.env import (
-    endpoint_path,
-    read_boolean,
-    read_integer,
-    read_number,
-)
+from noteagent.rag.env import endpoint_path
 from noteagent.rag.fusion import DEFAULT_CANDIDATE_LIMIT, FusedHit
+from noteagent.rag.rerank_config import (
+    DEFAULT_TOP_N,
+    ENV_API_KEY,
+    ENV_CANDIDATES,
+    ENV_ENABLED,
+    ENV_ENDPOINT,
+    ENV_MODEL,
+    ENV_TIMEOUT,
+    ENV_TOP_N,
+    RerankConfig,
+    RerankConfigError,
+    load_rerank_config,
+)
 from noteagent.util.redact import redact
 
 __all__ = [
@@ -49,29 +56,14 @@ __all__ = [
     "rerank_candidates",
 ]
 
-DEFAULT_TOP_N = 10
-DEFAULT_TIMEOUT = 10.0
-
 REASON_DISABLED = "disabled"
 REASON_FAILED = "failed"
 REASON_NO_CANDIDATES = "no_candidates"
 REASON_TOP_N = "top_n"
 
-ENV_ENABLED = "NOTEAGENT_RAG_RERANK_ENABLED"
-ENV_ENDPOINT = "NOTEAGENT_RAG_RERANK_ENDPOINT"
-ENV_MODEL = "NOTEAGENT_RAG_RERANK_MODEL"
-ENV_CANDIDATES = "NOTEAGENT_RAG_RERANK_CANDIDATES"
-ENV_TOP_N = "NOTEAGENT_RAG_RERANK_TOP_N"
-ENV_API_KEY = "NOTEAGENT_RAG_RERANK_API_KEY"
-ENV_TIMEOUT = "NOTEAGENT_RAG_RERANK_TIMEOUT"
-
 
 class RerankError(RuntimeError):
     """The reranker could not produce a usable ordering."""
-
-
-class RerankConfigError(ValueError):
-    """The rerank settings are incomplete or contradictory."""
 
 
 class Reranker(Protocol):
@@ -80,33 +72,6 @@ class Reranker(Protocol):
     def rerank(
         self, query: str, documents: Sequence[str]
     ) -> Sequence[float]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class RerankConfig:
-    """Where the reranker is and how many candidates it sees."""
-
-    enabled: bool = False
-    endpoint: str = ""
-    model: str = ""
-    candidates: int = DEFAULT_CANDIDATE_LIMIT
-    top_n: int = DEFAULT_TOP_N
-    api_key: str = ""
-    timeout_s: float = DEFAULT_TIMEOUT
-
-    def __post_init__(self) -> None:
-        if self.candidates <= 0:
-            raise RerankConfigError(
-                "the rerank candidate count must be positive"
-            )
-        if self.top_n <= 0:
-            raise RerankConfigError(
-                "the rerank result count must be positive"
-            )
-        if self.timeout_s <= 0:
-            raise RerankConfigError(
-                "the rerank timeout must be positive"
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,33 +211,6 @@ class HttpReranker:
                 + response.text[:200]
             ) from err
         return _scores_by_index(data, len(documents))
-
-
-def load_rerank_config(
-    *, environ: Mapping[str, str] | None = None
-) -> RerankConfig:
-    """Read rerank settings; the service is off unless explicitly enabled."""
-    source = os.environ if environ is None else environ
-    return RerankConfig(
-        enabled=read_boolean(
-            source, ENV_ENABLED, False, error=RerankConfigError
-        ),
-        endpoint=source.get(ENV_ENDPOINT, "").strip(),
-        model=source.get(ENV_MODEL, "").strip(),
-        candidates=read_integer(
-            source, ENV_CANDIDATES, DEFAULT_CANDIDATE_LIMIT,
-            error=RerankConfigError,
-        ),
-        top_n=read_integer(
-            source, ENV_TOP_N, DEFAULT_TOP_N,
-            error=RerankConfigError,
-        ),
-        api_key=source.get(ENV_API_KEY, "").strip(),
-        timeout_s=read_number(
-            source, ENV_TIMEOUT, DEFAULT_TIMEOUT,
-            error=RerankConfigError,
-        ),
-    )
 
 
 def _finite_score(value: object) -> float:

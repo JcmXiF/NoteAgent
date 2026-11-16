@@ -368,6 +368,11 @@ class RetrievalIndex:
             pages.append((slug, text, wiki_title(text, slug=slug)))
         return pages
 
+    def rebuild(self) -> SyncReport:
+        """Drop the derived index and build it again from the project."""
+        self._reset()
+        return self.sync()
+
     def sync(self) -> SyncReport:
         """Bring the index in line with the project, page by page."""
         started = time.perf_counter()
