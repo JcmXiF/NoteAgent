@@ -8,11 +8,14 @@ from typing import Any
 
 from noteagent.agent.clock import SystemClock, iso_timestamp
 from noteagent.ingest.clips import (
+    RAW_PREFIX,
     ClipCollection,
     ClipStore,
     clip_store_from_dict,
     clip_store_to_dict,
     decision_to_dict,
+    durable_source_file,
+    is_preview_source_key,
     load_clip_store,
     save_clip_store,
 )
@@ -69,7 +72,7 @@ def put_clips_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, 
         )
         store = replace(store, topic_map=parsed.to_dict())
     if disk.intent != store.intent or _collections_changed(
-        disk.collections, store.collections
+        layout, disk.collections, store.collections
     ):
         # A plan answers the intent and frames it was made against. Once either
         # changes, the plan is a statement about a question nobody asked.
@@ -86,7 +89,7 @@ def _mark_human_frames(
     after: Sequence[ClipCollection],
 ) -> None:
     """Record the frames a person drew, so a later run leaves them alone."""
-    changed = _changed_sources(before, after)
+    changed = _changed_sources(layout, before, after)
     if not changed:
         return
     log = MaterialLog(layout.materials_log)
@@ -113,7 +116,9 @@ def _mark_human_frames(
 
 
 def _changed_sources(
-    before: Sequence[ClipCollection], after: Sequence[ClipCollection]
+    layout: ProjectLayout,
+    before: Sequence[ClipCollection],
+    after: Sequence[ClipCollection],
 ) -> dict[str, int]:
     """Which materials' selections changed, with how many frames each now has."""
 
@@ -126,7 +131,7 @@ def _changed_sources(
         return out
 
     old = grouped(before)
-    new = grouped(after)
+    new = grouped(_with_original_source_keys(layout, before, after))
     return {
         source: len(new.get(source, []))
         for source in set(old) | set(new)
@@ -135,22 +140,77 @@ def _changed_sources(
 
 
 def _collections_changed(
-    before: Sequence[ClipCollection], after: Sequence[ClipCollection]
+    layout: ProjectLayout,
+    before: Sequence[ClipCollection],
+    after: Sequence[ClipCollection],
 ) -> bool:
-    """Whether the selections themselves changed, ignoring their order."""
-    return _signature(before) != _signature(after)
+    """Whether the selections themselves changed, ignoring their order.
+
+    A preview key becoming the raw path its original was stored at is the same
+    selection: the blocks are the same, the original exists, and the rewrite is
+    what makes the plan compilable.
+    """
+    return _signature(before) != _signature(
+        _with_original_source_keys(layout, before, after)
+    )
+
+
+def _rewritten_collection_ids(
+    layout: ProjectLayout,
+    before: Sequence[ClipCollection],
+    after: Sequence[ClipCollection],
+) -> set[str]:
+    """Collections whose key became a stored raw path, with the same identity.
+
+    The frontend knows the exact pair it wrote; the core keeps only the identity
+    a selection has (its blocks, round and target) and that the path is a durable
+    original. A preview key that points at nothing stored is not a rewrite.
+    """
+    old = {collection.id: collection for collection in before}
+    out: set[str] = set()
+    for collection in after:
+        prior = old.get(collection.id)
+        if prior is None or prior.source_key == collection.source_key:
+            continue
+        if not is_preview_source_key(prior.source_key):
+            continue
+        if not collection.source_key.startswith(RAW_PREFIX):
+            continue
+        if durable_source_file(layout, collection.source_key) is None:
+            continue
+        if _selection_identity(prior) == _selection_identity(collection):
+            out.add(collection.id)
+    return out
+
+
+def _selection_identity(
+    collection: ClipCollection,
+) -> tuple[object, ...]:
+    """What a selection is, apart from where its original is kept."""
+    return (collection.block_ids, collection.round_id, collection.target_slug)
+
+
+def _with_original_source_keys(
+    layout: ProjectLayout,
+    before: Sequence[ClipCollection],
+    after: Sequence[ClipCollection],
+) -> list[ClipCollection]:
+    """The after side, with a rewritten key read under the key it came from."""
+    rewritten = _rewritten_collection_ids(layout, before, after)
+    old = {collection.id: collection for collection in before}
+    return [
+        replace(collection, source_key=old[collection.id].source_key)
+        if collection.id in rewritten
+        else collection
+        for collection in after
+    ]
 
 
 def _signature(
     collections: Sequence[ClipCollection],
 ) -> dict[str, tuple[object, ...]]:
     return {
-        collection.id: (
-            collection.source_key,
-            collection.block_ids,
-            collection.round_id,
-            collection.target_slug,
-        )
+        collection.id: (collection.source_key, *_selection_identity(collection))
         for collection in collections
     }
 
