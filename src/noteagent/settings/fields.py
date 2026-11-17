@@ -58,6 +58,24 @@ F_RAG_CONCURRENCY = Field(
 F_RAG_EMBEDDING_KEY = Field(
     "rag.embedding.apiKey", "NOTEAGENT_RAG_EMBEDDING_API_KEY"
 )
+F_RAG_RERANK_ENABLED = Field(
+    "rag.rerank.enabled", "NOTEAGENT_RAG_RERANK_ENABLED"
+)
+F_RAG_RERANK_ENDPOINT = Field(
+    "rag.rerank.endpoint", "NOTEAGENT_RAG_RERANK_ENDPOINT"
+)
+F_RAG_RERANK_MODEL = Field(
+    "rag.rerank.model", "NOTEAGENT_RAG_RERANK_MODEL"
+)
+F_RAG_RERANK_CANDIDATES = Field(
+    "rag.rerank.candidates", "NOTEAGENT_RAG_RERANK_CANDIDATES"
+)
+F_RAG_RERANK_TOP_N = Field(
+    "rag.rerank.topN", "NOTEAGENT_RAG_RERANK_TOP_N"
+)
+F_RAG_RERANK_KEY = Field(
+    "rag.rerank.apiKey", "NOTEAGENT_RAG_RERANK_API_KEY"
+)
 
 FIELDS = (
     F_BASE,
@@ -81,6 +99,12 @@ FIELDS = (
     F_RAG_BATCH,
     F_RAG_CONCURRENCY,
     F_RAG_EMBEDDING_KEY,
+    F_RAG_RERANK_ENABLED,
+    F_RAG_RERANK_ENDPOINT,
+    F_RAG_RERANK_MODEL,
+    F_RAG_RERANK_CANDIDATES,
+    F_RAG_RERANK_TOP_N,
+    F_RAG_RERANK_KEY,
 )
 
 MANAGED_ENV_NAMES = frozenset(field.env for field in FIELDS)
@@ -104,6 +128,12 @@ __all__ = [
     "F_RAG_EMBEDDING_MODEL",
     "F_RAG_ENABLED",
     "F_RAG_QUERY_PREFIX",
+    "F_RAG_RERANK_CANDIDATES",
+    "F_RAG_RERANK_ENABLED",
+    "F_RAG_RERANK_ENDPOINT",
+    "F_RAG_RERANK_KEY",
+    "F_RAG_RERANK_MODEL",
+    "F_RAG_RERANK_TOP_N",
     "F_SEARCH_MODE",
     "F_SEARCH_KEY",
     "F_SEARCH_TIMEOUT",

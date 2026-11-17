@@ -86,9 +86,10 @@ without touching the saved settings.
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
 
-The retrieval switch and the embedding service settings (address, model, query prefix, batch,
-concurrency and key) are also on the settings screen, under Retrieval. The remaining RAG variables
-are read from the environment only, and a value set there still wins over the saved document.
+The retrieval switch, the embedding service settings (address, model, query prefix, batch,
+concurrency and key) and the optional reranker are also on the settings screen, under Retrieval.
+The remaining RAG variables (retry and timeout controls) are read from the environment only, and a
+value set there still wins over the saved document.
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
@@ -128,7 +129,8 @@ derived index instead of the full-text scan:
   whose slug or title matches exactly ranks first unless the optional reranker changes the order.
 - The embedding service is a local or self-hosted OpenAI-compatible `/v1/embeddings` endpoint
   (Ollama, LM Studio, vLLM, TEI). No model is bundled with the app. The optional reranker is a
-  Cohere-compatible `/rerank` endpoint; a TEI-style result list is accepted too.
+  Cohere-compatible `/rerank` endpoint; a TEI-style result list is accepted too. It is off by
+  default; turn it on under Settings → Retrieval (or with `NOTEAGENT_RAG_RERANK_ENABLED`).
 - Only wiki content pages are indexed and sent to the service. `raw/` and `notes/` never reach it;
   notes are used only by offline experiments.
 - A cold or stale index returns the old lexical result at once and schedules a sync. A service

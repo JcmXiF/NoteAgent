@@ -56,6 +56,14 @@ const SAVED: InstallSettings = {
       concurrency: 1,
       apiKeySet: false,
     },
+    rerank: {
+      enabled: false,
+      endpoint: "",
+      model: "",
+      candidates: 50,
+      topN: 10,
+      apiKeySet: false,
+    },
   },
   extractMedia: true,
   locked: [],
@@ -107,6 +115,15 @@ const RAG_EMBEDDING = {
   apiKeySet: false,
 };
 
+const RAG_RERANK = {
+  enabled: false,
+  endpoint: "",
+  model: "",
+  candidates: 50,
+  topN: 10,
+  apiKeySet: false,
+};
+
 const RAG_DRAFT = {
   enabled: true,
   endpoint: "http://localhost:8080/v1",
@@ -116,6 +133,13 @@ const RAG_DRAFT = {
   concurrency: "1",
   apiKey: "",
   clearApiKey: false,
+  rerankEnabled: false,
+  rerankEndpoint: "",
+  rerankModel: "",
+  rerankCandidates: "50",
+  rerankTopN: "10",
+  rerankApiKey: "",
+  clearRerankApiKey: false,
 };
 
 describe("the retrieval form", () => {
@@ -165,8 +189,102 @@ describe("the retrieval form", () => {
     expect(ragProblems(draft, ["rag.embedding.batch"])).toEqual([]);
   });
 
+  it("needs a service before rerank can be on", () => {
+    expect(ragProblems({ ...RAG_DRAFT, rerankEnabled: true })).toEqual([
+      "settings.invalid.ragRerankEndpoint",
+      "settings.invalid.ragRerankModel",
+    ]);
+  });
+
+  it("checks rerank candidates and topN", () => {
+    const draft = {
+      ...RAG_DRAFT,
+      rerankEnabled: true,
+      rerankEndpoint: "http://localhost:8081/v1",
+      rerankModel: "r",
+      rerankCandidates: "20",
+      rerankTopN: "25",
+    };
+    expect(ragProblems(draft)).toEqual(["settings.invalid.ragRerankTopN"]);
+    expect(
+      ragProblems({ ...draft, rerankCandidates: "501" }),
+    ).toEqual(["settings.invalid.ragRerankCandidates"]);
+    expect(
+      ragProblems(
+        { ...draft, rerankCandidates: "0" },
+        ["rag.rerank.candidates"],
+      ),
+    ).toEqual([]);
+    // The numbers are visible even while rerank is off.
+    expect(
+      ragProblems({ ...RAG_DRAFT, rerankCandidates: "0" }),
+    ).toEqual(["settings.invalid.ragRerankCandidates"]);
+    // Both locked: the pair cannot be corrected, so it must not block.
+    expect(
+      ragProblems(
+        { ...draft, rerankCandidates: "5", rerankTopN: "10" },
+        ["rag.rerank.candidates", "rag.rerank.topN"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("saves rerank changes whether it is on or off", () => {
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          rerankEnabled: true,
+          rerankEndpoint: "http://localhost:8081/v1",
+          rerankModel: "r",
+          rerankCandidates: "20",
+          rerankTopN: "5",
+          rerankApiKey: "secret",
+        },
+        saved,
+      ),
+    ).toEqual({
+      rag: {
+        rerank: {
+          enabled: true,
+          endpoint: "http://localhost:8081/v1",
+          model: "r",
+          candidates: 20,
+          topN: 5,
+          apiKey: "secret",
+        },
+      },
+    });
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          rerankEnabled: false,
+          rerankEndpoint: "http://other/v1",
+        },
+        { ...saved, rerank: { ...RAG_RERANK, enabled: true } },
+      ),
+    ).toEqual({
+      rag: { rerank: { enabled: false, endpoint: "http://other/v1" } },
+    });
+    expect(
+      ragDirty(
+        { ...RAG_DRAFT, rerankEndpoint: "http://other/v1" },
+        saved,
+      ),
+    ).toBe(true);
+  });
+
   it("sends only the service fields that changed while the switch is on", () => {
-    const saved = { enabled: true, embedding: RAG_EMBEDDING };
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
     expect(
       ragPatch(
         { ...RAG_DRAFT, endpoint: "http://localhost:8080/v1/" },
@@ -179,7 +297,11 @@ describe("the retrieval form", () => {
   });
 
   it("sends the advanced values and a key when they changed", () => {
-    const saved = { enabled: true, embedding: RAG_EMBEDDING };
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
     expect(
       ragPatch(
         {
@@ -204,7 +326,11 @@ describe("the retrieval form", () => {
     expect(
       ragPatch(
         { ...RAG_DRAFT, clearApiKey: true },
-        { enabled: true, embedding: { ...RAG_EMBEDDING, apiKeySet: true } },
+        {
+          enabled: true,
+          embedding: { ...RAG_EMBEDDING, apiKeySet: true },
+          rerank: RAG_RERANK,
+        },
       ),
     ).toEqual({ rag: { embedding: { clearApiKey: true } } });
   });

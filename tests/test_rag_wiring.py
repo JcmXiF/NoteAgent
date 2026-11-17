@@ -122,6 +122,46 @@ class SettingsWiringTests(unittest.TestCase):
 
         self.assertIsInstance(backend, RagSearchBackend)
 
+    def test_a_saved_reranker_reaches_the_next_run(self) -> None:
+        with rag_env(
+            **{
+                "NOTEAGENT_RAG_EMBEDDING_API_KEY": "",
+                "NOTEAGENT_RAG_RERANK_API_KEY": "",
+            }
+        ):
+            self._save(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://fake/v1",
+                            "model": "fake-model",
+                        },
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://fake-rerank/v1",
+                            "model": "fake-rerank",
+                            "candidates": 20,
+                            "topN": 5,
+                        },
+                    }
+                }
+            )
+            backend = rag_backend(self.layout)
+
+            self.assertIsInstance(backend, RagSearchBackend)
+            self.assertTrue(backend.settings.rerank.enabled)
+            self.assertEqual(
+                backend.settings.rerank.endpoint, "http://fake-rerank/v1"
+            )
+            self.assertEqual(backend.settings.rerank.model, "fake-rerank")
+            self.assertEqual(backend.settings.rerank.candidates, 20)
+            self.assertEqual(backend.settings.rerank.top_n, 5)
+
+            self._save({"rag": {"rerank": {"enabled": False}}})
+            backend = rag_backend(self.layout)
+            self.assertFalse(backend.settings.rerank.enabled)
+
     def test_turning_the_switch_off_returns_the_lexical_path(self) -> None:
         with rag_env(
             **{

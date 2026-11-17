@@ -9,15 +9,17 @@ import type {
   InstallSettings,
   ProfileSettings,
   RagEmbeddingSettings,
+  RagRerankSettings,
   RagSettings,
 } from "@/lib/install-settings";
 
 export function ragSettings(
-  over: Partial<Omit<RagSettings, "embedding">> & {
+  over: Partial<Omit<RagSettings, "embedding" | "rerank">> & {
     embedding?: Partial<RagEmbeddingSettings>;
+    rerank?: Partial<RagRerankSettings>;
   } = {},
 ): RagSettings {
-  const { embedding, ...rest } = over;
+  const { embedding, rerank, ...rest } = over;
   return {
     enabled: false,
     embedding: {
@@ -28,6 +30,15 @@ export function ragSettings(
       concurrency: 1,
       apiKeySet: false,
       ...embedding,
+    },
+    rerank: {
+      enabled: false,
+      endpoint: "",
+      model: "",
+      candidates: 50,
+      topN: 10,
+      apiKeySet: false,
+      ...rerank,
     },
     ...rest,
   };

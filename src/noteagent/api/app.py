@@ -254,9 +254,20 @@ class RagEmbeddingSettingsBody(BaseModel):
     clearApiKey: bool = False
 
 
+class RagRerankSettingsBody(BaseModel):
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    candidates: int | None = None
+    topN: int | None = None
+    apiKey: str | None = None
+    clearApiKey: bool = False
+
+
 class RagSettingsBody(BaseModel):
     enabled: bool | None = None
     embedding: RagEmbeddingSettingsBody | None = None
+    rerank: RagRerankSettingsBody | None = None
 
 
 class RagProbeBody(BaseModel):

@@ -23,6 +23,8 @@ from noteagent.rag.config import (
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
     DEFAULT_QUERY_PREFIX,
 )
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.credentials import CredentialStoreUnavailable
 from noteagent.settings.fields import (
     F_BASE,
@@ -41,6 +43,12 @@ from noteagent.settings.fields import (
     F_RAG_EMBEDDING_MODEL,
     F_RAG_ENABLED,
     F_RAG_QUERY_PREFIX,
+    F_RAG_RERANK_CANDIDATES,
+    F_RAG_RERANK_ENABLED,
+    F_RAG_RERANK_ENDPOINT,
+    F_RAG_RERANK_KEY,
+    F_RAG_RERANK_MODEL,
+    F_RAG_RERANK_TOP_N,
     F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
@@ -87,6 +95,12 @@ _VALUE_FIELDS: tuple[tuple[Field, str], ...] = (
     (F_RAG_BATCH, "rag_batch"),
     (F_RAG_CONCURRENCY, "rag_concurrency"),
     (F_RAG_EMBEDDING_KEY, "rag_embedding_key"),
+    (F_RAG_RERANK_ENABLED, "rag_rerank_enabled"),
+    (F_RAG_RERANK_ENDPOINT, "rag_rerank_endpoint"),
+    (F_RAG_RERANK_MODEL, "rag_rerank_model"),
+    (F_RAG_RERANK_CANDIDATES, "rag_rerank_candidates"),
+    (F_RAG_RERANK_TOP_N, "rag_rerank_top_n"),
+    (F_RAG_RERANK_KEY, "rag_rerank_key"),
 )
 
 #: Names this module wrote into the process environment. A value it wrote is
@@ -140,6 +154,12 @@ class Effective:
     rag_batch: Value
     rag_concurrency: Value
     rag_embedding_key: Value
+    rag_rerank_enabled: Value
+    rag_rerank_endpoint: Value
+    rag_rerank_model: Value
+    rag_rerank_candidates: Value
+    rag_rerank_top_n: Value
+    rag_rerank_key: Value
     keychain_available: bool
 
     def sources(self) -> dict[str, str]:
@@ -225,8 +245,14 @@ def resolve(
     stored_rag_key, rag_available = _read_secret(
         store.get_rag_embedding_key, store
     )
+    stored_rerank_key, rerank_available = _read_secret(
+        store.get_rag_rerank_key, store
+    )
     keychain_available = (
-        keychain_available and search_available and rag_available
+        keychain_available
+        and search_available
+        and rag_available
+        and rerank_available
     )
 
     generation = config.generation
@@ -373,6 +399,52 @@ def resolve(
         "rag_embedding_key": _secret(
             F_RAG_EMBEDDING_KEY.env,
             stored_rag_key,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_enabled": _plain(
+            F_RAG_RERANK_ENABLED.env,
+            "1" if config.rag.rerank.enabled else "0",
+            "0",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_endpoint": _plain(
+            F_RAG_RERANK_ENDPOINT.env,
+            config.rag.rerank.endpoint,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_model": _plain(
+            F_RAG_RERANK_MODEL.env,
+            config.rag.rerank.model,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_candidates": _plain(
+            F_RAG_RERANK_CANDIDATES.env,
+            str(config.rag.rerank.candidates),
+            str(DEFAULT_CANDIDATE_LIMIT),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_top_n": _plain(
+            F_RAG_RERANK_TOP_N.env,
+            str(config.rag.rerank.top_n),
+            str(DEFAULT_TOP_N),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_key": _secret(
+            F_RAG_RERANK_KEY.env,
+            stored_rerank_key,
             process_keys=keys,
             environ=source,
         ),

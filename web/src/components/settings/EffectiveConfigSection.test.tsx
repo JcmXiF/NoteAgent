@@ -69,6 +69,14 @@ const EFFECTIVE: Partial<InstallSettings> = {
       concurrency: 2,
       apiKeySet: true,
     },
+    rerank: {
+      enabled: true,
+      endpoint: "http://localhost:8081/v1",
+      model: "rerank-model",
+      candidates: 20,
+      topN: 5,
+      apiKeySet: true,
+    },
   }),
   extractMedia: false,
   locked: ["llm.temperature"],
@@ -96,6 +104,12 @@ const EFFECTIVE: Partial<InstallSettings> = {
     "rag.embedding.batch": "config",
     "rag.embedding.concurrency": "default",
     "rag.embedding.apiKey": "keychain",
+    "rag.rerank.enabled": "config",
+    "rag.rerank.endpoint": "config",
+    "rag.rerank.model": "config",
+    "rag.rerank.candidates": "config",
+    "rag.rerank.topN": "default",
+    "rag.rerank.apiKey": "keychain",
     extractMedia: "default",
   },
 };
@@ -134,6 +148,10 @@ describe("the effective configuration", () => {
     expect(text).toContain("Q: {query}");
     expect(text).toContain("嵌入批量");
     expect(text).toContain("并发数");
+    expect(text).toContain("重排服务地址");
+    expect(text).toContain("http://localhost:8081/v1");
+    expect(text).toContain("候选数");
+    expect(text).toContain("保留数");
     // A key is reported as stored, never as text.
     expect(text).toContain("已保存");
     // The four sources the core can name.

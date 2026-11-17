@@ -100,10 +100,21 @@ export type RagEmbeddingSettings = {
   apiKeySet: boolean;
 };
 
-/** The install-wide hybrid-retrieval switch and the service it calls. */
+export type RagRerankSettings = {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  candidates: number;
+  topN: number;
+  /** A key is stored; the key itself is never sent back. */
+  apiKeySet: boolean;
+};
+
+/** The install-wide hybrid-retrieval switch and the services it calls. */
 export type RagSettings = {
   enabled: boolean;
   embedding: RagEmbeddingSettings;
+  rerank: RagRerankSettings;
 };
 
 export type InstallSettings = {
@@ -160,6 +171,13 @@ export type RagDraft = {
   concurrency: string;
   apiKey: string;
   clearApiKey: boolean;
+  rerankEnabled: boolean;
+  rerankEndpoint: string;
+  rerankModel: string;
+  rerankCandidates: string;
+  rerankTopN: string;
+  rerankApiKey: string;
+  clearRerankApiKey: boolean;
 };
 
 export type SettingsPatch = {
@@ -505,6 +523,13 @@ export function ragDraftFrom(rag: RagSettings): RagDraft {
     concurrency: String(rag.embedding.concurrency),
     apiKey: "",
     clearApiKey: false,
+    rerankEnabled: rag.rerank.enabled,
+    rerankEndpoint: rag.rerank.endpoint,
+    rerankModel: rag.rerank.model,
+    rerankCandidates: String(rag.rerank.candidates),
+    rerankTopN: String(rag.rerank.topN),
+    rerankApiKey: "",
+    clearRerankApiKey: false,
   };
 }
 
@@ -520,6 +545,23 @@ const RAG_NUMBER_FIELDS = [
     min: 1,
     max: 8,
     problem: "settings.invalid.ragConcurrency",
+  },
+] as const;
+
+const RAG_RERANK_NUMBER_FIELDS = [
+  {
+    key: "rerankCandidates",
+    saved: "candidates",
+    min: 1,
+    max: 500,
+    problem: "settings.invalid.ragRerankCandidates",
+  },
+  {
+    key: "rerankTopN",
+    saved: "topN",
+    min: 1,
+    max: 100,
+    problem: "settings.invalid.ragRerankTopN",
   },
 ] as const;
 
@@ -547,6 +589,38 @@ export function ragProblems(
     }
   }
   if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
+  // The rerank fields are visible even while rerank is off, so a service that
+  // is off may stay empty; the numbers and the key are always usable.
+  if (draft.rerankEnabled) {
+    if (!validBaseUrl(draft.rerankEndpoint)) {
+      problems.push("settings.invalid.ragRerankEndpoint");
+    }
+    if (!draft.rerankModel.trim()) {
+      problems.push("settings.invalid.ragRerankModel");
+    }
+  }
+  for (const field of RAG_RERANK_NUMBER_FIELDS) {
+    if (isLocked(locked, `rag.rerank.${field.saved}`)) continue;
+    if (!integerInRange(draft[field.key], field.min, field.max)) {
+      problems.push(field.problem);
+    }
+  }
+  // Both numbers owned by the environment cannot be corrected here, so the
+  // pair must not hold an unrelated save hostage.
+  const rerankNumbersLocked =
+    isLocked(locked, "rag.rerank.candidates") &&
+    isLocked(locked, "rag.rerank.topN");
+  if (
+    !rerankNumbersLocked &&
+    integerInRange(draft.rerankCandidates, 1, 500) &&
+    integerInRange(draft.rerankTopN, 1, 100) &&
+    Number(draft.rerankTopN.trim()) > Number(draft.rerankCandidates.trim())
+  ) {
+    problems.push("settings.invalid.ragRerankTopN");
+  }
+  if (!validSecret(draft.rerankApiKey)) {
+    problems.push("settings.invalid.ragRerankSecret");
+  }
   return problems;
 }
 
@@ -590,7 +664,15 @@ export function ragDirty(draft: RagDraft, saved: RagSettings): boolean {
           integerDirty(draft[field.key], saved.embedding[field.key]),
         ) ||
         Boolean(draft.apiKey.trim()) ||
-        draft.clearApiKey))
+        draft.clearApiKey ||
+        draft.rerankEnabled !== saved.rerank.enabled ||
+        trimmedUrl(draft.rerankEndpoint) !== saved.rerank.endpoint ||
+        draft.rerankModel.trim() !== saved.rerank.model ||
+        RAG_RERANK_NUMBER_FIELDS.some((field) =>
+          integerDirty(draft[field.key], saved.rerank[field.saved]),
+        ) ||
+        Boolean(draft.rerankApiKey.trim()) ||
+        draft.clearRerankApiKey))
   );
 }
 
@@ -620,6 +702,31 @@ export function ragPatch(draft: RagDraft, saved: RagSettings): SettingsPatch | n
     if (draft.apiKey.trim()) embedding.apiKey = draft.apiKey.trim();
     else if (draft.clearApiKey) embedding.clearApiKey = true;
     if (Object.keys(embedding).length > 0) rag.embedding = embedding;
+
+    const rerank: Record<string, unknown> = {};
+    if (draft.rerankEnabled !== saved.rerank.enabled) {
+      rerank.enabled = draft.rerankEnabled;
+    }
+    if (trimmedUrl(draft.rerankEndpoint) !== saved.rerank.endpoint) {
+      rerank.endpoint = trimmedUrl(draft.rerankEndpoint);
+    }
+    if (draft.rerankModel.trim() !== saved.rerank.model) {
+      rerank.model = draft.rerankModel.trim();
+    }
+    for (const field of RAG_RERANK_NUMBER_FIELDS) {
+      if (
+        integerDirty(draft[field.key], saved.rerank[field.saved]) &&
+        integerInRange(draft[field.key], field.min, field.max)
+      ) {
+        rerank[field.saved] = Number(draft[field.key].trim());
+      }
+    }
+    if (draft.rerankApiKey.trim()) {
+      rerank.apiKey = draft.rerankApiKey.trim();
+    } else if (draft.clearRerankApiKey) {
+      rerank.clearApiKey = true;
+    }
+    if (Object.keys(rerank).length > 0) rag.rerank = rerank;
   }
   return Object.keys(rag).length > 0 ? { rag } : null;
 }

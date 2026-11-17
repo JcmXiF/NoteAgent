@@ -37,9 +37,12 @@ from noteagent.rag.config import (
 )
 from noteagent.rag.embedding import EmbeddingError
 from noteagent.rag.faux import FakeEmbedder
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.credentials import (
     RAG_EMBEDDING_KEY,
+    RAG_RERANK_KEY,
     SEARCH_KEY,
     llm_key,
 )
@@ -752,6 +755,197 @@ class RagSettingsTests(unittest.TestCase):
 
             with self.assertRaises(Refusal) as caught:
                 apply_install({"rag": {"embedding": {"batch": 16}}})
+            self.assertEqual(caught.exception.code, "settings.locked")
+
+
+class RerankSettingsTests(unittest.TestCase):
+    """The optional reranker shares the document, the environment and the store."""
+
+    def test_rerank_is_off_by_default_and_reports_its_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            rerank = view["rag"]["rerank"]
+            self.assertFalse(rerank["enabled"])
+            self.assertEqual(rerank["endpoint"], "")
+            self.assertEqual(rerank["model"], "")
+            self.assertEqual(rerank["candidates"], DEFAULT_CANDIDATE_LIMIT)
+            self.assertEqual(rerank["topN"], DEFAULT_TOP_N)
+            self.assertFalse(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertEqual(
+                view["sources"]["rag.rerank.candidates"], "default"
+            )
+
+    def test_rerank_values_save_and_reach_the_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "e",
+                        },
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://localhost:8081/v1",
+                            "model": "r",
+                            "candidates": 20,
+                            "topN": 5,
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(document["rag"]["rerank"]["enabled"])
+            self.assertEqual(document["rag"]["rerank"]["candidates"], 20)
+            self.assertEqual(document["rag"]["rerank"]["topN"], 5)
+
+            rerank = view["rag"]["rerank"]
+            self.assertTrue(rerank["enabled"])
+            self.assertEqual(
+                rerank["endpoint"], "http://localhost:8081/v1"
+            )
+            self.assertEqual(rerank["model"], "r")
+            self.assertEqual(rerank["candidates"], 20)
+            self.assertEqual(rerank["topN"], 5)
+            self.assertEqual(
+                view["sources"]["rag.rerank.endpoint"], "config"
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_RERANK_ENABLED"], "1")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_RERANK_CANDIDATES"], "20"
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_RERANK_TOP_N"], "5")
+
+    def test_enabling_rerank_needs_an_endpoint_and_a_model(self) -> None:
+        cases = (
+            ({"enabled": True, "model": "r"}, "rag.rerank.endpoint"),
+            (
+                {"enabled": True, "endpoint": "http://localhost:8081/v1"},
+                "rag.rerank.model",
+            ),
+        )
+        for body, field in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"rerank": body}})
+
+                    self.assertEqual(
+                        caught.exception.code, "settings.invalid"
+                    )
+                    self.assertEqual(
+                        caught.exception.params.get("field"), field
+                    )
+                    self.assertFalse(path.exists())
+
+    def test_out_of_range_rerank_numbers_are_refused(self) -> None:
+        cases = (
+            ("candidates", 0, "rag.rerank.candidates"),
+            ("candidates", 501, "rag.rerank.candidates"),
+            ("topN", 0, "rag.rerank.topN"),
+            ("topN", 101, "rag.rerank.topN"),
+        )
+        for field, value, expected in cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"rerank": {field: value}}})
+                    self.assertEqual(
+                        caught.exception.params.get("field"), expected
+                    )
+                    self.assertFalse(path.exists())
+
+    def test_top_n_must_not_exceed_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"rerank": {"candidates": 10, "topN": 11}}}
+                )
+
+            self.assertEqual(
+                caught.exception.params.get("field"), "rag.rerank.topN"
+            )
+            self.assertFalse(path.exists())
+
+    def test_changing_top_n_alone_respects_the_saved_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {"rag": {"rerank": {"candidates": 10, "topN": 5}}}
+            )
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"rerank": {"topN": 11}}})
+            self.assertEqual(
+                caught.exception.params.get("field"), "rag.rerank.topN"
+            )
+
+    def test_rerank_disabled_may_clear_the_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = apply_install(
+                {
+                    "rag": {
+                        "rerank": {
+                            "enabled": False,
+                            "endpoint": "",
+                            "model": "",
+                        }
+                    }
+                }
+            )
+            self.assertFalse(view["rag"]["rerank"]["enabled"])
+
+    def test_the_rerank_key_lives_only_in_the_credential_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            view = apply_install({"rag": {"rerank": {"apiKey": "secret"}}})
+
+            rerank = view["rag"]["rerank"]
+            self.assertTrue(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertNotIn("secret", json.dumps(view))
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_RERANK_KEY), "secret"
+            )
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_RERANK_API_KEY"), "secret"
+            )
+
+            cleared = apply_install(
+                {"rag": {"rerank": {"clearApiKey": True}}}
+            )
+            self.assertFalse(cleared["rag"]["rerank"]["apiKeySet"])
+            self.assertNotIn(RAG_RERANK_KEY, credentials.values)
+            self.assertNotIn("NOTEAGENT_RAG_RERANK_API_KEY", os.environ)
+
+    def test_a_rerank_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_RERANK_TOP_N"] = "5"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["rerank"]["topN"], 5)
+            self.assertEqual(view["sources"]["rag.rerank.topN"], "env")
+            self.assertIn("rag.rerank.topN", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"rerank": {"topN": 6}}})
             self.assertEqual(caught.exception.code, "settings.locked")
 
 
@@ -1640,6 +1834,87 @@ class SettingsApiTests(unittest.TestCase):
                         refused.json()["params"]["field"], field
                     )
             self.assertFalse(path.exists())
+
+    def test_rerank_settings_save_through_the_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://localhost:8081/v1",
+                            "model": "r",
+                            "candidates": 20,
+                            "topN": 5,
+                            "apiKey": "secret",
+                        }
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            rerank = body["rag"]["rerank"]
+            self.assertTrue(rerank["enabled"])
+            self.assertEqual(
+                rerank["endpoint"], "http://localhost:8081/v1"
+            )
+            self.assertEqual(rerank["model"], "r")
+            self.assertEqual(rerank["candidates"], 20)
+            self.assertEqual(rerank["topN"], 5)
+            self.assertTrue(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertNotIn("secret", saved.text)
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_RERANK_KEY), "secret"
+            )
+
+            cleared = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"rerank": {"clearApiKey": True}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertFalse(cleared.json()["rag"]["rerank"]["apiKeySet"])
+            self.assertNotIn(RAG_RERANK_KEY, credentials.values)
+
+    def test_bad_rerank_values_are_coded_400s(self) -> None:
+        cases = (
+            ({"enabled": True, "model": "r"}, "rag.rerank.endpoint"),
+            (
+                {"enabled": True, "endpoint": "http://localhost:8081/v1"},
+                "rag.rerank.model",
+            ),
+            ({"candidates": 0}, "rag.rerank.candidates"),
+            ({"topN": 101}, "rag.rerank.topN"),
+            ({"candidates": 10, "topN": 11}, "rag.rerank.topN"),
+        )
+        for rerank, field in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    refused = TestClient(create_app()).put(
+                        "/api/settings",
+                        json={"rag": {"rerank": rerank}},
+                    )
+                    self.assertEqual(
+                        refused.status_code, 400, refused.text
+                    )
+                    self.assertEqual(
+                        refused.json()["code"], "settings.invalid"
+                    )
+                    self.assertEqual(
+                        refused.json()["params"]["field"], field
+                    )
+                    self.assertFalse(path.exists())
 
     def test_a_stale_revision_is_a_409_with_its_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

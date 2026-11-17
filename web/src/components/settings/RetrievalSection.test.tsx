@@ -84,6 +84,26 @@ function enabledInstall(over: Partial<InstallSettings> = {}): InstallSettings {
   });
 }
 
+function rerankInstall(over: Partial<InstallSettings> = {}): InstallSettings {
+  return enabledInstall({
+    rag: ragSettings({
+      enabled: true,
+      embedding: {
+        endpoint: "http://localhost:8080/v1",
+        model: "Qwen3-Embedding-0.6B",
+      },
+      rerank: {
+        enabled: true,
+        endpoint: "http://localhost:8081/v1",
+        model: "rerank-model",
+        candidates: 20,
+        topN: 5,
+      },
+    }),
+    ...over,
+  });
+}
+
 async function draw(next: InstallSettings) {
   await act(async () => {
     root.render(<RetrievalSection install={next} onSaved={onSaved} onDirty={onDirty} />);
@@ -93,6 +113,14 @@ async function draw(next: InstallSettings) {
 function toggle(): HTMLElement {
   const found = host.querySelector<HTMLElement>('[role="checkbox"]');
   if (!found) throw new Error("no retrieval switch");
+  return found;
+}
+
+function checkbox(label: string): HTMLElement {
+  const found = host.querySelector<HTMLElement>(
+    `[role="checkbox"][aria-label="${label}"]`,
+  );
+  if (!found) throw new Error(`no checkbox: ${label}`);
   return found;
 }
 
@@ -339,6 +367,161 @@ describe("the advanced embedding settings", () => {
       typeInto(input("服务地址"), "http://other/v1");
     });
     expect(button("保存").disabled).toBe(false);
+  });
+});
+
+describe("the reranker settings", () => {
+  it("stays folded until asked and shows its fields", async () => {
+    await draw(enabledInstall());
+
+    expect(host.querySelector('input[aria-label="重排服务地址"]')).toBeNull();
+
+    await press("重排");
+
+    expect(checkbox("使用重排").getAttribute("aria-checked")).toBe("false");
+    expect(input("重排服务地址").value).toBe("");
+    expect(input("重排模型名").value).toBe("");
+    expect(input("候选数").value).toBe("50");
+    expect(input("保留数").value).toBe("10");
+  });
+
+  it("saves the rerank values and a key", async () => {
+    const next = rerankInstall({ revision: 4 });
+    vi.mocked(saveSettings).mockResolvedValue(next);
+
+    await draw(rerankInstall());
+    await press("重排");
+    act(() => {
+      typeInto(input("候选数"), "30");
+    });
+    act(() => {
+      typeInto(input("保留数"), "7");
+    });
+    act(() => {
+      typeInto(input("重排密钥"), "secret");
+    });
+    await press("保存");
+
+    expect(saveSettings).toHaveBeenCalledWith({
+      rag: {
+        rerank: {
+          candidates: 30,
+          topN: 7,
+          apiKey: "secret",
+        },
+      },
+      revision: 3,
+    });
+  });
+
+  it("needs a service before rerank can be on", async () => {
+    await draw(enabledInstall());
+    await press("重排");
+    await click(checkbox("使用重排"));
+
+    expect(host.textContent).toContain(
+      "请填写以 http:// 或 https:// 开头的重排服务地址。",
+    );
+    expect(host.textContent).toContain("请填写重排模型名。");
+    expect(button("保存").disabled).toBe(true);
+  });
+
+  it("cannot keep more results than it considers", async () => {
+    await draw(rerankInstall());
+    await press("重排");
+    act(() => {
+      typeInto(input("保留数"), "25");
+    });
+
+    expect(host.textContent).toContain(
+      "保留数需为 1 到 100 之间的整数，且不超过候选数。",
+    );
+    expect(button("保存").disabled).toBe(true);
+  });
+
+  it("can clear a saved rerank key while it is off", async () => {
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: {
+            endpoint: "http://localhost:8080/v1",
+            model: "Qwen3-Embedding-0.6B",
+          },
+          rerank: {
+            enabled: false,
+            endpoint: "http://localhost:8081/v1",
+            model: "rerank-model",
+            apiKeySet: true,
+          },
+        }),
+      }),
+    );
+    await press("重排");
+
+    expect(host.textContent).toContain("重排密钥");
+    expect(host.textContent).toContain("已保存。不填写则保持不变。");
+    await press("清除密钥");
+    await press("保存");
+
+    expect(saveSettings).toHaveBeenCalledWith({
+      rag: { rerank: { clearApiKey: true } },
+      revision: 3,
+    });
+  });
+
+  it("keeps a rerank value the environment owns read-only", async () => {
+    await draw(
+      rerankInstall({
+        locked: ["rag.rerank.candidates"],
+        sources: { "rag.rerank.candidates": "env" },
+      }),
+    );
+    await press("重排");
+
+    expect(input("候选数").disabled).toBe(true);
+    expect(host.textContent).toContain("环境变量");
+  });
+
+  it("does not block a save when both rerank numbers are locked", async () => {
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: {
+            endpoint: "http://localhost:8080/v1",
+            model: "Qwen3-Embedding-0.6B",
+          },
+          rerank: {
+            enabled: true,
+            endpoint: "http://localhost:8081/v1",
+            model: "rerank-model",
+            candidates: 5,
+            topN: 10,
+          },
+        }),
+        locked: ["rag.rerank.candidates", "rag.rerank.topN"],
+        sources: {
+          "rag.rerank.candidates": "env",
+          "rag.rerank.topN": "env",
+        },
+      }),
+    );
+    await press("重排");
+
+    expect(host.textContent).not.toContain("保留数需为");
+
+    act(() => {
+      typeInto(input("重排服务地址"), "http://other/v1");
+    });
+    expect(button("保存").disabled).toBe(false);
+  });
+
+  it("hides the reranker while retrieval is off", async () => {
+    await draw(install());
+
+    expect(host.textContent).not.toContain("使用重排");
+    expect(host.textContent).not.toContain("重排服务地址");
   });
 });
 

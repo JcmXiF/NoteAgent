@@ -44,6 +44,96 @@ const STATE_LABELS: Record<RagIndexState, string> = {
   ready: "settings.retrieval.statusReady",
 };
 
+/** One switch with its explanation, and the environment's claim on it. */
+function SwitchRow({
+  label,
+  hint,
+  checked,
+  locked,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  locked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-start gap-2">
+      <Checkbox
+        className="mt-0.5"
+        checked={checked}
+        disabled={locked}
+        aria-label={label}
+        onCheckedChange={(value) => onChange(value === true)}
+      />
+      <span className="flex flex-col gap-0.5">
+        <span className="flex items-center gap-2">
+          <span className="text-sm">{label}</span>
+          {locked ? <SourceBadge source="env" /> : null}
+        </span>
+        <span className="text-xs leading-relaxed text-muted-foreground">
+          {locked ? t("settings.locked") : hint}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** A secret input, its reveal toggle and the clear-link, for one service. */
+function KeyEditor({
+  label,
+  value,
+  locked,
+  stored,
+  clearing,
+  onChange,
+  onToggleClear,
+}: {
+  label: string;
+  value: string;
+  locked: boolean;
+  stored: boolean;
+  clearing: boolean;
+  onChange: (value: string) => void;
+  onToggleClear: () => void;
+}) {
+  const { t } = useTranslation();
+  const [show, setShow] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex gap-1">
+        <Input
+          type={show ? "text" : "password"}
+          aria-label={label}
+          value={value}
+          disabled={locked || clearing}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setShow((current) => !current)}
+        >
+          {show ? t("settings.hide") : t("settings.show")}
+        </Button>
+      </div>
+      {stored && !locked ? (
+        <button
+          type="button"
+          className="self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
+          onClick={onToggleClear}
+        >
+          {clearing ? t("settings.keepKey") : t("settings.clearKey")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Hybrid retrieval for this computer.
  *
@@ -68,7 +158,7 @@ export function RetrievalSection({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [showKey, setShowKey] = useState(false);
+  const [rerankOpen, setRerankOpen] = useState(false);
   const [status, setStatus] = useState<RagIndexStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -79,7 +169,6 @@ export function RetrievalSection({
   const savedKey = JSON.stringify(install.rag);
   useEffect(() => {
     setDraft(ragDraftFrom(install.rag));
-    setShowKey(false);
   }, [savedKey]);
 
   const refreshStatus = useCallback(async () => {
@@ -171,6 +260,7 @@ export function RetrievalSection({
 
   const toggleLocked = locked("rag.enabled");
   const keyLocked = locked("rag.embedding.apiKey");
+  const rerankKeyLocked = locked("rag.rerank.apiKey");
   const stateKey = status
     ? (STATE_LABELS[status.state] ?? "settings.retrieval.statusUnavailable")
     : "";
@@ -187,26 +277,13 @@ export function RetrievalSection({
       title={t("settings.retrieval.title")}
       intro={t("settings.retrieval.intro")}
     >
-      <div className="flex items-start gap-2">
-        <Checkbox
-          className="mt-0.5"
-          checked={draft.enabled}
-          disabled={toggleLocked}
-          aria-label={t("settings.retrieval.enabled")}
-          onCheckedChange={(checked) => edit({ enabled: checked === true })}
-        />
-        <span className="flex flex-col gap-0.5">
-          <span className="flex items-center gap-2">
-            <span className="text-sm">{t("settings.retrieval.enabled")}</span>
-            {toggleLocked ? <SourceBadge source="env" /> : null}
-          </span>
-          <span className="text-xs leading-relaxed text-muted-foreground">
-            {toggleLocked
-              ? t("settings.locked")
-              : t("settings.retrieval.enabledHint")}
-          </span>
-        </span>
-      </div>
+      <SwitchRow
+        label={t("settings.retrieval.enabled")}
+        hint={t("settings.retrieval.enabledHint")}
+        checked={draft.enabled}
+        locked={toggleLocked}
+        onChange={(checked) => edit({ enabled: checked })}
+      />
 
       {draft.enabled ? (
         <>
@@ -317,45 +394,22 @@ export function RetrievalSection({
                 error={problem("settings.invalid.secret")}
                 locked={keyLocked}
               >
-                <div className="flex gap-1">
-                  <Input
-                    type={showKey ? "text" : "password"}
-                    aria-label={t("settings.retrieval.apiKey")}
-                    value={draft.apiKey}
-                    disabled={keyLocked || draft.clearApiKey}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onChange={(event) =>
-                      edit({
-                        apiKey: event.target.value,
-                        clearApiKey: false,
-                      })
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setShowKey((value) => !value)}
-                  >
-                    {showKey ? t("settings.hide") : t("settings.show")}
-                  </Button>
-                </div>
-                {install.rag.embedding.apiKeySet && !keyLocked ? (
-                  <button
-                    type="button"
-                    className="self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
-                    onClick={() =>
-                      edit({
-                        clearApiKey: !draft.clearApiKey,
-                        apiKey: "",
-                      })
-                    }
-                  >
-                    {draft.clearApiKey
-                      ? t("settings.keepKey")
-                      : t("settings.clearKey")}
-                  </button>
-                ) : null}
+                <KeyEditor
+                  label={t("settings.retrieval.apiKey")}
+                  value={draft.apiKey}
+                  locked={keyLocked}
+                  stored={install.rag.embedding.apiKeySet}
+                  clearing={draft.clearApiKey}
+                  onChange={(value) =>
+                    edit({ apiKey: value, clearApiKey: false })
+                  }
+                  onToggleClear={() =>
+                    edit({
+                      clearApiKey: !draft.clearApiKey,
+                      apiKey: "",
+                    })
+                  }
+                />
               </Field>
             </FieldGroup>
           ) : null}
@@ -363,6 +417,133 @@ export function RetrievalSection({
           <p className="text-xs leading-relaxed text-muted-foreground">
             {t("settings.retrieval.outbound")}
           </p>
+
+          <Button
+            type="button"
+            variant="ghost"
+            className="justify-start px-0"
+            aria-expanded={rerankOpen}
+            onClick={() => setRerankOpen((open) => !open)}
+          >
+            {t("settings.retrieval.rerank")}
+          </Button>
+
+          {rerankOpen ? (
+            <FieldGroup title={t("settings.retrieval.groupRerank")}>
+              <SwitchRow
+                label={t("settings.retrieval.rerankEnabled")}
+                hint={t("settings.retrieval.rerankEnabledHint")}
+                checked={draft.rerankEnabled}
+                locked={locked("rag.rerank.enabled")}
+                onChange={(checked) =>
+                  edit({ rerankEnabled: checked })
+                }
+              />
+
+              <Field
+                label={t("settings.retrieval.rerankEndpoint")}
+                hint={t("settings.retrieval.rerankEndpointHint")}
+                error={problem("settings.invalid.ragRerankEndpoint")}
+                locked={locked("rag.rerank.endpoint")}
+              >
+                <Input
+                  aria-label={t("settings.retrieval.rerankEndpoint")}
+                  value={draft.rerankEndpoint}
+                  disabled={locked("rag.rerank.endpoint")}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(event) =>
+                    edit({ rerankEndpoint: event.target.value })
+                  }
+                />
+              </Field>
+                  <Field
+                    label={t("settings.retrieval.rerankModel")}
+                    hint={t("settings.retrieval.rerankModelHint")}
+                    error={problem("settings.invalid.ragRerankModel")}
+                    locked={locked("rag.rerank.model")}
+                  >
+                    <Input
+                      aria-label={t("settings.retrieval.rerankModel")}
+                      value={draft.rerankModel}
+                      disabled={locked("rag.rerank.model")}
+                      spellCheck={false}
+                      autoComplete="off"
+                      onChange={(event) =>
+                        edit({ rerankModel: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label={t("settings.retrieval.candidates")}
+                    hint={t("settings.retrieval.candidatesHint")}
+                    error={problem(
+                      "settings.invalid.ragRerankCandidates",
+                    )}
+                    locked={locked("rag.rerank.candidates")}
+                  >
+                    <Input
+                      aria-label={t("settings.retrieval.candidates")}
+                      value={draft.rerankCandidates}
+                      inputMode="numeric"
+                      disabled={locked("rag.rerank.candidates")}
+                      onChange={(event) =>
+                        edit({
+                          rerankCandidates: event.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label={t("settings.retrieval.topN")}
+                    hint={t("settings.retrieval.topNHint")}
+                    error={problem("settings.invalid.ragRerankTopN")}
+                    locked={locked("rag.rerank.topN")}
+                  >
+                    <Input
+                      aria-label={t("settings.retrieval.topN")}
+                      value={draft.rerankTopN}
+                      inputMode="numeric"
+                      disabled={locked("rag.rerank.topN")}
+                      onChange={(event) =>
+                        edit({ rerankTopN: event.target.value })
+                      }
+                    />
+                  </Field>
+              <Field
+                label={t("settings.retrieval.rerankApiKey")}
+                hint={
+                  draft.clearRerankApiKey
+                    ? t("settings.retrieval.apiKeyClearing")
+                    : install.rag.rerank.apiKeySet
+                      ? t("settings.retrieval.apiKeyKeep")
+                      : t("settings.retrieval.apiKeyMissing")
+                }
+                error={problem("settings.invalid.ragRerankSecret")}
+                locked={rerankKeyLocked}
+              >
+                <KeyEditor
+                  label={t("settings.retrieval.rerankApiKey")}
+                  value={draft.rerankApiKey}
+                  locked={rerankKeyLocked}
+                  stored={install.rag.rerank.apiKeySet}
+                  clearing={draft.clearRerankApiKey}
+                  onChange={(value) =>
+                    edit({
+                      rerankApiKey: value,
+                      clearRerankApiKey: false,
+                    })
+                  }
+                  onToggleClear={() =>
+                    edit({
+                      clearRerankApiKey: !draft.clearRerankApiKey,
+                      rerankApiKey: "",
+                    })
+                  }
+                />
+              </Field>
+            </FieldGroup>
+          ) : null}
         </>
       ) : null}
 

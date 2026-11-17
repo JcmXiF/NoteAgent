@@ -39,6 +39,7 @@ from noteagent.rag.rerank_config import DEFAULT_TOP_N
 from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.credentials import (
     RAG_EMBEDDING_KEY,
+    RAG_RERANK_KEY,
     SEARCH_KEY,
     CredentialStore,
     CredentialStoreUnavailable,
@@ -671,6 +672,15 @@ class ConfigStore:
 
     def delete_rag_embedding_key(self) -> None:
         self._delete(RAG_EMBEDDING_KEY)
+
+    def get_rag_rerank_key(self) -> str:
+        return self._get(RAG_RERANK_KEY)
+
+    def set_rag_rerank_key(self, value: str) -> None:
+        self._set(RAG_RERANK_KEY, value)
+
+    def delete_rag_rerank_key(self) -> None:
+        self._delete(RAG_RERANK_KEY)
 
     def delete_profile(self, profile_id: str, *, expected_revision: int | None = None) -> Config:
         """Remove a profile, its key and its claim on the active slot.

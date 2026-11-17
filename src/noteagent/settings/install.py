@@ -55,6 +55,8 @@ from noteagent.rag.config import (
 )
 from noteagent.rag.embedding import EmbeddingError, OpenAIEmbeddingClient
 from noteagent.rag.env import parse_boolean
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
     CredentialStore,
@@ -78,6 +80,12 @@ from noteagent.settings.fields import (
     F_RAG_EMBEDDING_MODEL,
     F_RAG_ENABLED,
     F_RAG_QUERY_PREFIX,
+    F_RAG_RERANK_CANDIDATES,
+    F_RAG_RERANK_ENABLED,
+    F_RAG_RERANK_ENDPOINT,
+    F_RAG_RERANK_KEY,
+    F_RAG_RERANK_MODEL,
+    F_RAG_RERANK_TOP_N,
     F_SEARCH_KEY,
     F_SEARCH_MODE,
     F_SEARCH_TIMEOUT,
@@ -297,6 +305,29 @@ def clean_rag_concurrency(value: object) -> int:
     )
 
 
+def clean_rag_rerank_endpoint(value: object) -> str:
+    """The rerank service address. Empty clears it; the switch decides."""
+    return _clean_url(
+        value,
+        F_RAG_RERANK_ENDPOINT.id,
+        "rerank endpoint",
+        allow_empty=True,
+    )
+
+
+def clean_rag_rerank_model(value: object) -> str:
+    """The rerank model name. Empty clears it; the switch decides."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_RERANK_MODEL.id, "rerank model is not text")
+    text = value.strip()
+    if len(text) > 200 or any(ch in text for ch in "\r\n"):
+        raise _invalid(
+            F_RAG_RERANK_MODEL.id,
+            "rerank model is not a single line",
+        )
+    return text
+
+
 def clean_model(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid(F_MODEL.id, "model is not text")
@@ -472,6 +503,32 @@ class _SearchPatch:
 
 
 @dataclass(frozen=True, slots=True)
+class _RerankPatch:
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    candidates: int | None = None
+    top_n: int | None = None
+    #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
+    secret: str | None = None
+
+    @property
+    def changes_service(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.enabled, self.endpoint, self.model)
+        )
+
+    @property
+    def changes_numbers(self) -> bool:
+        return self.candidates is not None or self.top_n is not None
+
+    @property
+    def changes_config(self) -> bool:
+        return self.changes_service or self.changes_numbers
+
+
+@dataclass(frozen=True, slots=True)
 class _RagPatch:
     enabled: bool | None = None
     endpoint: str | None = None
@@ -481,11 +538,23 @@ class _RagPatch:
     concurrency: int | None = None
     #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
     secret: str | None = None
+    rerank: _RerankPatch = _RerankPatch()
 
 
 def _unchanged(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> bool:
     compare = normalise or (lambda value: value)
     return compare(_current(field) or "") == compare(new)
+
+
+def _read_enabled(body: Mapping[str, Any], field: Field) -> bool | None:
+    """A switch in a save request, or ``None`` when the request leaves it."""
+    if body.get("enabled") is None:
+        return None
+    value = body["enabled"]
+    if not isinstance(value, bool):
+        raise _invalid(field.id, "enabled is not true or false")
+    _check_locked(field, _bool_text(value), normalise=_bool_text)
+    return value
 
 
 def _read_secret_patch(
@@ -656,16 +725,14 @@ def _validate_rag(patch: _RagPatch, context: _Context) -> None:
         if patch.query_prefix is not None
         else context.effective.rag_query_prefix.text
     )
-    if not endpoint:
-        raise _invalid(
-            F_RAG_EMBEDDING_ENDPOINT.id,
-            "RAG is on, so an embedding endpoint is required",
-        )
-    if not model:
-        raise _invalid(
-            F_RAG_EMBEDDING_MODEL.id,
-            "RAG is on, so an embedding model is required",
-        )
+    _require_service(
+        enabled,
+        endpoint,
+        model,
+        endpoint_field=F_RAG_EMBEDDING_ENDPOINT,
+        model_field=F_RAG_EMBEDDING_MODEL,
+        noun="RAG",
+    )
     if prefix and "{query}" not in prefix:
         raise _invalid(
             F_RAG_QUERY_PREFIX.id,
@@ -673,14 +740,136 @@ def _validate_rag(patch: _RagPatch, context: _Context) -> None:
         )
 
 
+def _require_service(
+    enabled: bool,
+    endpoint: str,
+    model: str,
+    *,
+    endpoint_field: Field,
+    model_field: Field,
+    noun: str,
+) -> None:
+    """A switch that is on must name the service it will call."""
+    if not enabled:
+        return
+    if not endpoint:
+        raise _invalid(
+            endpoint_field.id, f"{noun} is on, so an endpoint is required"
+        )
+    if not model:
+        raise _invalid(
+            model_field.id, f"{noun} is on, so a model is required"
+        )
+
+
+def _int_or_default(value: effective_mod.Value, default: int) -> int:
+    try:
+        return int(value.text)
+    except ValueError:
+        return default
+
+
+def _validate_rerank(patch: _RerankPatch, context: _Context) -> None:
+    """A rerank switch that is on must name the service it will call."""
+    if patch.changes_service:
+        enabled = (
+            patch.enabled
+            if patch.enabled is not None
+            else parse_boolean(context.effective.rag_rerank_enabled.text)
+            is True
+        )
+        endpoint = (
+            patch.endpoint
+            if patch.endpoint is not None
+            else context.effective.rag_rerank_endpoint.text
+        )
+        model = (
+            patch.model
+            if patch.model is not None
+            else context.effective.rag_rerank_model.text
+        )
+        _require_service(
+            enabled,
+            endpoint,
+            model,
+            endpoint_field=F_RAG_RERANK_ENDPOINT,
+            model_field=F_RAG_RERANK_MODEL,
+            noun="rerank",
+        )
+    if patch.changes_numbers:
+        candidates = (
+            patch.candidates
+            if patch.candidates is not None
+            else _int_or_default(
+                context.effective.rag_rerank_candidates,
+                DEFAULT_CANDIDATE_LIMIT,
+            )
+        )
+        top_n = (
+            patch.top_n
+            if patch.top_n is not None
+            else _int_or_default(
+                context.effective.rag_rerank_top_n, DEFAULT_TOP_N
+            )
+        )
+        if top_n > candidates:
+            raise _invalid(
+                F_RAG_RERANK_TOP_N.id,
+                "topN must not exceed candidates",
+            )
+
+
+def _read_rerank_patch(
+    body: Mapping[str, Any], context: _Context
+) -> _RerankPatch:
+    enabled = _read_enabled(body, F_RAG_RERANK_ENABLED)
+
+    endpoint = None
+    if body.get("endpoint") is not None:
+        endpoint = clean_rag_rerank_endpoint(body["endpoint"])
+        _check_locked(F_RAG_RERANK_ENDPOINT, endpoint)
+    model = None
+    if body.get("model") is not None:
+        model = clean_rag_rerank_model(body["model"])
+        _check_locked(F_RAG_RERANK_MODEL, model)
+    candidates = None
+    if body.get("candidates") is not None:
+        candidates = _clean_int_in_range(
+            body["candidates"],
+            F_RAG_RERANK_CANDIDATES.id,
+            "rerank candidates",
+            low=1,
+            high=500,
+        )
+        _check_locked(F_RAG_RERANK_CANDIDATES, str(candidates))
+    top_n = None
+    if body.get("topN") is not None:
+        top_n = _clean_int_in_range(
+            body["topN"],
+            F_RAG_RERANK_TOP_N.id,
+            "rerank topN",
+            low=1,
+            high=100,
+        )
+        _check_locked(F_RAG_RERANK_TOP_N, str(top_n))
+    secret = _read_secret_patch(
+        body, F_RAG_RERANK_KEY, context.effective.rag_rerank_key
+    )
+
+    patch = _RerankPatch(
+        enabled=enabled,
+        endpoint=endpoint,
+        model=model,
+        candidates=candidates,
+        top_n=top_n,
+        secret=secret,
+    )
+    _validate_rerank(patch, context)
+    return patch
+
+
 def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
-    enabled = None
-    if body.get("enabled") is not None:
-        value = body["enabled"]
-        if not isinstance(value, bool):
-            raise _invalid(F_RAG_ENABLED.id, "enabled is not true or false")
-        _check_locked(F_RAG_ENABLED, _bool_text(value), normalise=_bool_text)
-        enabled = value
+    enabled = _read_enabled(body, F_RAG_ENABLED)
 
     embedding = _mapping(body, "embedding")
     endpoint = None
@@ -714,6 +903,11 @@ def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
             embedding, F_RAG_EMBEDDING_KEY, context.effective.rag_embedding_key
         )
 
+    rerank = _RerankPatch()
+    rerank_body = _mapping(body, "rerank")
+    if rerank_body is not None:
+        rerank = _read_rerank_patch(rerank_body, context)
+
     patch = _RagPatch(
         enabled=enabled,
         endpoint=endpoint,
@@ -722,6 +916,7 @@ def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
         batch=batch,
         concurrency=concurrency,
         secret=secret,
+        rerank=rerank,
     )
     _validate_rag(patch, context)
     return patch
@@ -882,12 +1077,23 @@ def _with_rag(config: Config, rag: _RagPatch) -> Config:
             batch=_merge(rag.batch, embedding.batch),
             concurrency=_merge(rag.concurrency, embedding.concurrency),
         )
+    rerank = current.rerank
+    if rag.rerank.changes_config:
+        rerank = replace(
+            rerank,
+            enabled=_merge(rag.rerank.enabled, rerank.enabled),
+            endpoint=_merge(rag.rerank.endpoint, rerank.endpoint),
+            model=_merge(rag.rerank.model, rerank.model),
+            candidates=_merge(rag.rerank.candidates, rerank.candidates),
+            top_n=_merge(rag.rerank.top_n, rerank.top_n),
+        )
     return replace(
         config,
         rag=replace(
             current,
             enabled=_merge(rag.enabled, current.enabled),
             embedding=embedding,
+            rerank=rerank,
         ),
     )
 
@@ -930,6 +1136,11 @@ def _write_secrets(
             store.set_rag_embedding_key(rag.secret)
         else:
             store.delete_rag_embedding_key()
+    if rag.rerank.secret is not None:
+        if rag.rerank.secret:
+            store.set_rag_rerank_key(rag.rerank.secret)
+        else:
+            store.delete_rag_rerank_key()
 
 
 # --- the screen's answer -----------------------------------------------------
@@ -1010,6 +1221,24 @@ def install_view(
                     context.effective.rag_embedding_key.text
                 ),
             },
+            "rerank": {
+                "enabled": _read_bool(
+                    F_RAG_RERANK_ENABLED, False, invalid
+                ),
+                "endpoint": context.effective.rag_rerank_endpoint.text,
+                "model": context.effective.rag_rerank_model.text,
+                "candidates": _read_int(
+                    F_RAG_RERANK_CANDIDATES,
+                    DEFAULT_CANDIDATE_LIMIT,
+                    invalid,
+                ),
+                "topN": _read_int(
+                    F_RAG_RERANK_TOP_N, DEFAULT_TOP_N, invalid
+                ),
+                "apiKeySet": bool(
+                    context.effective.rag_rerank_key.text
+                ),
+            },
         },
         "extractMedia": _media_enabled(),
         "locked": context.effective.locked(),
@@ -1066,6 +1295,7 @@ def apply_install(
         llm.secret is not None
         or search.secret is not None
         or rag.secret is not None
+        or rag.rerank.secret is not None
     )
     if writes_secret:
         # The credential store is checked before the document changes, so the

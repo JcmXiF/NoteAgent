@@ -204,6 +204,46 @@ export function EffectiveConfigSection({ install }: { install: InstallSettings }
         </dl>
       </FieldGroup>
 
+      <FieldGroup title={t("settings.effective.groupRerank")}>
+        <dl className="flex flex-col gap-3">
+          <Row
+            label={t("settings.retrieval.rerankEnabled")}
+            value={
+              install.rag.rerank.enabled
+                ? t("settings.effective.on")
+                : t("settings.effective.off")
+            }
+            source={source("rag.rerank.enabled")}
+          />
+          <Row
+            label={t("settings.retrieval.rerankEndpoint")}
+            value={text(install.rag.rerank.endpoint)}
+            source={source("rag.rerank.endpoint")}
+            mono
+          />
+          <Row
+            label={t("settings.retrieval.rerankModel")}
+            value={text(install.rag.rerank.model)}
+            source={source("rag.rerank.model")}
+          />
+          <Row
+            label={t("settings.retrieval.candidates")}
+            value={String(install.rag.rerank.candidates)}
+            source={source("rag.rerank.candidates")}
+          />
+          <Row
+            label={t("settings.retrieval.topN")}
+            value={String(install.rag.rerank.topN)}
+            source={source("rag.rerank.topN")}
+          />
+          <Row
+            label={t("settings.retrieval.rerankApiKey")}
+            value={keyState(install.rag.rerank.apiKeySet)}
+            source={source("rag.rerank.apiKey")}
+          />
+        </dl>
+      </FieldGroup>
+
       <FieldGroup title={t("settings.effective.groupFile")}>
         <dl className="flex flex-col gap-3">
           <Row
