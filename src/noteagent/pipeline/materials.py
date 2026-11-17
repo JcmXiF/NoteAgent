@@ -107,6 +107,9 @@ class MaterialState:
     run_id: str
     updated_at: str
     detail: Mapping[str, object] = field(default_factory=dict)
+    #: Who made the last change: ``system`` for a stage, ``human`` for a person.
+    #: A material a person edited is not re-framed by a later run.
+    source: str = ""
 
     @property
     def title(self) -> str:
@@ -125,6 +128,7 @@ class MaterialState:
             "title": self.title,
             "kind": kind if isinstance(kind, str) else "",
             "fidelity": fidelity if isinstance(fidelity, str) else "",
+            "source": self.source,
         }
 
 
@@ -177,6 +181,7 @@ class MaterialLog:
                 run_id=entry.run_id,
                 updated_at=entry.at,
                 detail=dict(entry.detail),
+                source=entry.source,
             )
         return latest
 
@@ -201,7 +206,7 @@ class MaterialLog:
             owner = next(
                 (
                     entry.run_id
-                    for entry in entries
+                    for entry in reversed(entries)
                     if entry.state == "staged" and entry.run_id
                 ),
                 "",
@@ -234,6 +239,7 @@ class MaterialLog:
                     run_id=owner,
                     updated_at=last.at,
                     detail=detail,
+                    source=last.source,
                 )
             )
         items.sort(key=lambda state: state.material)
@@ -275,7 +281,7 @@ class StagingArea:
         blocks = _blocks_for(capture, kind)
         data = _source_bytes(capture, kind, captured_at)
 
-        directory = self._root / run_id / material.replace("/", "__")
+        directory = self._material_directory(material, run_id=run_id)
         suffix = Path(material).suffix or ".bin"
         write_bytes_atomic(directory / f"source{suffix}", data)
         write_text_atomic(
@@ -327,9 +333,24 @@ class StagingArea:
 
     def manifest_path(self, material: str, *, run_id: str) -> Path:
         """Where one material's manifest is, once its run id is checked."""
+        return self._material_directory(material, run_id=run_id) / "manifest.json"
+
+    def blocks_path(self, material: str, *, run_id: str) -> Path:
+        """Where one material's full block texts are."""
+        return self._material_directory(material, run_id=run_id) / "blocks.json"
+
+    def _material_directory(self, material: str, *, run_id: str) -> Path:
         if not is_run_id(run_id):
             raise ValueError(f"not a pipeline run id: {run_id!r}")
-        return self._root / run_id / material.replace("/", "__") / "manifest.json"
+        key = (material or "").replace("\\", "/").strip()
+        parts = key.split("/")
+        if not key.startswith("raw/") or any(
+            part in {"", ".", ".."} for part in parts
+        ):
+            # A material is an original under raw/ and nothing else; a path that
+            # climbs out of the run's folder is not one.
+            raise ValueError(f"not a material path: {material!r}")
+        return self._root / run_id / key.replace("/", "__")
 
     def expired(self, keep: int, started_at: Mapping[str, str]) -> list[tuple[str, Path]]:
         """The run folders older than the newest *keep*, newest first."""
@@ -430,12 +451,45 @@ class Materials:
 
     def manifest(self, material: str, *, run_id: str) -> dict[str, object] | None:
         """Read back what was staged, or ``None`` when the folder is gone."""
-        path = self._staging.manifest_path(material, run_id=run_id)
         try:
+            path = self._staging.manifest_path(material, run_id=run_id)
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError):
             return None
         return dict(raw) if isinstance(raw, Mapping) else None
+
+    def blocks(self, material: str, *, run_id: str) -> list[dict[str, object]] | None:
+        """The material's full block texts, in document order."""
+        try:
+            path = self._staging.blocks_path(material, run_id=run_id)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, list):
+            return None
+        return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+    def mark(
+        self,
+        material: str,
+        state: str,
+        *,
+        run_id: str,
+        source: str = "system",
+        detail: Mapping[str, object] | None = None,
+    ) -> MaterialState | None:
+        """Record one transition, the same shape every other stage uses."""
+        self._log.append(
+            MaterialTransition(
+                at=iso_timestamp(self._clock),
+                material=material,
+                state=state,
+                run_id=run_id,
+                source=source,
+                detail=dict(detail or {}),
+            )
+        )
+        return self._log.state_for(material)
 
     def clean(self, runs: Sequence[PipelineRun], keep: int = DEFAULT_KEEP_RUNS) -> int:
         """Remove old staging, recording what was dropped with it."""

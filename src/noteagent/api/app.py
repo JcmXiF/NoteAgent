@@ -699,6 +699,24 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             ]
         }
 
+    @app.get("/api/v1/pipeline/runs/{run_id}/materials/blocks")
+    def pipeline_material_blocks(
+        run_id: str,
+        material: str = Query(..., min_length=1, max_length=500),
+    ) -> dict[str, object]:
+        """The staged blocks behind one material, for the source view."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        blocks = service.material_blocks(material, run_id=run_id)
+        if blocks is None:
+            raise CodedHTTPException(
+                404,
+                f"no staged blocks for {material}",
+                code="material.blocksMissing",
+            )
+        return {"material": material, "blocks": blocks}
+
     @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
     def pipeline_cancel(run_id: str) -> dict[str, object]:
         """Stop a run between its stages; a finished run comes back unchanged."""
@@ -1374,8 +1392,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.put("/api/projects/{name}/clips")
     def project_clips_put(name: str, body: ClipsPutBody) -> dict[str, object]:
         layout = require_project_layout(name)
+        # Selections are project state too: the write takes the one writer's
+        # place, so it cannot land in the middle of a pipeline run.
+        service = PipelineService(
+            layout,
+            clock=deps.clock,
+            ids=deps.ids,
+            registry=deps.pipeline_registry,
+            keep_runs=deps.pipeline_keep_runs,
+        )
         try:
-            return put_clips_payload(layout, body.model_dump())
+            return service.write_clips(
+                lambda: put_clips_payload(layout, body.model_dump())
+            )
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
         except ValueError as err:
             raise http_error(err, 400) from err
 

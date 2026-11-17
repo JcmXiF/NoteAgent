@@ -18,7 +18,9 @@ from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
 from noteagent.pipeline.acquire import AcquireStage
-from noteagent.pipeline.service import PipelineService, PipelineStage
+from noteagent.pipeline.framing import FrameStage
+from noteagent.pipeline.service import PipelineService
+from noteagent.pipeline.stage import PipelineStage
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.run_log import RunLogger
@@ -87,6 +89,7 @@ def default_stages(layout: ProjectLayout, *, clock: Clock) -> Sequence[PipelineS
             fetch=fetch,
             rewrite=rewrite_query,
         ),
+        FrameStage(),
     )
 
 

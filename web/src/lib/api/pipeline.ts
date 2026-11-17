@@ -1,4 +1,5 @@
 import { getJson, postJson } from "@/lib/api/client";
+import type { DerivedBlock } from "@/lib/api/types";
 
 /** How far a run has got, as the core names it. */
 export type PipelineRunStatus =
@@ -62,24 +63,35 @@ export type PipelineMaterial = {
 
 /** Starts one run; the project refuses a second while the first is active. */
 export function startPipelineRun(input: PipelineStartInput): Promise<PipelineRun> {
-  return postJson<PipelineRun>("/pipeline/runs", input);
+  return postJson<PipelineRun>("/v1/pipeline/runs", input);
 }
 
 export function fetchPipelineRuns(): Promise<{ runs: PipelineRun[] }> {
-  return getJson<{ runs: PipelineRun[] }>("/pipeline/runs");
+  return getJson<{ runs: PipelineRun[] }>("/v1/pipeline/runs");
 }
 
 export function fetchPipelineMaterials(
   runId: string,
 ): Promise<{ materials: PipelineMaterial[] }> {
   return getJson<{ materials: PipelineMaterial[] }>(
-    `/pipeline/runs/${encodeURIComponent(runId)}/materials`,
+    `/v1/pipeline/runs/${encodeURIComponent(runId)}/materials`,
   );
 }
 
 export function cancelPipelineRun(id: string): Promise<PipelineRun> {
   return postJson<PipelineRun>(
-    `/pipeline/runs/${encodeURIComponent(id)}/cancel`,
+    `/v1/pipeline/runs/${encodeURIComponent(id)}/cancel`,
     {},
+  );
+}
+
+/** The staged blocks behind one material, for the source view. */
+export function fetchPipelineMaterialBlocks(
+  runId: string,
+  material: string,
+): Promise<{ material: string; blocks: DerivedBlock[] }> {
+  const query = new URLSearchParams({ material });
+  return getJson(
+    `/v1/pipeline/runs/${encodeURIComponent(runId)}/materials/blocks?${query}`,
   );
 }

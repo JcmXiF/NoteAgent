@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from threading import Event, Lock
-from typing import Protocol, runtime_checkable
+from typing import TypeVar
 
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.pipeline.captures import CaptureInbox, LoginWall
+from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
 from noteagent.pipeline.run import (
@@ -29,10 +30,13 @@ from noteagent.pipeline.run import (
     QueryMode,
     StartedBy,
 )
+from noteagent.pipeline.stage import PipelineCancelled, PipelineStage, StageContext
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.layout import ProjectLayout
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 class PipelineBusy(RuntimeError):
@@ -41,40 +45,6 @@ class PipelineBusy(RuntimeError):
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         super().__init__(f"a pipeline run is already active: {run_id}")
-
-
-class PipelineCancelled(RuntimeError):
-    """A stage noticed the run was cancelled."""
-
-
-@dataclass(slots=True)
-class StageContext:
-    """What a stage may read and change while it runs."""
-
-    run: PipelineRun
-    layout: ProjectLayout
-    cancel: Event
-    _save: Callable[[PipelineRun], PipelineRun]
-    #: Stage one capture as a material of this run, through the single writer.
-    stage_material: Callable[[Capture], MaterialState]
-
-    def update(self, **changes: object) -> PipelineRun:
-        """Write one change to the run and carry on with the fresh copy."""
-        self.run = self._save(replace(self.run, **changes))
-        return self.run
-
-    def check_cancelled(self) -> None:
-        if self.cancel.is_set():
-            raise PipelineCancelled("the run was cancelled")
-
-
-@runtime_checkable
-class PipelineStage(Protocol):
-    """One step of the run, named so the run says where it is."""
-
-    name: str
-
-    def __call__(self, context: StageContext) -> None: ...
 
 
 class PipelineRegistry:
@@ -148,6 +118,7 @@ class PipelineService:
         self._spawn = spawn or _spawn_thread
         self._store = PipelineRunStore(layout)
         self._materials = Materials(layout, clock=clock)
+        self._framing = Framing(layout, materials=self._materials)
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
 
@@ -235,6 +206,25 @@ class PipelineService:
 
     def materials_for_run(self, run_id: str) -> list[MaterialState]:
         return self._materials.for_run(run_id)
+
+    def material_blocks(
+        self, material: str, *, run_id: str
+    ) -> list[dict[str, object]] | None:
+        return self._materials.blocks(material, run_id=run_id)
+
+    def frame_materials(self, run_id: str) -> int:
+        """Frame the run's staged materials, serialized with every other write."""
+        with self._registry.writer(self._project_key):
+            return self._framing.frame_run(run_id)
+
+    def write_clips(self, work: Callable[[], _T]) -> _T:
+        """Run a selection write under the project's lock and single writer."""
+        self._lock.acquire("clips")
+        try:
+            with self._registry.writer(self._project_key):
+                return work()
+        finally:
+            self._lock.release("clips")
 
     def capture_payload(self) -> dict[str, object]:
         return self._captures.payload()
@@ -380,6 +370,7 @@ class PipelineService:
                     stage_material=lambda capture: self.stage_material(
                         capture, run_id=current.id
                     ),
+                    frame_materials=lambda: self.frame_materials(current.id),
                 )
                 try:
                     stage(context)

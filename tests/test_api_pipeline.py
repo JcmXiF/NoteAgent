@@ -16,10 +16,17 @@ from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.ingest.clips import (
+    ClipCollection,
+    ClipStore,
+    collection_to_dict,
+    save_clip_store,
+)
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.captures import CaptureInbox
+from noteagent.pipeline.framing import FrameStage, Framing
 from noteagent.pipeline.lock import ProjectLock
-from noteagent.pipeline.materials import Materials
+from noteagent.pipeline.materials import MaterialLog, Materials
 from noteagent.pipeline.run import PipelineRun
 from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.store import PipelineRunStore
@@ -292,6 +299,190 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(run["status"], "succeeded")
             self.assertEqual(run["detail"]["acquired"], 4)
             self.assertEqual(len(materials), 4)
+
+    def test_the_frame_stage_turns_materials_into_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(4)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(stages=[stage, FrameStage()], spawn=lambda work: work())
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+                clips = client.get("/api/projects/demo/clips").json()
+
+            self.assertEqual(run["detail"]["framedMaterials"], 4)
+            self.assertTrue(all(item["state"] == "framed" for item in materials))
+            self.assertEqual(len(clips["collections"]), 4)
+            self.assertEqual(clips["collections"][0]["blockIds"], ["b1"])
+            self.assertEqual(clips["collections"][0]["blocks"], [])
+
+    def test_a_person_edited_frame_is_recorded_and_left_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage()],
+                            spawn=lambda work: work(),
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                material = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"][0]["material"]
+                clips = client.get("/api/projects/demo/clips").json()
+                collections = clips["collections"] + [
+                    {
+                        "id": "manual-1",
+                        "sourceKey": material,
+                        "sourceLabel": "熵",
+                        "blockIds": ["b1"],
+                        "blocks": [],
+                    }
+                ]
+                response = client.put(
+                    "/api/projects/demo/clips",
+                    json={
+                        "intent": clips["intent"],
+                        "collections": collections,
+                        "topicMap": clips["topicMap"],
+                        "decisions": clips["decisions"],
+                        "choices": clips["choices"],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            human = [
+                entry
+                for entry in MaterialLog(layout.materials_log).transitions()
+                if entry.material == material and entry.source == "human"
+            ]
+            self.assertTrue(human)
+            self.assertEqual(human[-1].state, "framed")
+            materials = Materials(layout, clock=FixedClock())
+            self.assertEqual(materials.states()[material].source, "human")
+            self.assertEqual(
+                Framing(layout, materials=materials).frame_run(run_id), 0
+            )
+
+    def test_a_materials_blocks_can_be_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(4)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(_deps(stages=[stage], spawn=lambda work: work()))
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                material = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"][0]["material"]
+                response = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials/blocks",
+                    params={"material": material},
+                )
+                missing = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials/blocks",
+                    params={"material": "raw/web/missing.html"},
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["blocks"][0]["id"], "b1")
+            self.assertTrue(response.json()["blocks"][0]["text"])
+            self.assertEqual(missing.status_code, 404, missing.text)
+            self.assertEqual(
+                missing.json()["code"], "material.blocksMissing"
+            )
+
+    def test_a_changed_frame_clears_the_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            first = ClipCollection(
+                id="c1",
+                source_key="raw/web/a.html",
+                source_label="A",
+                block_ids=("b1",),
+                blocks=(),
+            )
+            second = ClipCollection(
+                id="c2",
+                source_key="raw/web/a.html",
+                source_label="A",
+                block_ids=("b2",),
+                blocks=(),
+            )
+            plan = {
+                "intent": "熵",
+                "candidates": [
+                    {
+                        "slug": "p",
+                        "title": "P",
+                        "wikiPath": "wiki/p.md",
+                        "coverage": "write",
+                        "outline": [],
+                    }
+                ],
+            }
+            save_clip_store(
+                layout,
+                ClipStore(intent="", collections=(first,), topic_map=plan),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(create_app(_deps(spawn=lambda work: work())))
+                response = client.put(
+                    "/api/projects/demo/clips",
+                    json={
+                        "intent": "",
+                        "collections": [
+                            collection_to_dict(first),
+                            collection_to_dict(second),
+                        ],
+                        "topicMap": plan,
+                        "decisions": [],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIsNone(response.json()["topicMap"])
 
     def test_a_sign_in_wall_waits_in_the_attention_panel(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

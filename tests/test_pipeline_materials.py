@@ -211,6 +211,17 @@ class BackfillTests(unittest.TestCase):
             self.assertEqual(listed[0].title, "熵")
             self.assertEqual(materials.for_run("pr-2"), [])
 
+    def test_re_staging_moves_a_material_to_the_later_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            first = materials.stage(_capture(), run_id="pr-1")
+            materials.stage(_capture(), run_id="pr-2")
+
+            self.assertEqual(materials.for_run("pr-1"), [])
+            listed = materials.for_run("pr-2")
+            self.assertEqual([state.material for state in listed], [first.material])
+
     def test_a_staged_material_whose_file_is_raw_is_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = init_project(Path(tmp) / "projects" / "demo")

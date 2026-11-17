@@ -1021,6 +1021,8 @@
     "body": "这一部分还在完善中，可以暂时使用其他视图。"
   },
   "sources": {
+    "materialHint": "勾选要用的段落，它们会成为一个框；已有的框可以在右栏删除。",
+    "materialFailed": "这份材料的暂存内容读不出来。",
     "empty": {
       "title": "还没有资料",
       "body": "在上方粘贴链接或拖入文件。加入的资料会保留在这里，供你挑选用于页面的段落。"
@@ -1392,6 +1394,7 @@
         "invalid": "流水线的参数不完整。"
       },
       "capture.notFound": "这个待登录捕获已经不在了。",
+      "material.blocksMissing": "这份材料的暂存内容已经不在了。",
       "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
       "context_overflow": "对话太长，超出了模型窗口。",
       "project.notConfigured": "还没有打开任何 wiki 项目。",

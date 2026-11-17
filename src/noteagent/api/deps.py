@@ -19,7 +19,8 @@ from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
-from noteagent.pipeline.service import PipelineRegistry, PipelineService, PipelineStage
+from noteagent.pipeline.service import PipelineRegistry, PipelineService
+from noteagent.pipeline.stage import PipelineStage
 
 
 @dataclass(frozen=True, slots=True)

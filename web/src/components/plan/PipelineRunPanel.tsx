@@ -16,6 +16,7 @@ import {
   type PipelineRunStatus,
 } from "@/lib/api/pipeline";
 import { usePoll } from "@/lib/use-poll";
+import { useNavStore } from "@/stores/nav-store";
 import { useSectionCount } from "@/stores/right-sections";
 
 /**
@@ -33,6 +34,7 @@ const ACTIVE: ReadonlySet<PipelineRunStatus> = new Set([
 
 export function PipelineRunPanel() {
   const { t } = useTranslation();
+  const go = useNavStore((state) => state.go);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [materials, setMaterials] = useState<PipelineMaterial[]>([]);
   const [draft, setDraft] = useState("");
@@ -205,21 +207,32 @@ export function PipelineRunPanel() {
               </p>
               <ul className="mt-0.5 flex flex-col gap-0.5">
                 {materials.slice(0, 6).map((item) => (
-                  <li
-                    key={item.material}
-                    className="flex items-center gap-1 text-[10px]"
-                  >
-                    <span
-                      className="min-w-0 flex-1 truncate"
+                  <li key={item.material}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1 text-left text-[10px] hover:text-foreground"
                       title={item.material}
+                      onClick={() =>
+                        go(
+                          {
+                            kind: "material",
+                            runId: latest.id,
+                            material: item.material,
+                            title: item.title,
+                          },
+                          { placement: "beside" },
+                        )
+                      }
                     >
-                      {item.title}
-                    </span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {t(`pipeline.material.${item.state}`, {
-                        defaultValue: item.state,
-                      })}
-                    </span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {item.title}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {t(`pipeline.material.${item.state}`, {
+                          defaultValue: item.state,
+                        })}
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>

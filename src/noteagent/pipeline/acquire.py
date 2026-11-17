@@ -18,7 +18,7 @@ from noteagent.acquire.tools.web_fetch import LOGIN_WALL_REASONS, LOGIN_WALL_STA
 from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.pipeline.captures import LoginWall
 from noteagent.pipeline.materials import MaterialState
-from noteagent.pipeline.service import StageContext
+from noteagent.pipeline.stage import StageContext
 
 #: How many materials one acquisition aims for.
 TARGET_MATERIALS = 4
