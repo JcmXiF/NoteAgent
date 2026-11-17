@@ -8,8 +8,9 @@ all cross it the same way, with the same request and the same sink.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from threading import Event
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 from noteagent.agent.events import RunEvent
@@ -36,6 +37,10 @@ class RunCancelled(RuntimeError):
     """The run stopped because it was asked to."""
 
 
+class RunPaused(RuntimeError):
+    """The run stopped at a boundary because its reader went away."""
+
+
 @dataclass(frozen=True, slots=True)
 class UserInput:
     """A person asked something in an existing session."""
@@ -43,6 +48,10 @@ class UserInput:
     session_id: str
     content: str
     on_busy: OnBusy = OnBusy.REJECT
+    #: Set by the stream that owns this run when its reader disconnects. The
+    #: kernel stops at the next committed boundary and leaves an interrupted
+    #: marker; a stream that never owns the run never reads it.
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +61,7 @@ class Resume:
     session_id: str
     wait_id: str
     on_busy: OnBusy = OnBusy.QUEUE
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +75,7 @@ class RunResume:
     session_id: str
     run_id: str
     on_busy: OnBusy = OnBusy.REJECT
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +85,14 @@ class Retry:
     session_id: str
     on_busy: OnBusy = OnBusy.REJECT
     reason: str = ""
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
 RunRequest: TypeAlias = UserInput | Resume | RunResume | Retry
 
-RunStatus: TypeAlias = Literal["completed", "waiting", "failed", "cancelled"]
+RunStatus: TypeAlias = Literal[
+    "completed", "waiting", "failed", "cancelled", "interrupted"
+]
 
 
 @dataclass(frozen=True, slots=True)

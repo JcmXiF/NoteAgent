@@ -12,6 +12,7 @@ import json
 import queue
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 
 from noteagent.agent.events import DoneEvent, ErrorEvent, RunEvent, is_terminal
 from noteagent.agent.runtime import (
@@ -39,6 +40,11 @@ def iter_run_sse(
     """Run *request*, forwarding status/token/observation/done/error."""
     events: queue.Queue[RunEvent | None] = queue.Queue(maxsize=QUEUE_SIZE)
     stop = threading.Event()
+    #: A reader that goes away pauses its own run at the next committed
+    #: boundary; it does not cancel it. The event travels in the request, so a
+    #: stream that never owned the run cannot reach the one that does.
+    pause = threading.Event()
+    request = replace(request, pause=pause)
     #: Set once the run behind this stream has reported something. Only a run
     #: that claimed the session reaches the caller's sink, so this is the
     #: evidence that a disconnect may cancel it without reaching someone else.
@@ -114,13 +120,13 @@ def iter_run_sse(
             if isinstance(item, ErrorEvent):
                 break
     finally:
-        # A reader that went away leaves a run still writing: tell it to stop
-        # before its next model call. A stream that never owned the session (a
-        # busy refusal, or one that ended on a terminal event) must not cancel
-        # the run that does own it, nor the one that may own it next.
+        # A reader that went away leaves a run still writing: pause it at the
+        # next committed boundary. A stream that never owned the session (a busy
+        # refusal, or one that ended on a terminal event) must not pause the run
+        # that does own it, nor the one that may own it next.
         stop.set()
         if owns_run.is_set() and not terminated:
-            runtime.cancel(request.session_id)
+            pause.set()
 
 
 def _block(event: RunEvent, seq: int) -> bytes:

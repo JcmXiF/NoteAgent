@@ -70,6 +70,7 @@ from noteagent.agent.runtime import (
     Resume,
     Retry,
     RunCancelled,
+    RunPaused,
     RunRef,
     RunRequest,
     RunResult,
@@ -209,14 +210,19 @@ class KernelRuntime:
             raise ValueError("no route opens a retry yet")
         session_id = request.session_id
         cancel = self._registry.claim(session_id)
+        pause = request.pause
         run_id = self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
             if isinstance(request, RunResume):
-                return self._run_crash_resume(request, sink, run_id, cancel)
+                return self._run_crash_resume(
+                    request, sink, run_id, cancel, pause
+                )
             if isinstance(request, Resume):
-                return self._run_resume(request, sink, run_id, cancel)
-            return self._run_user(request, sink, run_id, cancel)
+                return self._run_resume(
+                    request, sink, run_id, cancel, pause
+                )
+            return self._run_user(request, sink, run_id, cancel, pause)
         finally:
             self._registry.release(session_id)
 
@@ -267,6 +273,7 @@ class KernelRuntime:
         sink: EventSink,
         run_id: str,
         cancel: Event,
+        pause: Event | None = None,
     ) -> RunResult:
         session_id = request.session_id
         content = request.content.strip()
@@ -279,7 +286,7 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel)
+        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
 
     def _run_resume(
         self,
@@ -287,6 +294,7 @@ class KernelRuntime:
         sink: EventSink,
         run_id: str,
         cancel: Event,
+        pause: Event | None = None,
     ) -> RunResult:
         """Continue a session after the job it waited on came back.
 
@@ -328,7 +336,7 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel)
+        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
 
     def _run_crash_resume(
         self,
@@ -336,6 +344,7 @@ class KernelRuntime:
         sink: EventSink,
         run_id: str,
         cancel: Event,
+        pause: Event | None = None,
     ) -> RunResult:
         """Continue a run a crash left at its last committed turn.
 
@@ -391,6 +400,7 @@ class KernelRuntime:
                 cancel,
                 resumes=request.run_id,
                 note=note,
+                pause=pause,
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
@@ -404,6 +414,7 @@ class KernelRuntime:
         *,
         resumes: str = "",
         note: str = "",
+        pause: Event | None = None,
     ) -> RunResult:
         # What the current model call has streamed but not yet committed. A stop
         # keeps it, so the reader can see where the answer ended.
@@ -424,6 +435,7 @@ class KernelRuntime:
 
             while True:
                 _check_cancel(cancel)
+                _check_pause(pause)
                 model_calls += 1
                 if model_calls > self._max_turns:
                     message = (
@@ -441,7 +453,9 @@ class KernelRuntime:
                         session_id, run_id, "failed", error=message
                     )
                 try:
-                    self._compact_if_needed(session_id, sink, cancel)
+                    self._compact_if_needed(
+                        session_id, sink, cancel, pause=pause
+                    )
                 except ModelStreamError as err:
                     return self._compaction_failure(
                         session_id, run_id, sink, err
@@ -460,7 +474,13 @@ class KernelRuntime:
                 partial.clear()
                 try:
                     assistant = collect(
-                        _tap(self._model.stream(model_request), sink, cancel, partial)
+                        _tap(
+                            self._model.stream(model_request),
+                            sink,
+                            cancel,
+                            pause,
+                            partial,
+                        )
                     )
                 except ModelStreamError as err:
                     if err.code == "cancelled":
@@ -478,7 +498,11 @@ class KernelRuntime:
                         overflow_retried = True
                         try:
                             compacted = self._compact_if_needed(
-                                session_id, sink, cancel, force=True
+                                session_id,
+                                sink,
+                                cancel,
+                                force=True,
+                                pause=pause,
                             )
                         except ModelStreamError as summary_err:
                             return self._compaction_failure(
@@ -571,6 +595,8 @@ class KernelRuntime:
             return self._cancelled_result(
                 session_id, run_id, sink, "".join(partial)
             )
+        except RunPaused:
+            return self._paused_result(session_id, run_id, sink)
         except Exception as err:
             self._mark(
                 session_id,
@@ -598,6 +624,7 @@ class KernelRuntime:
         *,
         note: str = "",
         resumes: str = "",
+        reason: str = "",
     ) -> None:
         """Record where the run stands, without making the marker a condition.
 
@@ -621,6 +648,7 @@ class KernelRuntime:
                 fingerprint=fingerprint,
                 resumes=resumes,
                 note=note,
+                reason=reason,
                 created_at=iso_timestamp(self._clock),
             )
             self._sessions.append(session_id, marker_entry(marker))
@@ -876,6 +904,27 @@ class KernelRuntime:
         sink(ErrorEvent("cancelled", "the run was cancelled", retryable=True))
         return RunResult(session_id, run_id, "cancelled")
 
+    def _paused_result(
+        self,
+        session_id: str,
+        run_id: str,
+        sink: EventSink,
+    ) -> RunResult:
+        """Stop at the last committed turn; a reader that comes back resumes."""
+        self._mark(
+            session_id,
+            run_id,
+            INTERRUPTED,
+            reason="client_disconnect",
+        )
+        sink(
+            DoneEvent(
+                {"id": session_id},
+                {"id": run_id, "status": "interrupted"},
+            )
+        )
+        return RunResult(session_id, run_id, "interrupted")
+
     def compact(self, session_id: str, instructions: str = "") -> bool:
         """Summarize the older history now, on the reader's request.
 
@@ -902,7 +951,9 @@ class KernelRuntime:
         *,
         force: bool = False,
         instructions: str = "",
+        pause: Event | None = None,
     ) -> bool:
+        _check_pause(pause)
         snapshot = self._sessions.load(session_id)
         cut_id = choose_cut(snapshot.entries, self._compaction)
         if cut_id is None:
@@ -967,6 +1018,7 @@ class KernelRuntime:
                 )
             )
         )
+        _check_pause(pause)
         summary = bounded_summary(
             summary_message.content, self._compaction
         )
@@ -1008,11 +1060,13 @@ def _tap(
     stream: Iterable[ModelEvent],
     sink: EventSink,
     cancel: Event,
+    pause: Event | None,
     partial: list[str],
 ) -> Iterator[ModelEvent]:
     """Report text as it arrives, keep what a stop would keep, pass it on."""
     for event in stream:
         _check_cancel(cancel)
+        _check_pause(pause)
         if isinstance(event, ModelTextDelta):
             partial.append(event.text)
             sink(TokenEvent(event.text))
@@ -1035,3 +1089,8 @@ def _sections_digest(sections: Mapping[str, str]) -> str:
 def _check_cancel(cancel: Event) -> None:
     if cancel.is_set():
         raise RunCancelled("run cancelled")
+
+
+def _check_pause(pause: Event | None) -> None:
+    if pause is not None and pause.is_set():
+        raise RunPaused("run paused")
