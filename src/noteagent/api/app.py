@@ -103,6 +103,7 @@ from noteagent.api.session_access import (
     open_session_store,
     project_sessions,
     recover_active_project_runs,
+    resume_refusal,
     session_busy,
     session_runtime,
     session_waits,
@@ -820,6 +821,16 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                     params={"id": session_id, "run": body.runId},
                 )
             runtime = session_runtime(deps, store, layout)
+            refusal = resume_refusal(
+                deps, store, layout, session_id, body.runId
+            )
+            if refusal:
+                raise CodedHTTPException(
+                    409,
+                    refusal,
+                    code="session.notResumable",
+                    params={"id": session_id, "run": body.runId},
+                )
         except LlmConfigError as err:
             if claim is not None:
                 deps.runs.release(session_id)

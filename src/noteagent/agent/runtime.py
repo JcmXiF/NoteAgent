@@ -107,6 +107,19 @@ class RunResult:
     error: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ResumeCheck:
+    """What an interrupted run's environment comparison found.
+
+    ``refusal`` means the run cannot continue against the current project,
+    model, toolset or prompt config. ``note`` is what the model reads: a plain
+    resume sentence, plus a warning when the wiki or sources moved.
+    """
+
+    note: str = ""
+    refusal: str = ""
+
+
 #: Where a run reports while it runs. The API maps it onto an SSE queue; a test
 #: passes ``list.append``; a background resume passes a sink that drops.
 EventSink: TypeAlias = Callable[[RunEvent], None]

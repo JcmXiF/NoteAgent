@@ -15,10 +15,16 @@ from typing import TYPE_CHECKING
 
 from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.projection import project
 from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import AgentRuntime
+from noteagent.agent.run_marker import (
+    RunFingerprint,
+    config_digest,
+    sections_digest,
+)
 from noteagent.agent.store import SessionStore, WaitStore
-from noteagent.agent.tools import ToolRegistry
+from noteagent.agent.tools import ToolRegistry, toolset_name
 from noteagent.agent.wait import wait_payload
 from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
@@ -32,7 +38,7 @@ from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
-from noteagent.sessions.recovery import recover_store
+from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
@@ -283,6 +289,49 @@ def session_runtime(
         trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
         # Non-secret digests a resume can compare; the kernel only records them.
         fingerprint=fingerprint,
+    )
+
+
+def _session_model_name(deps: AppDeps) -> str:
+    """The model name a kernel run records, resolved as ``session_runtime`` does."""
+    name = str((deps.settings or {}).get("model") or "")
+    if deps.model is not None:
+        return name
+    return name or load_llm_config().model
+
+
+def resume_refusal(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+    session_id: str,
+    run_id: str,
+) -> str:
+    """Why this interrupted run cannot continue here, or an empty string.
+
+    The comparison is the kernel's fingerprint check, built from the same
+    environment; it stays a route preflight instead of a sixth runtime call.
+    """
+    marker = interrupted_run(store, session_id, run_id)
+    if marker is None:
+        return ""
+    entries = store.load(session_id).entries
+    projection = project(entries)
+    fingerprint = (
+        project_fingerprint(layout, config=deps.settings or {})
+        if layout is not None
+        else {}
+    )
+    current = RunFingerprint.from_mapping(
+        fingerprint,
+        model=_session_model_name(deps),
+        toolset=toolset_name(session_tools(deps, layout)),
+        config_hash=config_digest(
+            fingerprint.get("configHash", ""), projection.sections
+        ),
+    )
+    return marker.fingerprint.refusal(
+        current, legacy_config=sections_digest(projection.sections)
     )
 
 

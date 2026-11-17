@@ -219,5 +219,41 @@ class TerminalInferenceTests(unittest.TestCase):
         self.assertEqual(inferred.state, INTERRUPTED)
 
 
+class FingerprintComparisonTests(unittest.TestCase):
+    def test_a_changed_model_is_refused(self) -> None:
+        saved = RunFingerprint(model="faux")
+        current = RunFingerprint(model="other")
+
+        self.assertEqual(
+            saved.refusal(current),
+            "the model changed since this run paused",
+        )
+
+    def test_a_legacy_sections_only_config_is_accepted(self) -> None:
+        saved = RunFingerprint(config_hash="sections-digest")
+        current = RunFingerprint(config_hash="settings-and-sections")
+
+        self.assertEqual(
+            saved.refusal(current),
+            "the config changed since this run paused",
+        )
+        self.assertEqual(
+            saved.refusal(current, legacy_config="sections-digest"), ""
+        )
+
+    def test_a_changed_wiki_is_stale_not_refused(self) -> None:
+        saved = RunFingerprint(
+            wiki_generation="wiki-old",
+            source_fingerprint="sources-old",
+        )
+        current = RunFingerprint(
+            wiki_generation="wiki-new",
+            source_fingerprint="sources-new",
+        )
+
+        self.assertEqual(saved.refusal(current), "")
+        self.assertEqual(saved.stale(current), ("wiki", "sources"))
+
+
 if __name__ == "__main__":
     unittest.main()

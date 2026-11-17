@@ -9,9 +9,11 @@ from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.agent.run_marker import (
+    FAILED,
     FINISHED,
     INTERRUPTED,
     RUNNING,
+    WAITING,
     RunMarker,
     marker_entry,
 )
@@ -165,6 +167,81 @@ class RunRecoveryTests(unittest.TestCase):
         self.assertEqual(found, ())
         self.assertEqual(len(self.store.load(session).entries), before)
         self.assertEqual(interrupted_runs(self.store), ())
+
+    def test_a_question_after_a_settled_run_is_recovered(self) -> None:
+        session = self.create()
+        self.user(session, "第一个问题")
+        self.start(session, "run-1")
+        self.assistant(session)
+        self.finish(session, "run-1")
+        self.user(session, "第二个问题")
+
+        found = recover_store(self.store, clock=FixedClock())
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].reason, "question without answer")
+        self.assertTrue(found[0].run_id.startswith("recovered-"))
+        markers = self.markers(session)
+        self.assertEqual(
+            [marker["state"] for marker in markers[-2:]],
+            [RUNNING, INTERRUPTED],
+        )
+        self.assertEqual(
+            markers[-1]["runId"], found[0].run_id
+        )
+        self.assertEqual(
+            markers[-1]["lastEntryId"], self.last_content_id(session)
+        )
+        self.assertEqual(
+            session_payload(self.store, session)["state"]["interrupted"][
+                "reason"
+            ],
+            "question without answer",
+        )
+
+    def test_a_failed_question_is_not_recovered_as_pending(self) -> None:
+        session = self.create()
+        self.user(session)
+        self.start(session)
+        self.store.append(
+            session, marker_entry(RunMarker("run-1", FAILED))
+        )
+
+        found = recover_store(self.store, clock=FixedClock())
+
+        self.assertEqual(found, ())
+        self.assertEqual(
+            [marker["state"] for marker in self.markers(session)],
+            [RUNNING, FAILED],
+        )
+
+    def test_a_waiting_run_is_not_turned_into_an_interruption(self) -> None:
+        session = self.create()
+        self.user(session)
+        self.store.append(
+            session, marker_entry(RunMarker("run-1", WAITING))
+        )
+        self.store.append(
+            session,
+            {
+                "type": "wait_proposed",
+                "id": "w1",
+                "waitId": "w1",
+                "job": "plan",
+                "interface": "source",
+                "completion": "start_plan",
+                "proposedAt": "2026-11-10T09:00:00Z",
+            },
+        )
+        self.user(session, "等待时又问了问题")
+
+        found = recover_store(self.store, clock=FixedClock())
+
+        self.assertEqual(found, ())
+        self.assertEqual(
+            [marker["state"] for marker in self.markers(session)],
+            [WAITING],
+        )
 
     def test_an_old_session_without_a_marker_is_not_scanned(self) -> None:
         session = self.create()

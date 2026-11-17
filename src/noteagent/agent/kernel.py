@@ -8,9 +8,8 @@ the next round starts from what the log now says.
 
 from __future__ import annotations
 
-import hashlib
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
@@ -61,15 +60,18 @@ from noteagent.agent.run_marker import (
     WAITING,
     RunFingerprint,
     RunMarker,
+    config_digest,
     interrupted_marker,
     last_content_entry_id,
     marker_entry,
     missing_tool_calls,
+    sections_digest,
 )
 from noteagent.agent.runtime import (
     BusyError,
     EventSink,
     Resume,
+    ResumeCheck,
     Retry,
     RunCancelled,
     RunPaused,
@@ -82,7 +84,13 @@ from noteagent.agent.runtime import (
     busy_message,
 )
 from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
-from noteagent.agent.tools import Diagnostic, ToolContext, ToolRegistry, ToolResult
+from noteagent.agent.tools import (
+    Diagnostic,
+    ToolContext,
+    ToolRegistry,
+    ToolResult,
+    toolset_name,
+)
 from noteagent.agent.wait import (
     WaitState,
     completion_for,
@@ -365,13 +373,17 @@ class KernelRuntime:
         try:
             _check_cancel(cancel)
             snapshot = self._sessions.load(session_id)
-            if interrupted_marker(
+            marker = interrupted_marker(
                 snapshot.entries, request.run_id
-            ) is None:
+            )
+            if marker is None:
                 raise ValueError(
                     f"session {session_id} is not interrupted on "
                     f"run {request.run_id}"
                 )
+            check = self._resume_check(marker, snapshot.entries)
+            if check.refusal:
+                raise ValueError(check.refusal)
             missing = missing_tool_calls(
                 snapshot.entries, request.run_id
             )
@@ -390,15 +402,12 @@ class KernelRuntime:
                         "meta": {"interrupted": True},
                     },
                 )
-            note = (
-                "Resume after an interruption. The tool result(s) above "
-                "have an unknown outcome; do not assume they ran."
-                if missing
-                else (
-                    "Resume after an interruption. Continue from the last "
-                    "committed turn."
+            note = check.note
+            if missing:
+                note += (
+                    " The tool result(s) above have an unknown outcome; "
+                    "do not assume they ran."
                 )
-            )
             return self._run_loop(
                 session_id,
                 run_id,
@@ -410,6 +419,45 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
+
+    def _resume_check(
+        self,
+        marker: RunMarker,
+        entries: Sequence[Mapping[str, object]],
+    ) -> ResumeCheck:
+        projection = project(entries)
+        current = self._current_fingerprint(projection.sections)
+        refusal = marker.fingerprint.refusal(
+            current, legacy_config=sections_digest(projection.sections)
+        )
+        if refusal:
+            return ResumeCheck(refusal=refusal)
+        note = (
+            "Resume after an interruption. Continue from the last "
+            "committed turn."
+        )
+        stale = marker.fingerprint.stale(current)
+        if stale:
+            note += (
+                " The "
+                + " and ".join(stale)
+                + " changed since it paused; re-read before relying on "
+                "earlier evidence."
+            )
+        return ResumeCheck(note=note)
+
+    def _current_fingerprint(
+        self, sections: Mapping[str, str]
+    ) -> RunFingerprint:
+        """What this kernel's environment assumes, for a marker or a resume."""
+        return RunFingerprint.from_mapping(
+            self._fingerprint,
+            model=self._model_name,
+            toolset=toolset_name(self._tools),
+            config_hash=config_digest(
+                self._fingerprint.get("configHash", ""), sections
+            ),
+        )
 
     def _run_loop(
         self,
@@ -622,12 +670,6 @@ class KernelRuntime:
         """The tools the model may call, with the control action beside them."""
         return (PROPOSE_TOOL,) + self._tools.model_tools()
 
-    def _toolset_name(self) -> str:
-        """A stable name for what this run could do, recorded on its marker."""
-        names = ["propose"]
-        names.extend(tool.name for tool in self._tools.enabled())
-        return "tools:" + ",".join(names)
-
     def _mark(
         self,
         session_id: str,
@@ -646,12 +688,8 @@ class KernelRuntime:
         try:
             snapshot = self._sessions.load(session_id)
             last = last_content_entry_id(snapshot.entries)
-            config_hash = _sections_digest(project(snapshot.entries).sections)
-            fingerprint = RunFingerprint.from_mapping(
-                self._fingerprint,
-                model=self._model_name,
-                toolset=self._toolset_name(),
-                config_hash=config_hash,
+            fingerprint = self._current_fingerprint(
+                project(snapshot.entries).sections
             )
             marker = RunMarker(
                 run_id=run_id,
@@ -1109,19 +1147,6 @@ def _tap(
     # An adapter that stopped on pause returns without a done event; turn that
     # into the pause, not into a truncated answer.
     _check_pause(pause)
-
-
-def _sections_digest(sections: Mapping[str, str]) -> str:
-    """A stable digest of the prompt sections a run was started with."""
-    if not sections:
-        return ""
-    digest = hashlib.sha256()
-    for name in sorted(sections):
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(sections[name].encode("utf-8"))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _retry_status(event: ModelRetryEvent, sink: EventSink) -> None:

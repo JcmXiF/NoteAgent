@@ -12,6 +12,7 @@ that shape. The terminal marker is what a clean run writes.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -30,6 +31,35 @@ ABANDONED = "abandoned"
 SETTLED_STATES = frozenset(
     {FINISHED, FAILED, CANCELLED, WAITING, INTERRUPTED, ABANDONED}
 )
+
+
+def sections_digest(sections: Mapping[str, str]) -> str:
+    """A stable digest of the prompt sections a run was started with."""
+    if not sections:
+        return ""
+    digest = hashlib.sha256()
+    for name in sorted(sections):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sections[name].encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def config_digest(base: str, sections: Mapping[str, str]) -> str:
+    """What a run assumed about non-secret project config and prompt sections.
+
+    The project's settings digest and the system sections are both part of the
+    run's premise. Markers written before both were combined stored only the
+    section digest; :meth:`RunFingerprint.refusal` can accept that legacy value
+    when a caller passes it as ``legacy_config``.
+    """
+    digest = sections_digest(sections)
+    if not base:
+        return digest
+    if not digest:
+        return base
+    return hashlib.sha256(f"{base}\n{digest}".encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +94,43 @@ class RunFingerprint:
             project_root=values.get("projectRoot", ""),
             wiki_generation=values.get("wikiGeneration", ""),
             source_fingerprint=values.get("sourceFingerprint", ""),
+        )
+
+    def refusal(
+        self, current: "RunFingerprint", *, legacy_config: str = ""
+    ) -> str:
+        """Why this run may not resume against *current*, or an empty string.
+
+        ``legacy_config`` is the sections-only digest markers stored before the
+        project settings were folded in; a marker that matches it is accepted so
+        an interrupted run from that version can still continue.
+        """
+        for label, saved, now in (
+            ("project", self.project_root, current.project_root),
+            ("model", self.model, current.model),
+            ("toolset", self.toolset, current.toolset),
+            ("config", self.config_hash, current.config_hash),
+        ):
+            if not saved or saved == now:
+                continue
+            if label == "config" and legacy_config and saved == legacy_config:
+                continue
+            return f"the {label} changed since this run paused"
+        return ""
+
+    def stale(self, current: "RunFingerprint") -> tuple[str, ...]:
+        """The evidence classes whose digest moved; resume continues with a warning."""
+        return tuple(
+            label
+            for label, saved, now in (
+                ("wiki", self.wiki_generation, current.wiki_generation),
+                (
+                    "sources",
+                    self.source_fingerprint,
+                    current.source_fingerprint,
+                ),
+            )
+            if saved and saved != now
         )
 
 
@@ -366,6 +433,7 @@ __all__ = [
     "SETTLED_STATES",
     "TerminalInference",
     "WAITING",
+    "config_digest",
     "infer_terminal",
     "interrupted_marker",
     "last_content_entry_id",
@@ -375,4 +443,5 @@ __all__ = [
     "missing_tool_calls",
     "parse_marker",
     "run_steps",
+    "sections_digest",
 ]

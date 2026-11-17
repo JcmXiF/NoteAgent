@@ -9,13 +9,16 @@ from pathlib import Path
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.kernel import KernelRuntime
+from noteagent.agent.projection import project
 from noteagent.agent.run_marker import (
     ABANDONED,
     FINISHED,
     INTERRUPTED,
     RUNNING,
+    RunFingerprint,
     RunMarker,
     marker_entry,
+    sections_digest,
 )
 from noteagent.agent.runtime import RunResume
 from noteagent.agent.tools import ToolRegistry
@@ -51,15 +54,46 @@ class RunResumeKernelTests(unittest.TestCase):
         )
         self.store.create("s1")
 
-    def runtime(self, model) -> KernelRuntime:
+    def runtime(self, model, **options) -> KernelRuntime:
         return KernelRuntime(
             model=model,
             sessions=self.store,
-            tools=ToolRegistry(),
+            tools=options.pop("tools", ToolRegistry()),
             clock=FixedClock(),
             ids=SequentialIds(),
-            model_name="faux",
+            model_name=options.pop("model_name", "faux"),
+            fingerprint=options.pop("fingerprint", {}),
+            **options,
         )
+
+    def interrupted_with_fingerprint(
+        self,
+        fingerprint: RunFingerprint,
+        session_id: str = "s2",
+    ) -> None:
+        self.store.create(session_id)
+        self.store.append(
+            session_id,
+            {"type": "message", "role": "user", "content": "问题"},
+        )
+        self.store.append(
+            session_id,
+            marker_entry(
+                RunMarker("run-1", RUNNING, fingerprint=fingerprint)
+            ),
+        )
+        self.store.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "答案",
+                "toolCalls": [
+                    {"id": "c1", "name": "wiki_read", "arguments": "{}"}
+                ],
+            },
+        )
+        recover_store(self.store, clock=FixedClock())
 
     def user(self) -> None:
         self.store.append(
@@ -178,6 +212,189 @@ class RunResumeKernelTests(unittest.TestCase):
                 for entry in self.entries()
             )
         )
+
+    def test_a_changed_project_refuses_resume(self) -> None:
+        self.interrupted_with_fingerprint(
+            RunFingerprint(project_root="/somewhere/else")
+        )
+        model = FauxModelClient.text("不该被调用")
+
+        with self.assertRaisesRegex(ValueError, "project changed"):
+            self.runtime(model).execute(
+                RunResume("s2", "run-1"), lambda _event: None
+            )
+        self.assertEqual(model.requests, [])
+
+    def test_a_changed_model_refuses_resume(self) -> None:
+        self.interrupted_with_fingerprint(RunFingerprint(model="faux"))
+        model = FauxModelClient.text("不该被调用")
+
+        with self.assertRaisesRegex(ValueError, "model changed"):
+            self.runtime(model, model_name="other").execute(
+                RunResume("s2", "run-1"), lambda _event: None
+            )
+        self.assertEqual(model.requests, [])
+
+    def test_a_changed_toolset_refuses_resume(self) -> None:
+        self.interrupted_with_fingerprint(
+            RunFingerprint(
+                model="faux", toolset="tools:propose,wiki_read"
+            )
+        )
+        model = FauxModelClient.text("不该被调用")
+
+        with self.assertRaisesRegex(ValueError, "toolset changed"):
+            self.runtime(model).execute(
+                RunResume("s2", "run-1"), lambda _event: None
+            )
+        self.assertEqual(model.requests, [])
+
+    def test_a_changed_config_refuses_resume(self) -> None:
+        self.interrupted_with_fingerprint(
+            RunFingerprint(model="faux", config_hash="old-config")
+        )
+        model = FauxModelClient.text("不该被调用")
+
+        with self.assertRaisesRegex(ValueError, "config changed"):
+            self.runtime(model).execute(
+                RunResume("s2", "run-1"), lambda _event: None
+            )
+        self.assertEqual(model.requests, [])
+
+    def test_a_legacy_sections_only_config_still_resumes(self) -> None:
+        self.store.create("s2")
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "user", "content": "问题"},
+        )
+        self.store.append(
+            "s2",
+            {
+                "type": "system_section",
+                "sections": {"grounding": "只依据 wiki 回答"},
+            },
+        )
+        legacy = sections_digest(
+            project(self.store.load("s2").entries).sections
+        )
+        self.store.append(
+            "s2",
+            marker_entry(
+                RunMarker(
+                    "run-1",
+                    RUNNING,
+                    fingerprint=RunFingerprint(
+                        model="faux", config_hash=legacy
+                    ),
+                )
+            ),
+        )
+        self.store.append(
+            "s2",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "答案",
+                "toolCalls": [
+                    {"id": "c1", "name": "wiki_read", "arguments": "{}"}
+                ],
+            },
+        )
+        recover_store(self.store, clock=FixedClock())
+        model = FauxModelClient.text("继续回答")
+
+        result = self.runtime(
+            model, fingerprint={"configHash": "settings-digest"}
+        ).execute(RunResume("s2", "run-1"), lambda _event: None)
+
+        self.assertEqual(result.status, "completed")
+        joined = "\n".join(
+            message.content for message in model.requests[0].messages
+        )
+        self.assertIn("Resume after an interruption", joined)
+
+    def test_changed_wiki_and_sources_resume_with_a_warning(self) -> None:
+        self.interrupted_with_fingerprint(
+            RunFingerprint(
+                model="faux",
+                wiki_generation="wiki-old",
+                source_fingerprint="source-old",
+            )
+        )
+        model = FauxModelClient.text("继续回答")
+        runtime = self.runtime(
+            model,
+            fingerprint={
+                "wikiGeneration": "wiki-new",
+                "sourceFingerprint": "source-new",
+            },
+        )
+
+        result = runtime.execute(
+            RunResume("s2", "run-1"), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "completed")
+        joined = "\n".join(
+            message.content for message in model.requests[0].messages
+        )
+        self.assertIn("wiki and sources changed", joined)
+        self.assertIn(
+            "re-read before relying on earlier evidence", joined
+        )
+        markers = [
+            entry
+            for entry in self.store.load("s2").entries
+            if entry["type"] == "run_marker"
+        ]
+        resumed = [
+            marker for marker in markers if marker.get("resumes") == "run-1"
+        ]
+        self.assertEqual(len(resumed), 1)
+        self.assertIn("wiki and sources changed", resumed[0]["note"])
+
+    def test_a_question_left_before_a_start_marker_is_resumable(self) -> None:
+        self.store.create("s2")
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "user", "content": "第一个问题"},
+        )
+        self.store.append(
+            "s2", marker_entry(RunMarker("run-1", RUNNING))
+        )
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "assistant", "content": "答案"},
+        )
+        self.store.append(
+            "s2", marker_entry(RunMarker("run-1", FINISHED))
+        )
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "user", "content": "第二个问题"},
+        )
+        found = recover_store(self.store, clock=FixedClock())
+        self.assertEqual(len(found), 1)
+        model = FauxModelClient.text("第二个答案")
+
+        result = self.runtime(model).execute(
+            RunResume("s2", found[0].run_id), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertFalse(
+            any(
+                entry.get("type") == "message"
+                and entry.get("role") == "toolResult"
+                and entry.get("meta", {}).get("interrupted")
+                for entry in self.store.load("s2").entries
+            )
+        )
+        joined = "\n".join(
+            message.content for message in model.requests[0].messages
+        )
+        self.assertIn("第二个问题", joined)
+        self.assertIn("Continue from the last committed turn", joined)
 
     def test_a_finished_run_refuses_resume(self) -> None:
         self.user()
@@ -328,6 +545,112 @@ class RunResumeApiTests(unittest.TestCase):
                 for entry in self.store.load("s1").entries
             )
         )
+
+    def test_a_missing_project_is_refused_before_the_stream(self) -> None:
+        self.store.create("s2")
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "user", "content": "问题"},
+        )
+        self.store.append(
+            "s2",
+            marker_entry(
+                RunMarker(
+                    "run-2",
+                    RUNNING,
+                    fingerprint=RunFingerprint(
+                        project_root="/missing/project"
+                    ),
+                )
+            ),
+        )
+        self.store.append(
+            "s2",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "答案",
+                "toolCalls": [
+                    {"id": "c2", "name": "wiki_read", "arguments": "{}"}
+                ],
+            },
+        )
+        recover_store(self.store, clock=FixedClock())
+        model = FauxModelClient.text("不该被调用")
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    sessions=self.store,
+                    model=model,
+                    settings={"model": "faux"},
+                    tools=ToolRegistry(),
+                )
+            )
+        )
+
+        response = client.post(
+            "/api/v1/sessions/s2/resume", json={"runId": "run-2"}
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "session.notResumable")
+        self.assertIn("project changed", response.json()["detail"])
+        self.assertEqual(model.requests, [])
+
+    def test_a_changed_model_is_refused_before_the_stream(self) -> None:
+        self.store.create("s2")
+        self.store.append(
+            "s2",
+            {"type": "message", "role": "user", "content": "问题"},
+        )
+        self.store.append(
+            "s2",
+            marker_entry(
+                RunMarker(
+                    "run-2",
+                    RUNNING,
+                    fingerprint=RunFingerprint(model="faux"),
+                )
+            ),
+        )
+        self.store.append(
+            "s2",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "答案",
+                "toolCalls": [
+                    {"id": "c2", "name": "wiki_read", "arguments": "{}"}
+                ],
+            },
+        )
+        recover_store(self.store, clock=FixedClock())
+        model = FauxModelClient.text("不该被调用")
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    sessions=self.store,
+                    model=model,
+                    settings={"model": "other"},
+                    tools=ToolRegistry(),
+                )
+            )
+        )
+
+        response = client.post(
+            "/api/v1/sessions/s2/resume", json={"runId": "run-2"}
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "session.notResumable")
+        self.assertIn("model changed", response.json()["detail"])
+        self.assertEqual(model.requests, [])
+        latest = [
+            entry
+            for entry in self.store.load("s2").entries
+            if entry["type"] == "run_marker"
+        ][-1]
+        self.assertEqual(latest["state"], INTERRUPTED)
 
     def test_abandon_answers_and_is_idempotent(self) -> None:
         client = self.client()

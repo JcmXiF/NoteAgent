@@ -22,7 +22,9 @@ from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.agent.run_marker import (
     ABANDONED,
     INTERRUPTED,
+    RUNNING,
     SETTLED_STATES,
+    WAITING,
     RunMarker,
     infer_terminal,
     interrupted_marker,
@@ -101,6 +103,17 @@ def recover_store(
             found.append(_record(summary, marker, entries))
             continue
         if marker.state in SETTLED_STATES:
+            if marker.state == WAITING:
+                # The run is parked on a job, not interrupted; a question
+                # typed meanwhile continues through the wait's own resume.
+                continue
+            pending = _pending_question(entries)
+            if pending is not None:
+                started, interrupted = _question_markers(pending, now)
+                if mark:
+                    _append(store, summary.id, started)
+                    _append(store, summary.id, interrupted)
+                found.append(_record(summary, interrupted, entries))
             continue
         inference = infer_terminal(entries)
         recovered = replace(
@@ -193,6 +206,56 @@ def abandon_run(
     )
     store.append(session_id, marker_entry(abandoned))
     return abandoned, True
+
+
+def _pending_question(
+    entries: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    """The user turn committed after the latest marker, if there is one.
+
+    ``infer_terminal`` owns the shape rules: a failed run that wrote its marker
+    after the question is settled, not a question waiting for a run; only a
+    question after the last settled marker is pending.
+    """
+    inference = infer_terminal(entries)
+    if (
+        inference.state != INTERRUPTED
+        or inference.reason != "question without answer"
+    ):
+        return None
+    last = entries[-1] if entries else None
+    if (
+        isinstance(last, Mapping)
+        and last.get("type") == "message"
+        and last.get("role") == "user"
+    ):
+        return last
+    return None
+
+
+def _question_markers(
+    user: Mapping[str, object], now: Clock
+) -> tuple[RunMarker, RunMarker]:
+    """A start and interrupted marker for a question no run ever began.
+
+    The process died after committing the user turn and before the kernel's
+    start marker. A synthetic run makes the question resumable without
+    pretending any tool call happened: the start marker is what scopes the
+    transcript, so the resumed run has no missing result to invent.
+    """
+    entry_id = user.get("id")
+    ident = entry_id if isinstance(entry_id, str) else ""
+    at = iso_timestamp(now)
+    run_id = f"recovered-{ident or at}"
+    started = RunMarker(run_id, RUNNING, last_entry_id=ident, created_at=at)
+    interrupted = RunMarker(
+        run_id,
+        INTERRUPTED,
+        last_entry_id=ident,
+        reason="question without answer",
+        created_at=at,
+    )
+    return started, interrupted
 
 
 def _loaded(
