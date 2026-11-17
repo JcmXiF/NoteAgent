@@ -1229,7 +1229,24 @@
       "model": "Model name",
       "modelHint": "The embedding model the service offers, e.g. Qwen3-Embedding-0.6B.",
       "outbound": "Turning this on sends wiki pages to the embedding service configured here. Notes and raw sources are not sent.",
-      "takesEffect": "Takes effect with the next run."
+      "takesEffect": "Takes effect with the next run.",
+      "statusTitle": "Index for this project",
+      "statusLoading": "Reading the index…",
+      "statusDisabled": "Retrieval is off",
+      "statusUnavailable": "The index cannot be read",
+      "statusCold": "The index is not built yet",
+      "statusStale": "The index is out of date",
+      "statusReady": "The index is ready",
+      "statusCounts": "{{units}} pages · {{chunks}} passages",
+      "statusFailed": "{{count}} pages could not be built",
+      "statusFailedToLoad": "The status could not be read.",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
+      "rebuild": "Rebuild",
+      "rebuilding": "Rebuilding…",
+      "rebuildDone": "Added {{added}} · updated {{updated}} · unchanged {{unchanged}} · deleted {{deleted}} · embedded {{embedded}} passages",
+      "rebuildFailed": "The rebuild did not finish.",
+      "rebuildFailures": "Pages that could not be built"
     },
     "project": {
       "title": "What this project is for",
@@ -1426,6 +1443,7 @@
         "collidesWithFile": "That name is already a file. Choose another.",
         "unknown": "No project called “{{name}}”.",
         "notADirectory": "This is not a project.",
+        "notConfigured": "No project is open yet. Open or create one first.",
         "notValid": "“{{name}}” is not a complete project yet and cannot be opened.",
         "snapshotFailed": "A copy of the notes library could not be kept before clearing, so nothing was cleared. Check disk space and permissions, then try again.",
         "migrateCollisions": "This project cannot be migrated yet: {{count}} names would land on the same file ({{items}}). Rename or merge them first.",
@@ -1483,6 +1501,8 @@
         "configInvalid": "The settings file cannot be used. It may have been damaged or edited by hand.",
         "configVersion": "The settings file was written by another version of the app and cannot be used.",
         "profileNameNotFound": "That connection no longer exists. Refresh and try again.",
+        "ragDisabled": "Retrieval is off, so there is no index to rebuild.",
+        "ragUnavailable": "The retrieval service is not ready, so the index cannot be rebuilt. Check the embedding address and model.",
         "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
         "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
       }

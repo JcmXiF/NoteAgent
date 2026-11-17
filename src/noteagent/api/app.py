@@ -86,6 +86,7 @@ from noteagent.api.projects import (
     resolve_repo_root,
     use_project,
 )
+from noteagent.api.rag_settings import rag_rebuild_payload, rag_status_payload
 from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
@@ -859,6 +860,14 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/settings/deep-check")
     def settings_deep_check() -> dict[str, object]:
         return deep_check()
+
+    @app.get("/api/settings/rag/status")
+    def settings_rag_status() -> dict[str, object]:
+        return rag_status_payload()
+
+    @app.post("/api/settings/rag/rebuild")
+    def settings_rag_rebuild() -> dict[str, object]:
+        return rag_rebuild_payload()
 
     @app.get("/api/projects")
     def projects() -> dict[str, object]:

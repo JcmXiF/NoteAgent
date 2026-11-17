@@ -9,7 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from noteagent.api.session_access import _rag_backend
+from noteagent.api.session_access import rag_backend
 from noteagent.project.layout import ProjectLayout
 from noteagent.rag.search import RagSearchBackend, reset_backends
 from noteagent.settings.install import apply_install
@@ -48,13 +48,13 @@ class WiringTests(unittest.TestCase):
 
     def test_rag_off_returns_no_backend(self) -> None:
         with rag_env():
-            self.assertIsNone(_rag_backend(self.layout))
+            self.assertIsNone(rag_backend(self.layout))
 
     def test_an_unusable_config_returns_a_degraded_backend(self) -> None:
         unusable = dict(BASE_ENV, NOTEAGENT_RAG_EMBEDDING_ENDPOINT="")
 
         with rag_env(**unusable):
-            backend = _rag_backend(self.layout)
+            backend = rag_backend(self.layout)
             result = backend.search("query")
 
         self.assertTrue(result.degraded)
@@ -68,7 +68,7 @@ class WiringTests(unittest.TestCase):
 
     def test_a_valid_config_returns_a_project_backend(self) -> None:
         with rag_env(**BASE_ENV):
-            backend = _rag_backend(self.layout)
+            backend = rag_backend(self.layout)
 
         self.assertIsInstance(backend, RagSearchBackend)
 
@@ -118,7 +118,7 @@ class SettingsWiringTests(unittest.TestCase):
                     }
                 }
             )
-            backend = _rag_backend(self.layout)
+            backend = rag_backend(self.layout)
 
         self.assertIsInstance(backend, RagSearchBackend)
 
@@ -140,10 +140,10 @@ class SettingsWiringTests(unittest.TestCase):
                     }
                 }
             )
-            self.assertIsInstance(_rag_backend(self.layout), RagSearchBackend)
+            self.assertIsInstance(rag_backend(self.layout), RagSearchBackend)
 
             self._save({"rag": {"enabled": False}})
-            self.assertIsNone(_rag_backend(self.layout))
+            self.assertIsNone(rag_backend(self.layout))
 
 
 if __name__ == "__main__":

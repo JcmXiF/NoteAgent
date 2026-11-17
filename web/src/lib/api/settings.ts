@@ -86,6 +86,41 @@ export function probeSearch(
   return postJson<{ ok: true; count: number }>("/settings/search/probe", patch);
 }
 
+/** The states the index reports; `unavailable` carries the reason. */
+export type RagIndexState =
+  | "disabled"
+  | "unavailable"
+  | "cold"
+  | "stale"
+  | "ready";
+
+export type RagIndexStatus = {
+  state: RagIndexState;
+  units: number;
+  chunks: number;
+  failed: number;
+  reason: string;
+};
+
+/** What one synchronous rebuild changed, and which pages it could not build. */
+export type RagRebuildReport = {
+  added: number;
+  updated: number;
+  unchanged: number;
+  deleted: number;
+  embeddedChunks: number;
+  rebuilt: boolean;
+  failures: { unitId: string; pageId: string; reason: string }[];
+};
+
+export function fetchRagStatus(): Promise<RagIndexStatus> {
+  return getJson<RagIndexStatus>("/settings/rag/status");
+}
+
+export function rebuildRagIndex(): Promise<RagRebuildReport> {
+  return postJson<RagRebuildReport>("/settings/rag/rebuild", {});
+}
+
 /** The explicit check: tool calling, then native search when it is in use. */
 export function runDeepCheck(): Promise<DeepCheckResult> {
   return postJson<DeepCheckResult>("/settings/deep-check", {});

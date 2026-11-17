@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,8 +10,16 @@ import {
   SettingsSection,
   SourceBadge,
 } from "@/components/settings/fields";
-import { saveSettings } from "@/lib/api/settings";
+import {
+  fetchRagStatus,
+  rebuildRagIndex,
+  saveSettings,
+  type RagIndexState,
+  type RagIndexStatus,
+  type RagRebuildReport,
+} from "@/lib/api/settings";
 import { errorMessage } from "@/lib/api/client";
+import i18n from "@/i18n";
 import {
   isLocked,
   ragDirty,
@@ -20,6 +29,15 @@ import {
   type InstallSettings,
   type RagDraft,
 } from "@/lib/install-settings";
+import { useWorkspaceStore } from "@/stores/workspace-store";
+
+const STATE_LABELS: Record<RagIndexState, string> = {
+  disabled: "settings.retrieval.statusDisabled",
+  unavailable: "settings.retrieval.statusUnavailable",
+  cold: "settings.retrieval.statusCold",
+  stale: "settings.retrieval.statusStale",
+  ready: "settings.retrieval.statusReady",
+};
 
 /**
  * Hybrid retrieval for this computer.
@@ -38,15 +56,45 @@ export function RetrievalSection({
   onDirty: (dirty: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const currentProject = useWorkspaceStore((state) => state.current);
   const [draft, setDraft] = useState<RagDraft>(() => ragDraftFrom(install.rag));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<RagIndexStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [report, setReport] = useState<RagRebuildReport | null>(null);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
 
   const savedKey = JSON.stringify(install.rag);
   useEffect(() => {
     setDraft(ragDraftFrom(install.rag));
   }, [savedKey]);
+
+  const refreshStatus = useCallback(async () => {
+    setLoadingStatus(true);
+    setStatusError(null);
+    // A new question, not an answer: the previous project's state must not sit
+    // beside a failure or a spinner.
+    setStatus(null);
+    try {
+      setStatus(await fetchRagStatus());
+    } catch (err) {
+      setStatusError(
+        errorMessage(err, i18n.t("settings.retrieval.statusFailedToLoad")),
+      );
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, []);
+
+  // The answer describes the active project and the saved switch, so a save or
+  // a project change is a reason to ask again.
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus, savedKey, currentProject]);
 
   const problems = ragProblems(draft);
   const dirty = ragDirty(draft, install.rag);
@@ -78,7 +126,32 @@ export function RetrievalSection({
     }
   };
 
+  const rebuild = async () => {
+    setRebuilding(true);
+    setRebuildError(null);
+    setReport(null);
+    try {
+      const result = await rebuildRagIndex();
+      setReport(result);
+      await refreshStatus();
+    } catch (err) {
+      setRebuildError(errorMessage(err, t("settings.retrieval.rebuildFailed")));
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   const toggleLocked = locked("rag.enabled");
+  const stateKey = status
+    ? (STATE_LABELS[status.state] ?? "settings.retrieval.statusUnavailable")
+    : "";
+  const indexed =
+    status !== null &&
+    status.state !== "disabled" &&
+    status.state !== "unavailable"
+      ? status
+      : null;
+  const canRebuild = indexed !== null;
 
   return (
     <SettingsSection
@@ -160,6 +233,102 @@ export function RetrievalSection({
           </span>
         ) : null}
       </SaveRow>
+
+      <FieldGroup title={t("settings.retrieval.statusTitle")}>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium">
+            {status
+              ? t(stateKey)
+              : statusError
+                ? t("settings.retrieval.statusUnavailable")
+                : t("settings.retrieval.statusLoading")}
+          </span>
+          {indexed ? (
+            <>
+              <span className="text-xs text-muted-foreground">
+                {t("settings.retrieval.statusCounts", {
+                  units: indexed.units,
+                  chunks: indexed.chunks,
+                })}
+              </span>
+              {indexed.failed > 0 ? (
+                <span className="text-xs text-destructive">
+                  {t("settings.retrieval.statusFailed", {
+                    count: indexed.failed,
+                  })}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loadingStatus || rebuilding}
+              onClick={() => void refreshStatus()}
+            >
+              {loadingStatus
+                ? t("settings.retrieval.refreshing")
+                : t("settings.retrieval.refresh")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!canRebuild || rebuilding || loadingStatus}
+              onClick={() => void rebuild()}
+            >
+              {rebuilding
+                ? t("settings.retrieval.rebuilding")
+                : t("settings.retrieval.rebuild")}
+            </Button>
+          </div>
+        </div>
+        {status?.reason && status.state !== "disabled" ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {status.reason}
+          </p>
+        ) : null}
+        {statusError ? (
+          <p role="alert" className="text-xs text-destructive">
+            {statusError}
+          </p>
+        ) : null}
+        {rebuildError ? (
+          <p role="alert" className="text-xs text-destructive">
+            {rebuildError}
+          </p>
+        ) : null}
+        {report ? (
+          <div className="flex flex-col gap-1">
+            <p className="text-xs text-muted-foreground">
+              {t("settings.retrieval.rebuildDone", {
+                added: report.added,
+                updated: report.updated,
+                unchanged: report.unchanged,
+                deleted: report.deleted,
+                embedded: report.embeddedChunks,
+              })}
+            </p>
+            {report.failures.length > 0 ? (
+              <div className="flex flex-col gap-0.5">
+                <span className="text-xs font-medium">
+                  {t("settings.retrieval.rebuildFailures")}
+                </span>
+                <ul className="flex flex-col gap-0.5">
+                  {report.failures.map((failure) => (
+                    <li
+                      key={failure.unitId}
+                      className="text-xs text-destructive"
+                    >
+                      {failure.pageId}: {failure.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </FieldGroup>
     </SettingsSection>
   );
 }

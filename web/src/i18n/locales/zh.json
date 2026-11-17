@@ -1229,7 +1229,24 @@
       "model": "模型名",
       "modelHint": "服务端提供的嵌入模型名，例如 Qwen3-Embedding-0.6B。",
       "outbound": "开启后，wiki 内容页会发送到这里的嵌入服务；笔记与原始资料不会发送。",
-      "takesEffect": "保存后，下一次任务开始使用。"
+      "takesEffect": "保存后，下一次任务开始使用。",
+      "statusTitle": "当前项目的索引",
+      "statusLoading": "正在读取索引…",
+      "statusDisabled": "检索已关闭",
+      "statusUnavailable": "无法读取索引",
+      "statusCold": "索引尚未建立",
+      "statusStale": "索引已过期",
+      "statusReady": "索引就绪",
+      "statusCounts": "{{units}} 个页面 · {{chunks}} 个片段",
+      "statusFailed": "{{count}} 个页面未能建立",
+      "statusFailedToLoad": "状态没有读出来。",
+      "refresh": "刷新",
+      "refreshing": "刷新中…",
+      "rebuild": "重建",
+      "rebuilding": "重建中…",
+      "rebuildDone": "新增 {{added}} · 更新 {{updated}} · 未变 {{unchanged}} · 删除 {{deleted}} · 嵌入 {{embedded}} 个片段",
+      "rebuildFailed": "重建没有完成。",
+      "rebuildFailures": "未能建立的页面"
     },
     "project": {
       "title": "这个项目在写什么",
@@ -1426,6 +1443,7 @@
         "collidesWithFile": "这个名字已被一个文件使用，请更换。",
         "unknown": "不存在名为「{{name}}」的项目。",
         "notADirectory": "这里不是一个项目。",
+        "notConfigured": "还没有打开项目，请先打开或创建一个项目。",
         "notValid": "「{{name}}」还不是完整的项目，无法打开。",
         "snapshotFailed": "重置前未能保存一份笔记库副本，因此没有清空。请确认磁盘空间和权限后重试。",
         "migrateCollisions": "这个项目暂时不能迁移：有 {{count}} 个名字会落到同一个文件（{{items}}）。请先重命名或合并。",
@@ -1483,6 +1501,8 @@
         "configInvalid": "设置文件无法使用，可能已损坏或被手动修改。",
         "configVersion": "设置文件由另一个版本的应用写入，当前版本无法使用。",
         "profileNameNotFound": "这个连接已不存在，请刷新后重试。",
+        "ragDisabled": "检索已关闭，没有可重建的索引。",
+        "ragUnavailable": "检索服务尚未就绪，暂时无法重建索引。请检查嵌入服务地址与模型。",
         "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
         "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
       }

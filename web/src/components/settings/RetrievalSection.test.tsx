@@ -6,12 +6,20 @@ import i18n from "@/i18n";
 import { RetrievalSection } from "@/components/settings/RetrievalSection";
 import { installSettings, typeInto } from "@/components/settings/test-fixtures";
 import type { InstallSettings } from "@/lib/install-settings";
+import { useWorkspaceStore } from "@/stores/workspace-store";
 
 vi.mock("@/lib/api/settings", () => ({
   saveSettings: vi.fn(),
+  fetchRagStatus: vi.fn(),
+  rebuildRagIndex: vi.fn(),
 }));
 
-import { saveSettings } from "@/lib/api/settings";
+import {
+  fetchRagStatus,
+  rebuildRagIndex,
+  saveSettings,
+  type RagRebuildReport,
+} from "@/lib/api/settings";
 
 /**
  * Retrieval is one install-wide switch. The service fields stay out of the way
@@ -29,6 +37,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useWorkspaceStore.setState({ current: null });
+  vi.mocked(fetchRagStatus).mockResolvedValue({
+    state: "disabled",
+    units: 0,
+    chunks: 0,
+    failed: 0,
+    reason: "",
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -175,5 +191,191 @@ describe("the retrieval switch", () => {
     expect(toggle().hasAttribute("data-disabled")).toBe(true);
     expect(input("服务地址").disabled).toBe(true);
     expect(host.textContent).toContain("环境变量");
+  });
+});
+
+describe("the index status", () => {
+  it("shows the current project's state and counts", async () => {
+    vi.mocked(fetchRagStatus).mockResolvedValue({
+      state: "ready",
+      units: 2,
+      chunks: 5,
+      failed: 0,
+      reason: "",
+    });
+
+    await draw(install());
+
+    expect(fetchRagStatus).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("索引就绪");
+    expect(host.textContent).toContain("2 个页面");
+    expect(host.textContent).toContain("5 个片段");
+    expect(button("重建").disabled).toBe(false);
+  });
+
+  it("says why the index cannot be read and cannot rebuild it", async () => {
+    vi.mocked(fetchRagStatus).mockResolvedValue({
+      state: "unavailable",
+      units: 0,
+      chunks: 0,
+      failed: 0,
+      reason: "no active project: none",
+    });
+
+    await draw(install());
+
+    expect(host.textContent).toContain("无法读取索引");
+    expect(host.textContent).toContain("no active project");
+    expect(button("重建").disabled).toBe(true);
+  });
+
+  it("cannot rebuild while retrieval is off", async () => {
+    await draw(install());
+
+    expect(host.textContent).toContain("检索已关闭");
+    expect(button("重建").disabled).toBe(true);
+  });
+
+  it("reads the status again when the project changes", async () => {
+    await draw(install());
+    expect(fetchRagStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      useWorkspaceStore.setState({ current: "other" });
+    });
+
+    expect(fetchRagStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not leave the previous project's index on screen", async () => {
+    vi.mocked(fetchRagStatus).mockResolvedValueOnce({
+      state: "ready",
+      units: 2,
+      chunks: 5,
+      failed: 0,
+      reason: "",
+    });
+    await draw(install());
+    expect(host.textContent).toContain("2 个页面");
+
+    let fail!: (error: Error) => void;
+    const pending = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    vi.mocked(fetchRagStatus).mockReturnValueOnce(pending);
+
+    await act(async () => {
+      useWorkspaceStore.setState({ current: "other" });
+    });
+
+    expect(host.textContent).not.toContain("2 个页面");
+    expect(host.textContent).toContain("正在读取索引");
+
+    await act(async () => {
+      fail(new Error("boom"));
+      await pending.catch(() => undefined);
+    });
+
+    expect(host.textContent).toContain("无法读取索引");
+    expect(host.textContent).not.toContain("2 个页面");
+  });
+
+  it("reads the status again when asked", async () => {
+    vi.mocked(fetchRagStatus)
+      .mockResolvedValueOnce({
+        state: "cold",
+        units: 1,
+        chunks: 0,
+        failed: 0,
+        reason: "",
+      })
+      .mockResolvedValue({
+        state: "ready",
+        units: 1,
+        chunks: 3,
+        failed: 0,
+        reason: "",
+      });
+
+    await draw(install());
+    expect(host.textContent).toContain("索引尚未建立");
+
+    await press("刷新");
+
+    expect(fetchRagStatus).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("索引就绪");
+    expect(host.textContent).toContain("3 个片段");
+  });
+
+  it("shows progress and the report while it rebuilds", async () => {
+    let finish!: (report: RagRebuildReport) => void;
+    const pending = new Promise<RagRebuildReport>((resolve) => {
+      finish = resolve;
+    });
+    vi.mocked(rebuildRagIndex).mockReturnValue(pending);
+    vi.mocked(fetchRagStatus)
+      .mockResolvedValueOnce({
+        state: "cold",
+        units: 1,
+        chunks: 0,
+        failed: 0,
+        reason: "",
+      })
+      .mockResolvedValue({
+        state: "ready",
+        units: 1,
+        chunks: 2,
+        failed: 0,
+        reason: "",
+      });
+
+    await draw(install());
+    await press("重建");
+
+    expect(button("重建中…").disabled).toBe(true);
+    expect(rebuildRagIndex).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finish({
+        added: 1,
+        updated: 0,
+        unchanged: 0,
+        deleted: 0,
+        embeddedChunks: 2,
+        rebuilt: true,
+        failures: [],
+      });
+      await pending;
+    });
+
+    expect(host.textContent).toContain("新增 1");
+    expect(host.textContent).toContain("嵌入 2 个片段");
+    expect(host.textContent).toContain("索引就绪");
+  });
+
+  it("names the pages that could not be built", async () => {
+    vi.mocked(fetchRagStatus).mockResolvedValueOnce({
+      state: "cold",
+      units: 1,
+      chunks: 0,
+      failed: 0,
+      reason: "",
+    });
+    vi.mocked(rebuildRagIndex).mockResolvedValue({
+      added: 1,
+      updated: 0,
+      unchanged: 0,
+      deleted: 0,
+      embeddedChunks: 0,
+      rebuilt: true,
+      failures: [{ unitId: "wiki:a", pageId: "a", reason: "down" }],
+    });
+
+    await draw(install());
+    await press("重建");
+
+    expect(host.textContent).toContain("未能建立的页面");
+    expect(host.textContent).toContain("a");
+    expect(host.textContent).toContain("down");
   });
 });

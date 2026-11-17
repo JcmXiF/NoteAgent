@@ -134,10 +134,10 @@ derived index instead of the full-text scan:
 - A cold or stale index returns the old lexical result at once and schedules a sync. A service
   failure, a timeout or a reranker error keeps search working: lexical results, or the fused order
   with a diagnostic.
-- The index is derived data under `.noteagent/rag/`; delete it or rebuild it at any time.
-  `noteagent rag status` reports its state; `noteagent rag rebuild` rebuilds it. One embedding
-  service answers both queries and documents; the reranker is a second, optional service. Query
-  embeddings use the short instruction prefix, documents do not.
+- The index is derived data under `.noteagent/rag/`; the settings screen shows its state and
+  rebuilds it, and `noteagent rag status` / `noteagent rag rebuild` do the same from the command
+  line. One embedding service answers both queries and documents; the reranker is a second,
+  optional service. Query embeddings use the short instruction prefix, documents do not.
 
 ## Desktop app
 
