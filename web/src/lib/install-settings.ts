@@ -590,14 +590,16 @@ export function ragProblems(
   }
   if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
   // The rerank fields are visible even while rerank is off, so a service that
-  // is off may stay empty; the numbers and the key are always usable.
-  if (draft.rerankEnabled) {
-    if (!validBaseUrl(draft.rerankEndpoint)) {
-      problems.push("settings.invalid.ragRerankEndpoint");
-    }
-    if (!draft.rerankModel.trim()) {
-      problems.push("settings.invalid.ragRerankModel");
-    }
+  // is off may stay empty; a non-empty address must still be usable, because
+  // the save sends it.
+  if (
+    (draft.rerankEndpoint.trim() || draft.rerankEnabled) &&
+    !validBaseUrl(draft.rerankEndpoint)
+  ) {
+    problems.push("settings.invalid.ragRerankEndpoint");
+  }
+  if (draft.rerankEnabled && !draft.rerankModel.trim()) {
+    problems.push("settings.invalid.ragRerankModel");
   }
   for (const field of RAG_RERANK_NUMBER_FIELDS) {
     if (isLocked(locked, `rag.rerank.${field.saved}`)) continue;

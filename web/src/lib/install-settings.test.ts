@@ -189,6 +189,12 @@ describe("the retrieval form", () => {
     expect(ragProblems(draft, ["rag.embedding.batch"])).toEqual([]);
   });
 
+  it("checks a rerank address even while rerank is off", () => {
+    expect(
+      ragProblems({ ...RAG_DRAFT, rerankEndpoint: "not a url" }),
+    ).toEqual(["settings.invalid.ragRerankEndpoint"]);
+  });
+
   it("needs a service before rerank can be on", () => {
     expect(ragProblems({ ...RAG_DRAFT, rerankEnabled: true })).toEqual([
       "settings.invalid.ragRerankEndpoint",

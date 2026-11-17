@@ -32,6 +32,8 @@ from urllib.parse import urlsplit
 
 from noteagent.io.atomic import write_text_atomic
 from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
     DEFAULT_QUERY_PREFIX,
 )
@@ -119,8 +121,8 @@ class RagEmbeddingSettings:
     endpoint: str = ""
     model: str = DEFAULT_EMBEDDING_MODEL
     query_prefix: str = DEFAULT_QUERY_PREFIX
-    batch: int = 64
-    concurrency: int = 1
+    batch: int = DEFAULT_BATCH
+    concurrency: int = DEFAULT_CONCURRENCY
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,13 +356,13 @@ def _parse_rag_embedding(raw: object) -> RagEmbeddingSettings:
             limit=2000,
         ),
         batch=_whole(
-            raw.get("batch", 64),
+            raw.get("batch", DEFAULT_BATCH),
             "rag.embedding.batch",
             low=1,
             high=512,
         ),
         concurrency=_whole(
-            raw.get("concurrency", 1),
+            raw.get("concurrency", DEFAULT_CONCURRENCY),
             "rag.embedding.concurrency",
             low=1,
             high=8,

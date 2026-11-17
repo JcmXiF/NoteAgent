@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from noteagent.api.session_access import rag_backend
+from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.layout import ProjectLayout
 from noteagent.rag.search import RagSearchBackend, reset_backends
 from noteagent.settings.install import apply_install
@@ -82,9 +83,14 @@ class SettingsWiringTests(unittest.TestCase):
         self.path = Path(self._tmp.name) / "config.json"
         self.credentials = FakeCredentials()
         reset_backends()
+        # The environment snapshot is cached once per process. Clear it so the
+        # first save inside this test's own environment takes a fresh one: a
+        # caller's RAG variables must not lock the document.
+        reset_process_env_keys()
 
     def tearDown(self) -> None:
         reset_backends()
+        reset_process_env_keys()
         self._tmp.cleanup()
 
     def _save(self, body: dict[str, object]) -> None:

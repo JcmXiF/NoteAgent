@@ -414,6 +414,19 @@ describe("the reranker settings", () => {
     });
   });
 
+  it("reports an invalid rerank address even while rerank is off", async () => {
+    await draw(enabledInstall());
+    await press("重排");
+    act(() => {
+      typeInto(input("重排服务地址"), "not a url");
+    });
+
+    expect(host.textContent).toContain(
+      "请填写以 http:// 或 https:// 开头的重排服务地址。",
+    );
+    expect(button("保存").disabled).toBe(true);
+  });
+
   it("needs a service before rerank can be on", async () => {
     await draw(enabledInstall());
     await press("重排");
