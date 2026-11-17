@@ -1,10 +1,11 @@
 """The one place a reader is told what needs them.
 
-Three queues used to speak separately: sources that changed after they were
-compiled, a compile that was confirmed and then interrupted, and the wiki's own
-check. They are one question to the person reading them — "what is waiting on
-me" — so they are counted together, and the panel shows one number. Nothing here
-acts: each item still carries the action that resolves it.
+Four queues used to speak separately: sources that changed after they were
+compiled, a compile that was confirmed and then interrupted, a run a crash left
+unfinished, and the wiki's own check. They are one question to the person
+reading them — "what is waiting on me" — so they are counted together, and the
+panel shows one number. Nothing here acts: each item still carries the action
+that resolves it.
 """
 
 from __future__ import annotations
@@ -15,8 +16,7 @@ from noteagent.ingest.ingest_recovery import recovery_payload
 from noteagent.ingest.revision_inbox import revision_inbox_payload
 from noteagent.project.doctor import doctor_payload, doctor_project
 from noteagent.project.layout import ProjectLayout
-from noteagent.sessions.jsonl import JsonlSessionStore
-from noteagent.sessions.recovery import interrupted_runs
+from noteagent.sessions.recovery import interrupted_runs_for_layout
 
 __all__ = ["attention_payload"]
 
@@ -33,8 +33,7 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
     if check:
         doctor = doctor_payload(doctor_project(layout), limit=DOCTOR_LIMIT)
     interrupted = [
-        item.payload()
-        for item in interrupted_runs(JsonlSessionStore(layout))
+        item.payload() for item in interrupted_runs_for_layout(layout)
     ]
 
     revision_count = int(revision.get("openCount") or 0)

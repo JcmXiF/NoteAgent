@@ -25,7 +25,7 @@ from noteagent.sessions.jsonl import JsonlSessionStore
 from noteagent.sessions.recovery import (
     abandon_run,
     interrupted_run,
-    scan_store,
+    recover_store,
 )
 
 try:
@@ -85,7 +85,7 @@ class RunResumeKernelTests(unittest.TestCase):
         self.user()
         self.start()
         self.assistant(tool_calls=True)
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
 
     def entries(self):
         return self.store.load("s1").entries
@@ -127,7 +127,7 @@ class RunResumeKernelTests(unittest.TestCase):
     def test_resume_after_a_question_has_no_unknown_result(self) -> None:
         self.user()
         self.start()
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
         model = FauxModelClient.text("答案")
 
         result = self.runtime(model).execute(
@@ -162,7 +162,7 @@ class RunResumeKernelTests(unittest.TestCase):
                 "content": "页面内容",
             },
         )
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
         model = FauxModelClient.text("答案")
 
         result = self.runtime(model).execute(
@@ -183,7 +183,7 @@ class RunResumeKernelTests(unittest.TestCase):
         self.user()
         self.start()
         self.assistant()
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
         model = FauxModelClient.text("不该被调用")
 
         with self.assertRaises(ValueError):
@@ -207,7 +207,7 @@ class RunResumeKernelTests(unittest.TestCase):
                 "proposedAt": "2026-11-10T09:00:00Z",
             },
         )
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
         model = FauxModelClient.text("不该被调用")
 
         with self.assertRaises(ValueError):
@@ -280,7 +280,7 @@ class RunResumeApiTests(unittest.TestCase):
         self.user()
         self.start()
         self.assistant(tool_calls=True)
-        scan_store(self.store, clock=FixedClock())
+        recover_store(self.store, clock=FixedClock())
 
     def client(self, text: str = "继续回答") -> TestClient:
         return TestClient(

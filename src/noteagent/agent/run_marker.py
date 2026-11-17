@@ -79,6 +79,8 @@ class RunMarker:
     resumes: str = ""
     #: A sentence the projection renders to the model on a resume.
     note: str = ""
+    #: Why an interrupted run stopped, in a word the panel can show.
+    reason: str = ""
     created_at: str = ""
     #: The marker's own entry id; filled by parsing a committed entry.
     entry_id: str = ""
@@ -111,6 +113,7 @@ def marker_entry(marker: RunMarker) -> dict[str, object]:
         ("sourceFingerprint", fingerprint.source_fingerprint),
         ("resumes", marker.resumes),
         ("note", marker.note),
+        ("reason", marker.reason),
         ("createdAt", marker.created_at),
     ):
         if value:
@@ -140,6 +143,7 @@ def parse_marker(entry: Mapping[str, object]) -> RunMarker | None:
         ),
         resumes=_text(entry.get("resumes")),
         note=_text(entry.get("note")),
+        reason=_text(entry.get("reason")),
         created_at=_text(entry.get("createdAt")) or _text(entry.get("ts")),
         entry_id=_text(entry.get("id")),
     )

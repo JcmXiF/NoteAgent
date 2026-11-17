@@ -1,4 +1,4 @@
-"""Find runs a crash left unfinished, and say what waits on the reader.
+"""Find the run a crash left unfinished, and say what waits on the reader.
 
 The scan reads the markers a run committed. A latest marker still ``running``
 means the process died before the run could write its terminal state; the
@@ -6,14 +6,16 @@ transcript shape then says whether the run actually finished, stopped at a tool
 call, or went to a wait. The scan writes the recovered terminal marker once, so
 the next start reads a settled state instead of inferring again.
 
-Only sessions that carry a marker are considered: a session from before run
-markers existed is not an interrupted run, and the scan must not invent one.
+Only the session's **latest run** is reconciled: once a newer run starts, an
+older ``running`` marker is history. Only sessions that carry a marker are
+considered, so a session from before run markers existed is never invented as
+interrupted.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
@@ -28,6 +30,8 @@ from noteagent.agent.run_marker import (
     run_steps,
 )
 from noteagent.agent.store import SessionStore, SessionSummary
+from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.jsonl import JsonlSessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,8 @@ __all__ = [
     "interrupted_payload",
     "interrupted_run",
     "interrupted_runs",
-    "scan_store",
+    "interrupted_runs_for_layout",
+    "recover_store",
 ]
 
 
@@ -52,20 +57,27 @@ class InterruptedRun:
     at: str
     last_entry_id: str
     step: int = 0
+    last_message: str = ""
 
     def payload(self) -> dict[str, object]:
-        return {
-            "sessionId": self.session_id,
-            "title": self.title,
-            "runId": self.run_id,
-            "reason": self.reason,
-            "at": self.at,
-            "step": self.step,
-            "lastEntryId": self.last_entry_id,
-        }
+        body = _marker_fields(
+            self.run_id,
+            self.reason,
+            self.at,
+            self.step,
+            self.last_entry_id,
+        )
+        body.update(
+            {
+                "sessionId": self.session_id,
+                "title": self.title,
+                "lastMessage": self.last_message,
+            }
+        )
+        return body
 
 
-def scan_store(
+def recover_store(
     store: SessionStore,
     *,
     clock: Clock | None = None,
@@ -78,23 +90,9 @@ def scan_store(
     becomes ``finished`` (the process died before the marker). The recovered
     marker is written once when *mark* is true; a read-only caller passes false.
     """
-    try:
-        summaries = tuple(store.list())
-    except Exception:
-        logger.exception("the sessions could not be listed for recovery")
-        return ()
     found: list[InterruptedRun] = []
     now = clock or SystemClock()
-    for summary in summaries:
-        try:
-            entries = store.load(summary.id).entries
-        except Exception:
-            logger.warning(
-                "session %s could not be read for recovery",
-                summary.id,
-                exc_info=True,
-            )
-            continue
+    for summary, entries in _loaded(store):
         marker = last_marker(entries)
         if marker is None:
             continue
@@ -104,14 +102,13 @@ def scan_store(
         if marker.state in SETTLED_STATES:
             continue
         inference = infer_terminal(entries)
-        if inference.state not in SETTLED_STATES:
-            continue
         recovered = replace(
             marker,
             state=inference.state,
             last_entry_id=inference.last_entry_id or marker.last_entry_id,
+            reason=inference.reason,
             note=(
-                "the run was interrupted; resume or abandon it"
+                ""
                 if inference.state == INTERRUPTED
                 else "terminal state recovered at startup"
             ),
@@ -126,26 +123,19 @@ def scan_store(
 
 def interrupted_runs(store: SessionStore) -> tuple[InterruptedRun, ...]:
     """The sessions whose latest marker is ``interrupted``, without writing."""
-    try:
-        summaries = tuple(store.list())
-    except Exception:
-        logger.exception("the sessions could not be listed for recovery")
-        return ()
     found: list[InterruptedRun] = []
-    for summary in summaries:
-        try:
-            entries = store.load(summary.id).entries
-        except Exception:
-            logger.warning(
-                "session %s could not be read for recovery",
-                summary.id,
-                exc_info=True,
-            )
-            continue
+    for summary, entries in _loaded(store):
         marker = last_marker(entries)
         if marker is not None and marker.state == INTERRUPTED:
             found.append(_record(summary, marker, entries))
     return tuple(found)
+
+
+def interrupted_runs_for_layout(
+    layout: ProjectLayout,
+) -> tuple[InterruptedRun, ...]:
+    """The interrupted runs of a project's sessions, without writing."""
+    return interrupted_runs(JsonlSessionStore(layout))
 
 
 def interrupted_payload(
@@ -155,13 +145,13 @@ def interrupted_payload(
     marker = last_marker(entries)
     if marker is None or marker.state != INTERRUPTED:
         return None
-    return {
-        "runId": marker.run_id,
-        "reason": marker.note or "interrupted",
-        "at": marker.created_at,
-        "step": run_steps(entries, marker.run_id),
-        "lastEntryId": marker.last_entry_id,
-    }
+    return _marker_fields(
+        marker.run_id,
+        _reason(marker),
+        marker.created_at,
+        run_steps(entries, marker.run_id),
+        marker.last_entry_id,
+    )
 
 
 def interrupted_run(
@@ -201,11 +191,54 @@ def abandon_run(
     abandoned = replace(
         marker,
         state=ABANDONED,
-        note="abandoned by the reader",
+        note="",
+        reason="abandoned by the reader",
         created_at=iso_timestamp(clock or SystemClock()),
     )
     store.append(session_id, marker_entry(abandoned))
     return abandoned, True
+
+
+def _loaded(
+    store: SessionStore,
+) -> Iterator[tuple[SessionSummary, Sequence[Mapping[str, object]]]]:
+    """Each readable session, skipping the ones that cannot be listed or read."""
+    try:
+        summaries = tuple(store.list())
+    except Exception:
+        logger.exception("the sessions could not be listed for recovery")
+        return
+    for summary in summaries:
+        try:
+            entries = store.load(summary.id).entries
+        except Exception:
+            logger.warning(
+                "session %s could not be read for recovery",
+                summary.id,
+                exc_info=True,
+            )
+            continue
+        yield summary, entries
+
+
+def _marker_fields(
+    run_id: str,
+    reason: str,
+    at: str,
+    step: int,
+    last_entry_id: str,
+) -> dict[str, object]:
+    return {
+        "runId": run_id,
+        "reason": reason,
+        "at": at,
+        "step": step,
+        "lastEntryId": last_entry_id,
+    }
+
+
+def _reason(marker: RunMarker) -> str:
+    return marker.reason or marker.note or "interrupted"
 
 
 def _record(
@@ -217,11 +250,26 @@ def _record(
         session_id=summary.id,
         title=summary.title,
         run_id=marker.run_id,
-        reason=marker.note or "interrupted",
+        reason=_reason(marker),
         at=marker.created_at,
         last_entry_id=marker.last_entry_id,
         step=run_steps(entries, marker.run_id),
+        last_message=_last_message(entries),
     )
+
+
+def _last_message(
+    entries: Sequence[Mapping[str, object]],
+) -> str:
+    for entry in reversed(entries):
+        if entry.get("type") != "message":
+            continue
+        if entry.get("role") not in ("user", "assistant"):
+            continue
+        content = entry.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()[:200]
+    return ""
 
 
 def _append(store: SessionStore, session_id: str, marker: RunMarker) -> None:

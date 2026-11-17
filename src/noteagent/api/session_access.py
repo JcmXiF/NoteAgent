@@ -31,7 +31,7 @@ from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
-from noteagent.sessions.recovery import scan_store
+from noteagent.sessions.recovery import recover_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
@@ -57,6 +57,22 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
 def _default_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
     """The project's own store, with the clock and ids the app was built with."""
     return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+
+
+def _active_project_store(deps: AppDeps) -> SessionStore | None:
+    """The active project's store, or ``None`` when there is nothing to open.
+
+    A core that has no project yet, or cannot read the pointer, is a normal
+    start; the route that needs the project reports the reason later.
+    """
+    try:
+        layout = get_active_layout()
+    except ProjectNotConfiguredError:
+        return None
+    except (OSError, ValueError) as err:
+        logger.warning("the active project cannot be read at startup: %s", err)
+        return None
+    return _default_store(deps, layout)
 
 
 def project_sessions(deps: AppDeps) -> SessionStore:
@@ -85,15 +101,11 @@ def migrate_active_project_chats(deps: AppDeps) -> None:
     """
     if deps.sessions is not None:
         return
-    try:
-        layout = get_active_layout()
-    except ProjectNotConfiguredError:
-        return
-    except (OSError, ValueError) as err:
-        logger.warning("the active project cannot be read at startup: %s", err)
+    store = _active_project_store(deps)
+    if store is None:
         return
     try:
-        migrate_sessions(_default_store(deps, layout))
+        migrate_sessions(store)
     except OSError as err:
         # A project the process cannot read is reported when a route needs it;
         # it must not keep the core from starting.
@@ -111,19 +123,11 @@ def recover_active_project_runs(deps: AppDeps) -> None:
         # A test that injected its own store owns its recovery, the same way it
         # owns its migration; production reads the active project's sessions.
         return
-    try:
-        layout = get_active_layout()
-        store = _default_store(deps, layout)
-    except ProjectNotConfiguredError:
-        return
-    except (OSError, ValueError) as err:
-        logger.warning(
-            "the sessions cannot be scanned for interrupted runs: %s",
-            err,
-        )
+    store = _active_project_store(deps)
+    if store is None:
         return
     try:
-        scan_store(store, clock=deps.clock, mark=True)
+        recover_store(store, clock=deps.clock, mark=True)
     except Exception:
         logger.exception("the interrupted-run scan failed")
 

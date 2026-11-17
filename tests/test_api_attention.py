@@ -112,6 +112,7 @@ class AttentionPayloadTests(unittest.TestCase):
             self.assertEqual(item["title"], "Interrupted")
             self.assertEqual(item["runId"], "run-1")
             self.assertEqual(item["step"], 0)
+            self.assertEqual(item["lastMessage"], "问题")
 
 
 if __name__ == "__main__":

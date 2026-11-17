@@ -84,6 +84,7 @@ class MarkerEntryTests(unittest.TestCase):
             ),
             resumes="run-0",
             note="resume from the previous run",
+            reason="tool call without result",
             created_at="2026-11-18T09:00:00Z",
         )
 
@@ -109,6 +110,7 @@ class MarkerEntryTests(unittest.TestCase):
         self.assertEqual(parsed.fingerprint.source_fingerprint, "src-gen")
         self.assertEqual(parsed.resumes, "run-0")
         self.assertEqual(parsed.note, "resume from the previous run")
+        self.assertEqual(parsed.reason, "tool call without result")
         self.assertEqual(parsed.entry_id, "e-m")
 
     def test_a_malformed_marker_is_ignored(self) -> None:

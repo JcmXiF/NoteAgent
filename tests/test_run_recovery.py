@@ -23,8 +23,16 @@ from noteagent.sessions.jsonl import JsonlSessionStore
 from noteagent.sessions.recovery import (
     interrupted_payload,
     interrupted_runs,
-    scan_store,
+    recover_store,
 )
+
+try:
+    from fastapi.testclient import TestClient
+
+    from noteagent.api.app import create_app
+except ImportError:  # pragma: no cover
+    TestClient = None  # type: ignore[misc, assignment]
+    create_app = None  # type: ignore[misc, assignment]
 
 
 class RunRecoveryTests(unittest.TestCase):
@@ -97,7 +105,7 @@ class RunRecoveryTests(unittest.TestCase):
         self.start(session)
         self.assistant(session)
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(found, ())
         self.assertEqual(
@@ -112,11 +120,13 @@ class RunRecoveryTests(unittest.TestCase):
         self.start(session)
         self.assistant(session, tool_calls=True)
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].run_id, "run-1")
         self.assertEqual(found[0].step, 1)
+        self.assertEqual(found[0].reason, "tool call without result")
+        self.assertEqual(found[0].last_message, "答案")
         self.assertEqual(self.markers(session)[-1]["state"], INTERRUPTED)
         self.assertEqual(interrupted_runs(self.store)[0].session_id, session)
 
@@ -124,6 +134,7 @@ class RunRecoveryTests(unittest.TestCase):
         interrupted = state["interrupted"]
         self.assertEqual(interrupted["runId"], "run-1")
         self.assertEqual(interrupted["step"], 1)
+        self.assertEqual(interrupted["reason"], "tool call without result")
         self.assertEqual(
             interrupted["lastEntryId"], self.last_content_id(session)
         )
@@ -135,7 +146,7 @@ class RunRecoveryTests(unittest.TestCase):
         self.user(session)
         self.start(session)
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].step, 0)
@@ -149,7 +160,7 @@ class RunRecoveryTests(unittest.TestCase):
         self.finish(session)
         before = len(self.store.load(session).entries)
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(found, ())
         self.assertEqual(len(self.store.load(session).entries), before)
@@ -160,7 +171,7 @@ class RunRecoveryTests(unittest.TestCase):
         self.user(session)
         self.assistant(session)
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(found, ())
         self.assertEqual(self.markers(session), [])
@@ -176,11 +187,28 @@ class RunRecoveryTests(unittest.TestCase):
         self.assistant(session)
         self.finish(session, "run-2")
 
-        found = scan_store(self.store, clock=FixedClock())
+        found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(found, ())
         self.assertEqual(self.markers(session)[-1]["state"], FINISHED)
         self.assertEqual(interrupted_runs(self.store), ())
+
+    def test_a_newer_running_run_is_interrupted(self) -> None:
+        session = self.create()
+        self.user(session, "第一个问题")
+        self.start(session, "run-1")
+        self.assistant(session)
+        self.finish(session, "run-1")
+        self.user(session, "第二个问题")
+        self.start(session, "run-2")
+        self.assistant(session, tool_calls=True)
+
+        found = recover_store(self.store, clock=FixedClock())
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].run_id, "run-2")
+        self.assertEqual(found[0].step, 1)
+        self.assertEqual(self.markers(session)[-1]["state"], INTERRUPTED)
 
     def test_a_corrupt_session_is_skipped(self) -> None:
         session = self.create()
@@ -195,7 +223,7 @@ class RunRecoveryTests(unittest.TestCase):
         )
 
         with self.assertLogs("noteagent.sessions.jsonl", level="WARNING"):
-            found = scan_store(self.store, clock=FixedClock())
+            found = recover_store(self.store, clock=FixedClock())
 
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].session_id, session)
@@ -207,7 +235,7 @@ class RunRecoveryTests(unittest.TestCase):
         self.assistant(session, tool_calls=True)
         before = len(self.store.load(session).entries)
 
-        found = scan_store(self.store, clock=FixedClock(), mark=False)
+        found = recover_store(self.store, clock=FixedClock(), mark=False)
 
         self.assertEqual(len(found), 1)
         self.assertEqual(len(self.store.load(session).entries), before)
@@ -219,7 +247,7 @@ class RunRecoveryTests(unittest.TestCase):
                 raise OSError("gone")
 
         with self.assertLogs("noteagent.sessions.recovery", level="ERROR"):
-            self.assertEqual(scan_store(Broken()), ())
+            self.assertEqual(recover_store(Broken()), ())
         with self.assertLogs("noteagent.sessions.recovery", level="ERROR"):
             self.assertEqual(interrupted_runs(Broken()), ())
 
@@ -243,6 +271,50 @@ class RunRecoveryTests(unittest.TestCase):
             ),
         ):
             recover_active_project_runs(AppDeps())
+
+    def test_startup_recovery_uses_the_active_project_store(self) -> None:
+        session = self.create()
+        self.user(session)
+        self.start(session)
+        self.assistant(session, tool_calls=True)
+
+        with patch(
+            "noteagent.api.session_access.get_active_layout",
+            return_value=self.layout,
+        ):
+            recover_active_project_runs(AppDeps(clock=FixedClock()))
+
+        self.assertEqual(self.markers(session)[-1]["state"], INTERRUPTED)
+
+    def test_startup_recovery_ignores_an_unreadable_store(self) -> None:
+        class Broken:
+            def list(self):
+                raise OSError("gone")
+
+        with (
+            patch(
+                "noteagent.api.session_access.get_active_layout",
+                return_value=self.layout,
+            ),
+            patch(
+                "noteagent.api.session_access._default_store",
+                return_value=Broken(),
+            ),
+            self.assertLogs(
+                "noteagent.sessions.recovery", level="ERROR"
+            ),
+        ):
+            recover_active_project_runs(AppDeps())
+
+    def test_the_lifespan_runs_the_recovery_scan(self) -> None:
+        if TestClient is None or create_app is None:
+            raise unittest.SkipTest("fastapi is not installed")
+        with patch(
+            "noteagent.api.app.recover_active_project_runs"
+        ) as recover:
+            with TestClient(create_app(AppDeps())):
+                pass
+        recover.assert_called_once()
 
 
 if __name__ == "__main__":
