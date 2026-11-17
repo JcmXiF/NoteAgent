@@ -130,6 +130,9 @@ class OpenAIModelClient:
                         _error_code(response.status_code, detail),
                         f"model HTTP {response.status_code}: {detail[:800]}",
                         retryable=_retryable(response.status_code),
+                        retry_after_s=_retry_after(
+                            response.headers.get("retry-after")
+                        ),
                     )
                     return
                 yield ModelStartEvent(request.model or self._config.model)
@@ -407,6 +410,17 @@ def _int(value: object) -> int:
 
 def _retryable(status: int) -> bool:
     return status in (408, 409, 425, 429) or status >= 500
+
+
+def _retry_after(value: str | None) -> float | None:
+    """The provider's ``retry-after`` in seconds, when it is a plain number."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return max(0.0, seconds)
 
 
 #: How providers word "this prompt did not fit". The loop compacts and asks

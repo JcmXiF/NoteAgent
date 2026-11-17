@@ -163,12 +163,25 @@ class ModelDoneEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelRetryEvent:
+    """A retryable call is about to be made again; the attempt is visible."""
+
+    attempt: int
+    max_retries: int
+    delay_s: float
+    code: str = ""
+    kind: ClassVar[str] = "retry"
+
+
+@dataclass(frozen=True, slots=True)
 class ModelErrorEvent:
     """The provider failed before the turn finished."""
 
     code: str
     message: str
     retryable: bool = False
+    #: The provider's ``retry-after``, when it named one.
+    retry_after_s: float | None = None
     kind: ClassVar[str] = "error"
 
 
@@ -180,6 +193,7 @@ ModelEvent: TypeAlias = (
     | ModelToolCallEnd
     | ModelUsageEvent
     | ModelDoneEvent
+    | ModelRetryEvent
     | ModelErrorEvent
 )
 

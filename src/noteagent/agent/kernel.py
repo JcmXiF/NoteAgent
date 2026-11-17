@@ -38,6 +38,7 @@ from noteagent.agent.model import (
     ModelClient,
     ModelEvent,
     ModelRequest,
+    ModelRetryEvent,
     ModelStreamError,
     ModelTextDelta,
     ToolCall,
@@ -511,6 +512,20 @@ class KernelRuntime:
                         if compacted:
                             # The prompt is smaller now; ask once more.
                             continue
+                    text = "".join(partial).strip()
+                    if text:
+                        # The provider wrote this much before it failed. Keep
+                        # it, but mark it incomplete so nothing reads it as a
+                        # finished answer; a retry here would repeat the text.
+                        self._sessions.append(
+                            session_id,
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": text[:MAX_ABORTED_CHARS],
+                                "stopReason": "incomplete",
+                            },
+                        )
                     self._mark(
                         session_id,
                         run_id,
@@ -1067,6 +1082,15 @@ def _tap(
     for event in stream:
         _check_cancel(cancel)
         _check_pause(pause)
+        if isinstance(event, ModelRetryEvent):
+            sink(
+                StatusEvent(
+                    f"model call failed ({event.code}); retrying "
+                    f"{event.attempt}/{event.max_retries} "
+                    f"in {event.delay_s:.1f}s",
+                    "think",
+                )
+            )
         if isinstance(event, ModelTextDelta):
             partial.append(event.text)
             sink(TokenEvent(event.text))

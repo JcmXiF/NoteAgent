@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
@@ -260,7 +261,7 @@ def session_runtime(
     model = deps.model
     if model is None:
         config = load_llm_config()
-        model = OpenAIModelClient(config)
+        model = RetryingModel(OpenAIModelClient(config))
         model_name = model_name or config.model
     fingerprint = (
         project_fingerprint(layout, config=deps.settings or {})
