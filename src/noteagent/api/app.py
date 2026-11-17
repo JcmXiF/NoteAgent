@@ -12,6 +12,7 @@ built earlier.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
@@ -72,10 +73,19 @@ from noteagent.api.pages import (
     page_view_payload,
     project_search_payload,
 )
-from noteagent.api.pipeline import pipeline_service, prepare_active_project
+from noteagent.api.pipeline import (
+    pipeline_service,
+    pipeline_service_for,
+    prepare_active_project,
+)
+from noteagent.pipeline.confirm import NothingToWrite, confirmation_payload
 from noteagent.pipeline.lock import ProjectBusy
 from noteagent.pipeline.run import run_to_dict
-from noteagent.pipeline.service import PipelineBusy, PipelineService
+from noteagent.pipeline.service import (
+    PipelineBusy,
+    PipelineConflict,
+    PipelineService,
+)
 from noteagent.api.projects import (
     create_project,
     delete_project,
@@ -141,6 +151,7 @@ from noteagent.settings.profiles import (
     delete_profile,
     update_profile,
 )
+from noteagent.project.layout import ProjectLayout
 from noteagent.project.lifecycle import ProjectConfirmError, project_contents
 from noteagent.project.names import ProjectNameError
 from noteagent.project.trash import list_trash, restore_trash
@@ -472,6 +483,13 @@ class GateDecisionBody(BaseModel):
     sectionIds: list[str] = Field(default_factory=list, max_length=40)
 
 
+class PipelineApproveBody(BaseModel):
+    """Approval of a run's plan revision, with optional per-page overrides."""
+
+    planRevision: int = Field(..., ge=0)
+    overrides: list[GateDecisionBody] = Field(default_factory=list, max_length=24)
+
+
 class ClipsPutBody(BaseModel):
     intent: str = ""
     collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
@@ -611,6 +629,18 @@ async def _app_lifespan(_app: FastAPI):
             await task
 
 
+logger = logging.getLogger(__name__)
+
+
+def _after_plan(deps: AppDeps, job_wait, layout: ProjectLayout, job_id: str) -> None:
+    """Close a planning job, then let a waiting run follow the new plan."""
+    job_cleanup(deps, job_wait, layout, job_id, "plan")
+    try:
+        pipeline_service_for(deps, layout).sync_waiting()
+    except Exception:  # noqa: BLE001 - the plan itself is already saved
+        logger.exception("a finished plan could not reach a waiting run")
+
+
 def _pipeline_not_found(run_id: str) -> CodedHTTPException:
     """The one answer for a run id no route could resolve."""
     return CodedHTTPException(
@@ -716,6 +746,54 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 code="material.blocksMissing",
             )
         return {"material": material, "blocks": blocks}
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/confirmation")
+    def pipeline_run_confirmation(run_id: str) -> dict[str, object]:
+        """The pages this run would write, while it waits for a person."""
+        try:
+            confirmation = pipeline_service(deps).confirmation(run_id)
+        except PipelineConflict as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.conflict"
+            ) from err
+        if confirmation is None:
+            raise _pipeline_not_found(run_id)
+        return confirmation_payload(confirmation)
+
+    @app.post("/api/v1/pipeline/runs/{run_id}/approve", status_code=202)
+    def pipeline_approve(
+        run_id: str, body: PipelineApproveBody
+    ) -> dict[str, object]:
+        """Approve a run's plan revision; the compile starts behind it."""
+        try:
+            run = pipeline_service(deps).approve(
+                run_id,
+                plan_revision=body.planRevision,
+                overrides=[item.model_dump() for item in body.overrides],
+            )
+        except PipelineBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.busy"
+            ) from err
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        except PipelineConflict as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.conflict"
+            ) from err
+        except NothingToWrite as err:
+            raise CodedHTTPException(
+                400, str(err), code="pipeline.nothingToWrite"
+            ) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                400, str(err), code="pipeline.invalid"
+            ) from err
+        if run is None:
+            raise _pipeline_not_found(run_id)
+        return run_to_dict(run)
 
     @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
     def pipeline_cancel(run_id: str) -> dict[str, object]:
@@ -1394,17 +1472,15 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         layout = require_project_layout(name)
         # Selections are project state too: the write takes the one writer's
         # place, so it cannot land in the middle of a pipeline run.
-        service = PipelineService(
-            layout,
-            clock=deps.clock,
-            ids=deps.ids,
-            registry=deps.pipeline_registry,
-            keep_runs=deps.pipeline_keep_runs,
-        )
+        service = pipeline_service_for(deps, layout)
         try:
-            return service.write_clips(
+            payload = service.write_clips(
                 lambda: put_clips_payload(layout, body.model_dump())
             )
+            # A run waiting to be confirmed follows the board: a changed plan or
+            # answer gets a new revision, and a changed frame is planned again.
+            service.sync_waiting()
+            return payload
         except ProjectBusy as err:
             raise CodedHTTPException(
                 409, str(err), code="pipeline.projectBusy"
@@ -1516,9 +1592,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
-            background=BackgroundTask(
-                job_cleanup, deps, job_wait, layout, job_id, "plan"
-            ),
+            background=BackgroundTask(_after_plan, deps, job_wait, layout, job_id),
         )
 
     @app.post("/api/projects/{name}/ingest-confirmed")

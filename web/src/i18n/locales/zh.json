@@ -1391,7 +1391,9 @@
         "busy": "另一个流水线正在运行，请等它结束。",
         "projectBusy": "另一个进程正在写这个项目，请关掉它再试。",
         "notFound": "这次流水线运行已经不在了。",
-        "invalid": "流水线的参数不完整。"
+        "invalid": "流水线的参数不完整。",
+        "conflict": "计划已经变了，请看过当前版本再批准。",
+        "nothingToWrite": "至少要有一个页面设为写入，才能批准。"
       },
       "capture.notFound": "这个待登录捕获已经不在了。",
       "material.blocksMissing": "这份材料的暂存内容已经不在了。",

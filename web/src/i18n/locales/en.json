@@ -1391,7 +1391,9 @@
         "busy": "Another pipeline run is already active. Wait for it to finish.",
         "projectBusy": "Another process is writing this project. Close it and try again.",
         "notFound": "That pipeline run is no longer there.",
-        "invalid": "The pipeline was given incomplete settings."
+        "invalid": "The pipeline was given incomplete settings.",
+        "conflict": "The plan has changed. Review the current revision before approving.",
+        "nothingToWrite": "Approve at least one page to write."
       },
       "capture.notFound": "That sign-in page is no longer in the queue.",
       "material.blocksMissing": "This material's staged blocks are gone.",

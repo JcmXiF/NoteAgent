@@ -36,6 +36,13 @@ def pipeline_service(deps: AppDeps) -> PipelineService:
         layout = get_active_layout()
     except ProjectNotConfiguredError as err:
         raise CodedHTTPException(409, str(err), code="project.notConfigured") from err
+    return pipeline_service_for(deps, layout)
+
+
+def pipeline_service_for(deps: AppDeps, layout: ProjectLayout) -> PipelineService:
+    """The pipeline of one named project, for endpoints that already have its layout."""
+    if deps.pipeline is not None:
+        return deps.pipeline
     # A test that wires its own stages gets the deterministic split unless it
     # hands in a model too; a real core frames with the model.
     frame_model = deps.pipeline_frame_model
@@ -59,6 +66,7 @@ def pipeline_service(deps: AppDeps) -> PipelineService:
         keep_runs=deps.pipeline_keep_runs,
         frame_model=frame_model,
         planner=planner,
+        compile=deps.pipeline_compile,
     )
     if deps.pipeline_stages is None:
         service.use_stages(default_stages(layout, clock=deps.clock))
@@ -113,5 +121,6 @@ def default_stages(layout: ProjectLayout, *, clock: Clock) -> Sequence[PipelineS
 __all__ = [
     "default_stages",
     "pipeline_service",
+    "pipeline_service_for",
     "prepare_active_project",
 ]

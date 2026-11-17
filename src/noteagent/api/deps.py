@@ -23,6 +23,7 @@ from noteagent.pipeline.frame_model import (
     DEFAULT_ROUNDS as DEFAULT_FRAME_ROUNDS,
     ModelFraming,
 )
+from noteagent.pipeline.confirm import CompileFn
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
@@ -68,6 +69,9 @@ class AppDeps:
     #: The planner a run calls. A test that wires its own stages hands in a
     #: scripted planner; ``None`` leaves the plan stage unwired.
     pipeline_planner: PlanFn | None = None
+    #: What an approved run calls to write its pages. ``None`` compiles through
+    #: the existing write path; a test scripts it and inspects what it was given.
+    pipeline_compile: CompileFn | None = None
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

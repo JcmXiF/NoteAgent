@@ -24,13 +24,20 @@ class PipelineCancelled(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PlanSummary:
-    """How planning went: pages proposed and answers carried over."""
+    """How planning went: pages proposed, answers carried, plan identified."""
 
     pages: int = 0
     carried: int = 0
+    #: What the plan and answers were, so a confirmation can prove it is the
+    #: revision the person was shown.
+    digest: str = ""
 
     def detail(self) -> dict[str, object]:
-        return {"planPages": self.pages, "planCarried": self.carried}
+        return {
+            "planPages": self.pages,
+            "planCarried": self.carried,
+            "planDigest": self.digest,
+        }
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,6 +22,7 @@ from noteagent.ingest.clips import (
     save_clip_store,
 )
 from noteagent.ingest.topic_map import TopicMap, carry_over_choices, map_clips
+from noteagent.pipeline.confirm import confirmation_digest
 from noteagent.pipeline.materials import Materials
 from noteagent.pipeline.run import PipelineRun
 from noteagent.pipeline.stage import PlanSummary, StageContext
@@ -98,7 +99,11 @@ class Planning:
                 run_id=run.id,
                 detail={"frames": frames, "pages": pages},
             )
-        return PlanSummary(pages=pages, carried=len(carried))
+        return PlanSummary(
+            pages=pages,
+            carried=len(carried),
+            digest=confirmation_digest(updated),
+        )
 
     def _collections_for(
         self, store: ClipStore, run: PipelineRun

@@ -566,7 +566,9 @@ class PipelineStartTests(unittest.TestCase):
                     f"/api/v1/pipeline/runs/{run_id}/materials"
                 ).json()["materials"]
 
-            self.assertEqual(run["status"], "succeeded")
+            # A plan is a proposal, so the run waits for a person to approve it.
+            self.assertEqual(run["status"], "awaiting_confirmation")
+            self.assertEqual(run["stage"], "confirm")
             self.assertEqual(run["planRevision"], 1)
             self.assertEqual(run["detail"]["planPages"], 1)
             self.assertEqual(run["detail"]["planCarried"], 0)
@@ -732,6 +734,12 @@ class PipelineStartTests(unittest.TestCase):
                     "/api/v1/pipeline/runs", json={"intent": "熵"}
                 )
                 self.assertEqual(first.status_code, 201, first.text)
+                # The first run waits for a confirmation; close it before the
+                # next one can own the project.
+                cancelled = client.post(
+                    f"/api/v1/pipeline/runs/{first.json()['id']}/cancel"
+                )
+                self.assertEqual(cancelled.status_code, 200, cancelled.text)
                 clips = client.get("/api/projects/demo/clips").json()
                 changed = client.put(
                     "/api/projects/demo/clips",
