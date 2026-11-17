@@ -8,6 +8,7 @@ the next round starts from what the log now says.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterable, Iterator, Mapping
 from threading import Event, Lock
@@ -56,6 +57,7 @@ from noteagent.agent.run_marker import (
     FINISHED,
     RUNNING,
     WAITING,
+    RunFingerprint,
     RunMarker,
     marker_entry,
 )
@@ -525,18 +527,18 @@ class KernelRuntime:
         try:
             snapshot = self._sessions.load(session_id)
             last = snapshot.entries[-1].get("id") if snapshot.entries else ""
+            config_hash = _sections_digest(project(snapshot.entries).sections)
+            fingerprint = RunFingerprint.from_mapping(
+                self._fingerprint,
+                model=self._model_name,
+                toolset=self._toolset_name(),
+                config_hash=config_hash,
+            )
             marker = RunMarker(
                 run_id=run_id,
                 state=state,
                 last_entry_id=last if isinstance(last, str) else "",
-                model=self._model_name,
-                toolset=self._toolset_name(),
-                config_hash=self._fingerprint.get("configHash", ""),
-                project_root=self._fingerprint.get("projectRoot", ""),
-                wiki_generation=self._fingerprint.get("wikiGeneration", ""),
-                source_fingerprint=self._fingerprint.get(
-                    "sourceFingerprint", ""
-                ),
+                fingerprint=fingerprint,
                 resumes=resumes,
                 note=note,
                 created_at=iso_timestamp(self._clock),
@@ -935,6 +937,19 @@ def _tap(
             partial.append(event.text)
             sink(TokenEvent(event.text))
         yield event
+
+
+def _sections_digest(sections: Mapping[str, str]) -> str:
+    """A stable digest of the prompt sections a run was started with."""
+    if not sections:
+        return ""
+    digest = hashlib.sha256()
+    for name in sorted(sections):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sections[name].encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _check_cancel(cancel: Event) -> None:

@@ -223,9 +223,12 @@ def session_runtime(
     """
     if deps.runtime is not None:
         return deps.runtime
+    model_name = str((deps.settings or {}).get("model") or "")
     model = deps.model
     if model is None:
-        model = OpenAIModelClient(load_llm_config())
+        config = load_llm_config()
+        model = OpenAIModelClient(config)
+        model_name = model_name or config.model
     fingerprint = (
         project_fingerprint(layout, config=deps.settings or {})
         if layout is not None
@@ -239,6 +242,7 @@ def session_runtime(
         clock=deps.clock,
         ids=deps.ids,
         registry=deps.runs,
+        model_name=model_name,
         max_turns=deps.max_turns,
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.

@@ -86,6 +86,28 @@ class SessionQueryTests(unittest.TestCase):
             ["user", "assistant"],
         )
 
+    def test_a_run_marker_records_the_configured_model(self) -> None:
+        store = FakeSessionStore()
+        store.create("s1")
+        deps = AppDeps(
+            sessions=store,
+            model=FauxModelClient.text("答案"),
+            settings={"model": "faux-model"},
+        )
+
+        response = TestClient(create_app(deps)).post(
+            "/api/v1/sessions/s1/query", json={"content": "问题"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        markers = [
+            entry
+            for entry in store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+        self.assertTrue(markers)
+        self.assertEqual(markers[0]["model"], "faux-model")
+
     def test_a_model_failure_is_an_error_event_and_no_answer_entry(self) -> None:
         store = FakeSessionStore()
         store.create("s1")

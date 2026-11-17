@@ -35,7 +35,9 @@ def project_fingerprint(
     """The four digests a run marker records for *layout* and *config*."""
     return {
         "projectRoot": str(layout.root.resolve()),
-        "wikiGeneration": _tree_digest(layout.wiki, suffixes=(".md",)),
+        "wikiGeneration": _tree_digest(
+            layout.wiki, suffixes=(".md",), content=True
+        ),
         "sourceFingerprint": _tree_digest(layout.raw),
         "configHash": _config_digest(config or {}),
     }
@@ -45,6 +47,7 @@ def _tree_digest(
     root: Path,
     *,
     suffixes: Sequence[str] | None = None,
+    content: bool = False,
 ) -> str:
     """A digest of the tree's names, mtimes and sizes; empty when it is absent."""
     if not root.is_dir():
@@ -78,6 +81,12 @@ def _tree_digest(
         digest.update(b"\0")
         digest.update(str(stat.st_size).encode("ascii"))
         digest.update(b"\0")
+        if content:
+            try:
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
+            except OSError:
+                continue
+            digest.update(b"\0")
     return digest.hexdigest()
 
 

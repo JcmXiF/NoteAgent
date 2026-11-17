@@ -170,6 +170,30 @@ class KernelRuntimeTests(unittest.TestCase):
         self.assertEqual(markers[0]["sourceFingerprint"], "src-gen")
         self.assertEqual(markers[0]["configHash"], "cfg")
 
+    def test_a_run_marker_hashes_the_prompt_sections(self) -> None:
+        self.store.append(
+            "s1",
+            {
+                "type": "system_section",
+                "sections": {"identity": "You are NoteAgent."},
+            },
+        )
+        model = FauxModelClient.text("答案")
+        runtime = self.runtime(
+            model, fingerprint={"configHash": "fallback"}
+        )
+
+        runtime.execute(UserInput("s1", "问题"), lambda _event: None)
+
+        markers = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+        self.assertTrue(markers)
+        self.assertNotEqual(markers[0]["configHash"], "fallback")
+        self.assertEqual(markers[0]["configHash"], markers[1]["configHash"])
+
     def test_a_proposal_writes_a_waiting_marker(self) -> None:
         model = FauxModelClient.tool_call(
             "p1", "propose", '{"job":"plan","interface":"source"}'

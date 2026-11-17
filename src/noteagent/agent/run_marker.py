@@ -13,7 +13,7 @@ that shape. The terminal marker is what a clean run writes.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 MARKER_TYPE = "run_marker"
 
@@ -23,7 +23,6 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 WAITING = "waiting"
 INTERRUPTED = "interrupted"
-RESUMED = "resumed"
 ABANDONED = "abandoned"
 
 #: A state a run does not leave on its own. ``interrupted`` is settled only in
@@ -34,18 +33,48 @@ SETTLED_STATES = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
-class RunMarker:
-    """One run's pointer: identity, state, last committed node, environment."""
+class RunFingerprint:
+    """What a run assumed: the model, the tools, and the project's digests."""
 
-    run_id: str
-    state: str
-    last_entry_id: str = ""
     model: str = ""
     toolset: str = ""
     config_hash: str = ""
     project_root: str = ""
     wiki_generation: str = ""
     source_fingerprint: str = ""
+
+    @classmethod
+    def from_mapping(
+        cls,
+        values: Mapping[str, str],
+        *,
+        model: str = "",
+        toolset: str = "",
+        config_hash: str = "",
+    ) -> "RunFingerprint":
+        """The marker's typed fingerprint from the composition root's mapping.
+
+        The project terms live here, where the marker schema is defined; the
+        kernel only passes the mapping and its own model/toolset through.
+        """
+        return cls(
+            model=model or values.get("model", ""),
+            toolset=toolset or values.get("toolset", ""),
+            config_hash=config_hash or values.get("configHash", ""),
+            project_root=values.get("projectRoot", ""),
+            wiki_generation=values.get("wikiGeneration", ""),
+            source_fingerprint=values.get("sourceFingerprint", ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RunMarker:
+    """One run's pointer: identity, state, last committed node, environment."""
+
+    run_id: str
+    state: str
+    last_entry_id: str = ""
+    fingerprint: RunFingerprint = field(default_factory=RunFingerprint)
     #: The run this one continues, when it is a resume.
     resumes: str = ""
     #: A sentence the projection renders to the model on a resume.
@@ -72,13 +101,14 @@ def marker_entry(marker: RunMarker) -> dict[str, object]:
         "state": marker.state,
         "lastEntryId": marker.last_entry_id,
     }
+    fingerprint = marker.fingerprint
     for key, value in (
-        ("model", marker.model),
-        ("toolset", marker.toolset),
-        ("configHash", marker.config_hash),
-        ("projectRoot", marker.project_root),
-        ("wikiGeneration", marker.wiki_generation),
-        ("sourceFingerprint", marker.source_fingerprint),
+        ("model", fingerprint.model),
+        ("toolset", fingerprint.toolset),
+        ("configHash", fingerprint.config_hash),
+        ("projectRoot", fingerprint.project_root),
+        ("wikiGeneration", fingerprint.wiki_generation),
+        ("sourceFingerprint", fingerprint.source_fingerprint),
         ("resumes", marker.resumes),
         ("note", marker.note),
         ("createdAt", marker.created_at),
@@ -100,12 +130,14 @@ def parse_marker(entry: Mapping[str, object]) -> RunMarker | None:
         run_id=run_id,
         state=state,
         last_entry_id=_text(entry.get("lastEntryId")),
-        model=_text(entry.get("model")),
-        toolset=_text(entry.get("toolset")),
-        config_hash=_text(entry.get("configHash")),
-        project_root=_text(entry.get("projectRoot")),
-        wiki_generation=_text(entry.get("wikiGeneration")),
-        source_fingerprint=_text(entry.get("sourceFingerprint")),
+        fingerprint=RunFingerprint(
+            model=_text(entry.get("model")),
+            toolset=_text(entry.get("toolset")),
+            config_hash=_text(entry.get("configHash")),
+            project_root=_text(entry.get("projectRoot")),
+            wiki_generation=_text(entry.get("wikiGeneration")),
+            source_fingerprint=_text(entry.get("sourceFingerprint")),
+        ),
         resumes=_text(entry.get("resumes")),
         note=_text(entry.get("note")),
         created_at=_text(entry.get("createdAt")) or _text(entry.get("ts")),
@@ -113,7 +145,7 @@ def parse_marker(entry: Mapping[str, object]) -> RunMarker | None:
     )
 
 
-def latest_markers(
+def markers_by_run(
     entries: Sequence[Mapping[str, object]],
 ) -> dict[str, RunMarker]:
     """The latest marker for each run, in the order the runs first appeared."""
@@ -125,7 +157,7 @@ def latest_markers(
     return out
 
 
-def latest_marker(
+def last_marker(
     entries: Sequence[Mapping[str, object]],
 ) -> RunMarker | None:
     """The last marker written, whichever run it belongs to."""
@@ -141,16 +173,28 @@ def infer_terminal(
 ) -> TerminalInference:
     """What the latest run's shape says when its terminal marker is missing.
 
-    A terminal marker wins: it is the explicit record. Without one, the last
-    content entry decides. The marker is a hint; the transcript is the truth.
+    A terminal marker wins only while no newer question follows it: a crash can
+    leave an old run's ``finished`` marker ahead of a fresh user turn, and that
+    turn is unanswered. Without a usable marker, the last content entry decides.
     """
-    marker = latest_marker(entries)
+    marker_index: int | None = None
+    for index in range(len(entries) - 1, -1, -1):
+        if parse_marker(entries[index]) is not None:
+            marker_index = index
+            break
+    marker = (
+        parse_marker(entries[marker_index])
+        if marker_index is not None
+        else None
+    )
     if marker is not None and marker.state in SETTLED_STATES:
-        return TerminalInference(
-            marker.state,
-            marker.last_entry_id,
-            "terminal marker",
-        )
+        later = entries[marker_index + 1 :] if marker_index is not None else ()
+        if not any(_is_user_turn(entry) for entry in later):
+            return TerminalInference(
+                marker.state,
+                marker.last_entry_id,
+                "terminal marker",
+            )
 
     content = [
         entry
@@ -193,6 +237,10 @@ def infer_terminal(
     return TerminalInference(INTERRUPTED, last_id, f"last entry {kind!r}")
 
 
+def _is_user_turn(entry: Mapping[str, object]) -> bool:
+    return entry.get("type") == "message" and entry.get("role") == "user"
+
+
 def _text(value: object) -> str:
     return value if isinstance(value, str) else ""
 
@@ -204,15 +252,15 @@ __all__ = [
     "FINISHED",
     "INTERRUPTED",
     "MARKER_TYPE",
-    "RESUMED",
     "RUNNING",
+    "RunFingerprint",
     "RunMarker",
     "SETTLED_STATES",
     "TerminalInference",
     "WAITING",
     "infer_terminal",
-    "latest_marker",
-    "latest_markers",
+    "last_marker",
     "marker_entry",
+    "markers_by_run",
     "parse_marker",
 ]

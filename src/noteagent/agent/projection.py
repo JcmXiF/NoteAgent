@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from noteagent.agent.model import Message, ToolCall
+from noteagent.agent.run_marker import MARKER_TYPE
 
 #: What a tool call says when the run never got a result back. The model can see
 #: that the call did not finish and decide whether to try again.
@@ -30,7 +31,7 @@ _SILENT_TYPES = frozenset(
         "model_change",
         "reset",
         "resume_started",
-        "run_marker",
+        MARKER_TYPE,
         "session",
         "session_info",
         "thinking_level_change",
@@ -152,7 +153,7 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
                     _Piece(entry_id, Message("system", _job_result_text(entry)))
                 )
             continue
-        if kind == "run_marker":
+        if kind == MARKER_TYPE:
             # A marker is a pointer, not a turn. A resume leaves one note the
             # model must read; every other marker is silent.
             if in_context:

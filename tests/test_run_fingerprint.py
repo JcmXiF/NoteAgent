@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,21 @@ class ProjectFingerprintTests(unittest.TestCase):
         self.assertEqual(before["sourceFingerprint"], after["sourceFingerprint"])
         self.assertEqual(before["configHash"], after["configHash"])
 
+    def test_the_wiki_generation_hashes_content_not_only_mtime(self) -> None:
+        before = self.fingerprint()
+        stat = self.page.stat()
+
+        self.page.write_text(
+            "---\ntitle: Entropy\n---\n\n熵衡量不确定啊。\n",
+            encoding="utf-8",
+        )
+        os.utime(self.page, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        after = self.fingerprint()
+
+        self.assertEqual(self.page.stat().st_size, stat.st_size)
+        self.assertEqual(self.page.stat().st_mtime_ns, stat.st_mtime_ns)
+        self.assertNotEqual(before["wikiGeneration"], after["wikiGeneration"])
+
     def test_a_raw_change_moves_only_the_source_fingerprint(self) -> None:
         before = self.fingerprint()
 
@@ -70,10 +86,13 @@ class ProjectFingerprintTests(unittest.TestCase):
         self.assertEqual(before["wikiGeneration"], after["wikiGeneration"])
         self.assertEqual(before["sourceFingerprint"], after["sourceFingerprint"])
 
-    def test_it_keeps_no_secret_in_clear(self) -> None:
-        fingerprint = self.fingerprint({"model": "faux", "api_key": "sk-secret"})
+    def test_a_secret_key_does_not_change_the_config_hash(self) -> None:
+        with_secret = self.fingerprint(
+            {"model": "faux", "api_key": "sk-secret"}
+        )
+        without = self.fingerprint({"model": "faux"})
 
-        self.assertNotIn("sk-secret", " ".join(fingerprint.values()))
+        self.assertEqual(with_secret["configHash"], without["configHash"])
 
 
 if __name__ == "__main__":

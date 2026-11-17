@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
+from noteagent.agent.run_marker import MARKER_TYPE
 from noteagent.agent.store import (
     SessionSnapshot,
     SessionSummary,
@@ -53,7 +54,7 @@ _KNOWN_TYPES = frozenset(
         "model_change",
         "reset",
         "resume_started",
-        "run_marker",
+        MARKER_TYPE,
         "session",
         "session_info",
         "system_section",
