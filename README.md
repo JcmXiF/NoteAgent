@@ -86,8 +86,10 @@ without touching the saved settings.
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
 
-The RAG variables are read from the environment for now; the settings document and screen do not
-include them yet.
+The retrieval switch, the embedding service settings (address, model, query prefix, batch,
+concurrency and key) and the optional reranker are also on the settings screen, under Retrieval.
+The remaining RAG variables (retry and timeout controls) are read from the environment only, and a
+value set there still wins over the saved document.
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
@@ -119,23 +121,25 @@ the material is. What moves, and what a migrated project keeps, is in
 
 ## Retrieval (RAG, off by default)
 
-`search` keeps its contract: a page slug and a short excerpt, never the page body. With RAG
-turned on, the same tool answers from a derived index instead of the full-text scan:
+`search` keeps its contract: a page slug and a short excerpt, never the page body. Turn it on
+under Settings → Retrieval (or with `NOTEAGENT_RAG_ENABLED`); the same tool then answers from a
+derived index instead of the full-text scan:
 
 - BM25F (CJK bigrams and words) and a vector index are fused by reciprocal-rank fusion. A page
   whose slug or title matches exactly ranks first unless the optional reranker changes the order.
 - The embedding service is a local or self-hosted OpenAI-compatible `/v1/embeddings` endpoint
   (Ollama, LM Studio, vLLM, TEI). No model is bundled with the app. The optional reranker is a
-  Cohere-compatible `/rerank` endpoint; a TEI-style result list is accepted too.
+  Cohere-compatible `/rerank` endpoint; a TEI-style result list is accepted too. It is off by
+  default; turn it on under Settings → Retrieval (or with `NOTEAGENT_RAG_RERANK_ENABLED`).
 - Only wiki content pages are indexed and sent to the service. `raw/` and `notes/` never reach it;
   notes are used only by offline experiments.
 - A cold or stale index returns the old lexical result at once and schedules a sync. A service
   failure, a timeout or a reranker error keeps search working: lexical results, or the fused order
   with a diagnostic.
-- The index is derived data under `.noteagent/rag/`; delete it or rebuild it at any time.
-  `noteagent rag status` reports its state; `noteagent rag rebuild` rebuilds it. One embedding
-  service answers both queries and documents; the reranker is a second, optional service. Query
-  embeddings use the short instruction prefix, documents do not.
+- The index is derived data under `.noteagent/rag/`; the settings screen shows its state and
+  rebuilds it, and `noteagent rag status` / `noteagent rag rebuild` do the same from the command
+  line. One embedding service answers both queries and documents; the reranker is a second,
+  optional service. Query embeddings use the short instruction prefix, documents do not.
 
 ## Desktop app
 

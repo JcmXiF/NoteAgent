@@ -553,6 +553,15 @@ class RebuildTests(IndexCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0]["chunk_id"], "wiki:a#0")
 
+    def test_an_explicit_rebuild_reports_that_it_rebuilt(self) -> None:
+        write_page(self.layout, "a", "A", "alpha")
+        self.index.sync()
+
+        report = self.index.rebuild()
+
+        self.assertTrue(report.rebuilt)
+        self.assertEqual(self.index.status().state, STATUS_READY)
+
 
 class StatusTests(IndexCase):
     def test_a_changed_page_turns_the_index_stale(self) -> None:

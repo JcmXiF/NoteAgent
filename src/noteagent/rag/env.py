@@ -13,12 +13,26 @@ from collections.abc import Callable, Mapping
 __all__ = [
     "ErrorFactory",
     "endpoint_path",
+    "parse_boolean",
     "read_boolean",
     "read_integer",
     "read_number",
 ]
 
 ErrorFactory = Callable[[str], Exception]
+
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def parse_boolean(text: str) -> bool | None:
+    """A boolean as an environment value spells it, or ``None`` when it is not one."""
+    raw = text.strip().casefold()
+    if raw in _TRUE:
+        return True
+    if raw in _FALSE:
+        return False
+    return None
 
 
 def read_boolean(
@@ -31,11 +45,10 @@ def read_boolean(
     raw = source.get(name, "").strip().casefold()
     if not raw:
         return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    raise error(f"{name} must be a boolean, got {raw!r}")
+    value = parse_boolean(raw)
+    if value is None:
+        raise error(f"{name} must be a boolean, got {raw!r}")
+    return value
 
 
 def read_integer(

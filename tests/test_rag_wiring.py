@@ -9,9 +9,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from noteagent.api.session_access import _rag_backend
+from noteagent.api.session_access import rag_backend
+from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.layout import ProjectLayout
 from noteagent.rag.search import RagSearchBackend, reset_backends
+from noteagent.settings.install import apply_install
+from fakes import FakeCredentials
 
 BASE_ENV = {
     "NOTEAGENT_RAG_ENABLED": "true",
@@ -46,13 +49,13 @@ class WiringTests(unittest.TestCase):
 
     def test_rag_off_returns_no_backend(self) -> None:
         with rag_env():
-            self.assertIsNone(_rag_backend(self.layout))
+            self.assertIsNone(rag_backend(self.layout))
 
     def test_an_unusable_config_returns_a_degraded_backend(self) -> None:
         unusable = dict(BASE_ENV, NOTEAGENT_RAG_EMBEDDING_ENDPOINT="")
 
         with rag_env(**unusable):
-            backend = _rag_backend(self.layout)
+            backend = rag_backend(self.layout)
             result = backend.search("query")
 
         self.assertTrue(result.degraded)
@@ -66,9 +69,127 @@ class WiringTests(unittest.TestCase):
 
     def test_a_valid_config_returns_a_project_backend(self) -> None:
         with rag_env(**BASE_ENV):
-            backend = _rag_backend(self.layout)
+            backend = rag_backend(self.layout)
 
         self.assertIsInstance(backend, RagSearchBackend)
+
+
+class SettingsWiringTests(unittest.TestCase):
+    """A saved switch and service reach the next run without a restart."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.layout = ProjectLayout(Path(self._tmp.name) / "project")
+        self.path = Path(self._tmp.name) / "config.json"
+        self.credentials = FakeCredentials()
+        reset_backends()
+        # The environment snapshot is cached once per process. Clear it so the
+        # first save inside this test's own environment takes a fresh one: a
+        # caller's RAG variables must not lock the document.
+        reset_process_env_keys()
+
+    def tearDown(self) -> None:
+        reset_backends()
+        reset_process_env_keys()
+        self._tmp.cleanup()
+
+    def _save(self, body: dict[str, object]) -> None:
+        with (
+            patch(
+                "noteagent.settings.install.default_config_path",
+                lambda: self.path,
+            ),
+            patch(
+                "noteagent.settings.install.keyring_store",
+                lambda: self.credentials,
+            ),
+        ):
+            apply_install(body)
+
+    def test_a_saved_switch_builds_the_backend_on_the_next_run(self) -> None:
+        with rag_env(
+            **{
+                "NOTEAGENT_RAG_EMBEDDING_API_KEY": "",
+                "NOTEAGENT_RAG_RERANK_API_KEY": "",
+            }
+        ):
+            self._save(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://fake/v1",
+                            "model": "fake-model",
+                        },
+                    }
+                }
+            )
+            backend = rag_backend(self.layout)
+
+        self.assertIsInstance(backend, RagSearchBackend)
+
+    def test_a_saved_reranker_reaches_the_next_run(self) -> None:
+        with rag_env(
+            **{
+                "NOTEAGENT_RAG_EMBEDDING_API_KEY": "",
+                "NOTEAGENT_RAG_RERANK_API_KEY": "",
+            }
+        ):
+            self._save(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://fake/v1",
+                            "model": "fake-model",
+                        },
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://fake-rerank/v1",
+                            "model": "fake-rerank",
+                            "candidates": 20,
+                            "topN": 5,
+                        },
+                    }
+                }
+            )
+            backend = rag_backend(self.layout)
+
+            self.assertIsInstance(backend, RagSearchBackend)
+            self.assertTrue(backend.settings.rerank.enabled)
+            self.assertEqual(
+                backend.settings.rerank.endpoint, "http://fake-rerank/v1"
+            )
+            self.assertEqual(backend.settings.rerank.model, "fake-rerank")
+            self.assertEqual(backend.settings.rerank.candidates, 20)
+            self.assertEqual(backend.settings.rerank.top_n, 5)
+
+            self._save({"rag": {"rerank": {"enabled": False}}})
+            backend = rag_backend(self.layout)
+            self.assertFalse(backend.settings.rerank.enabled)
+
+    def test_turning_the_switch_off_returns_the_lexical_path(self) -> None:
+        with rag_env(
+            **{
+                "NOTEAGENT_RAG_EMBEDDING_API_KEY": "",
+                "NOTEAGENT_RAG_RERANK_API_KEY": "",
+            }
+        ):
+            self._save(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://fake/v1",
+                            "model": "fake-model",
+                        },
+                    }
+                }
+            )
+            self.assertIsInstance(rag_backend(self.layout), RagSearchBackend)
+
+            self._save({"rag": {"enabled": False}})
+            self.assertIsNone(rag_backend(self.layout))
 
 
 if __name__ == "__main__":

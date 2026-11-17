@@ -11,6 +11,9 @@ import {
   profileDraftFrom,
   profilePatch,
   profileProblems,
+  ragDirty,
+  ragPatch,
+  ragProblems,
   searchCanProbe,
   searchDirty,
   searchDraftFrom,
@@ -42,6 +45,25 @@ const SAVED: InstallSettings = {
     searchLang: "zh-hans",
     uiLang: "zh-CN",
     configured: true,
+  },
+  rag: {
+    enabled: false,
+    embedding: {
+      endpoint: "",
+      model: "Qwen3-Embedding-0.6B",
+      queryPrefix: "Q: {query}",
+      batch: 64,
+      concurrency: 1,
+      apiKeySet: false,
+    },
+    rerank: {
+      enabled: false,
+      endpoint: "",
+      model: "",
+      candidates: 50,
+      topN: 10,
+      apiKeySet: false,
+    },
   },
   extractMedia: true,
   locked: [],
@@ -83,6 +105,242 @@ describe("a value's source", () => {
 });
 
 const GENERATION = { temperature: 0.1, maxTokens: 4096, timeoutSeconds: 120 };
+
+const RAG_EMBEDDING = {
+  endpoint: "http://localhost:8080/v1",
+  model: "m",
+  queryPrefix: "Q: {query}",
+  batch: 64,
+  concurrency: 1,
+  apiKeySet: false,
+};
+
+const RAG_RERANK = {
+  enabled: false,
+  endpoint: "",
+  model: "",
+  candidates: 50,
+  topN: 10,
+  apiKeySet: false,
+};
+
+const RAG_DRAFT = {
+  enabled: true,
+  endpoint: "http://localhost:8080/v1",
+  model: "m",
+  queryPrefix: "Q: {query}",
+  batch: "64",
+  concurrency: "1",
+  apiKey: "",
+  clearApiKey: false,
+  rerankEnabled: false,
+  rerankEndpoint: "",
+  rerankModel: "",
+  rerankCandidates: "50",
+  rerankTopN: "10",
+  rerankApiKey: "",
+  clearRerankApiKey: false,
+};
+
+describe("the retrieval form", () => {
+  it("does not block turning the switch off behind a half-typed address", () => {
+    const draft = {
+      ...RAG_DRAFT,
+      enabled: false,
+      endpoint: "not a url",
+      model: "",
+    };
+    expect(ragProblems(draft)).toEqual([]);
+    // Text behind the off switch is not a change a save could send.
+    expect(ragDirty(draft, SAVED.rag)).toBe(false);
+    expect(ragDirty(draft, { ...SAVED.rag, enabled: true })).toBe(true);
+    expect(ragPatch(draft, { ...SAVED.rag, enabled: true })).toEqual({
+      rag: { enabled: false },
+    });
+  });
+
+  it("needs an address and a model before the switch can be on", () => {
+    expect(
+      ragProblems({ ...RAG_DRAFT, endpoint: "", model: "m" }),
+    ).toEqual(["settings.invalid.ragEndpoint"]);
+    expect(ragProblems({ ...RAG_DRAFT, model: " " })).toEqual([
+      "settings.invalid.ragModel",
+    ]);
+  });
+
+  it("checks the advanced values only while the switch is on", () => {
+    const draft = {
+      ...RAG_DRAFT,
+      queryPrefix: "no placeholder",
+      batch: "0",
+      concurrency: "9",
+    };
+    expect(ragProblems(draft)).toEqual([
+      "settings.invalid.ragQueryPrefix",
+      "settings.invalid.ragBatch",
+      "settings.invalid.ragConcurrency",
+    ]);
+    expect(ragProblems({ ...draft, enabled: false })).toEqual([]);
+  });
+
+  it("does not hold a save on a number the environment owns", () => {
+    const draft = { ...RAG_DRAFT, batch: "1000" };
+    expect(ragProblems(draft)).toEqual(["settings.invalid.ragBatch"]);
+    expect(ragProblems(draft, ["rag.embedding.batch"])).toEqual([]);
+  });
+
+  it("checks a rerank address even while rerank is off", () => {
+    expect(
+      ragProblems({ ...RAG_DRAFT, rerankEndpoint: "not a url" }),
+    ).toEqual(["settings.invalid.ragRerankEndpoint"]);
+  });
+
+  it("needs a service before rerank can be on", () => {
+    expect(ragProblems({ ...RAG_DRAFT, rerankEnabled: true })).toEqual([
+      "settings.invalid.ragRerankEndpoint",
+      "settings.invalid.ragRerankModel",
+    ]);
+  });
+
+  it("checks rerank candidates and topN", () => {
+    const draft = {
+      ...RAG_DRAFT,
+      rerankEnabled: true,
+      rerankEndpoint: "http://localhost:8081/v1",
+      rerankModel: "r",
+      rerankCandidates: "20",
+      rerankTopN: "25",
+    };
+    expect(ragProblems(draft)).toEqual(["settings.invalid.ragRerankTopN"]);
+    expect(
+      ragProblems({ ...draft, rerankCandidates: "501" }),
+    ).toEqual(["settings.invalid.ragRerankCandidates"]);
+    expect(
+      ragProblems(
+        { ...draft, rerankCandidates: "0" },
+        ["rag.rerank.candidates"],
+      ),
+    ).toEqual([]);
+    // The numbers are visible even while rerank is off.
+    expect(
+      ragProblems({ ...RAG_DRAFT, rerankCandidates: "0" }),
+    ).toEqual(["settings.invalid.ragRerankCandidates"]);
+    // Both locked: the pair cannot be corrected, so it must not block.
+    expect(
+      ragProblems(
+        { ...draft, rerankCandidates: "5", rerankTopN: "10" },
+        ["rag.rerank.candidates", "rag.rerank.topN"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("saves rerank changes whether it is on or off", () => {
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          rerankEnabled: true,
+          rerankEndpoint: "http://localhost:8081/v1",
+          rerankModel: "r",
+          rerankCandidates: "20",
+          rerankTopN: "5",
+          rerankApiKey: "secret",
+        },
+        saved,
+      ),
+    ).toEqual({
+      rag: {
+        rerank: {
+          enabled: true,
+          endpoint: "http://localhost:8081/v1",
+          model: "r",
+          candidates: 20,
+          topN: 5,
+          apiKey: "secret",
+        },
+      },
+    });
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          rerankEnabled: false,
+          rerankEndpoint: "http://other/v1",
+        },
+        { ...saved, rerank: { ...RAG_RERANK, enabled: true } },
+      ),
+    ).toEqual({
+      rag: { rerank: { enabled: false, endpoint: "http://other/v1" } },
+    });
+    expect(
+      ragDirty(
+        { ...RAG_DRAFT, rerankEndpoint: "http://other/v1" },
+        saved,
+      ),
+    ).toBe(true);
+  });
+
+  it("sends only the service fields that changed while the switch is on", () => {
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
+    expect(
+      ragPatch(
+        { ...RAG_DRAFT, endpoint: "http://localhost:8080/v1/" },
+        saved,
+      ),
+    ).toBeNull();
+    expect(
+      ragPatch({ ...RAG_DRAFT, endpoint: "http://other/v1" }, saved),
+    ).toEqual({ rag: { embedding: { endpoint: "http://other/v1" } } });
+  });
+
+  it("sends the advanced values and a key when they changed", () => {
+    const saved = {
+      enabled: true,
+      embedding: RAG_EMBEDDING,
+      rerank: RAG_RERANK,
+    };
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          queryPrefix: "",
+          batch: "8",
+          concurrency: "2",
+          apiKey: "secret",
+        },
+        saved,
+      ),
+    ).toEqual({
+      rag: {
+        embedding: {
+          queryPrefix: "",
+          batch: 8,
+          concurrency: 2,
+          apiKey: "secret",
+        },
+      },
+    });
+    expect(
+      ragPatch(
+        { ...RAG_DRAFT, clearApiKey: true },
+        {
+          enabled: true,
+          embedding: { ...RAG_EMBEDDING, apiKeySet: true },
+          rerank: RAG_RERANK,
+        },
+      ),
+    ).toEqual({ rag: { embedding: { clearApiKey: true } } });
+  });
+});
 
 describe("the generation form", () => {
   it("does not treat 0.10 as a different temperature", () => {

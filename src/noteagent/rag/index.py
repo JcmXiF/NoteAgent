@@ -19,7 +19,7 @@ import hashlib
 import json
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +42,15 @@ from noteagent.rag.chunker import (
 )
 from noteagent.rag.embedding import EmbeddingClient, EmbeddingError
 from noteagent.rag.filters import sql_string
+from noteagent.rag.status import (
+    STATUS_COLD,
+    STATUS_DISABLED,
+    STATUS_FAILED,
+    STATUS_READY,
+    STATUS_STALE,
+    STATUS_UNAVAILABLE,
+    IndexStatus,
+)
 from noteagent.wiki.links import wiki_slug_for_path
 
 __all__ = [
@@ -55,6 +64,7 @@ __all__ = [
     "STATUS_FAILED",
     "STATUS_READY",
     "STATUS_STALE",
+    "STATUS_UNAVAILABLE",
     "IndexStatus",
     "RetrievalIndex",
     "SyncFailure",
@@ -70,14 +80,6 @@ MAX_CHUNKS_PER_UNIT = 512
 SCOPE_WIKI = "wiki"
 SCOPE_ALL = "all"
 _SCOPES = (SCOPE_WIKI, SCOPE_ALL)
-
-STATUS_READY = "ready"
-STATUS_COLD = "cold"
-STATUS_STALE = "stale"
-STATUS_DISABLED = "disabled"
-#: A page row's own state when its vectors could not be produced.
-STATUS_FAILED = "failed"
-
 
 def _chunk_schema(dim: int) -> pa.Schema:
     return pa.schema(
@@ -107,26 +109,6 @@ _PAGE_SCHEMA = pa.schema(
         ("status", pa.string()),
     ]
 )
-
-
-@dataclass(frozen=True, slots=True)
-class IndexStatus:
-    """What the index currently is, for a caller deciding whether to search."""
-
-    state: str
-    units: int = 0
-    chunks: int = 0
-    failed: int = 0
-    reason: str = ""
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "state": self.state,
-            "units": self.units,
-            "chunks": self.chunks,
-            "failed": self.failed,
-            "reason": self.reason,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,7 +353,7 @@ class RetrievalIndex:
     def rebuild(self) -> SyncReport:
         """Drop the derived index and build it again from the project."""
         self._reset()
-        return self.sync()
+        return replace(self.sync(), rebuilt=True)
 
     def sync(self) -> SyncReport:
         """Bring the index in line with the project, page by page."""

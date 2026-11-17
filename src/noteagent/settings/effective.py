@@ -17,6 +17,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from noteagent.llm.config import process_env_keys
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_QUERY_PREFIX,
+)
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.credentials import CredentialStoreUnavailable
 from noteagent.settings.fields import (
     F_BASE,
@@ -28,6 +36,19 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_BATCH,
+    F_RAG_CONCURRENCY,
+    F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_KEY,
+    F_RAG_EMBEDDING_MODEL,
+    F_RAG_ENABLED,
+    F_RAG_QUERY_PREFIX,
+    F_RAG_RERANK_CANDIDATES,
+    F_RAG_RERANK_ENABLED,
+    F_RAG_RERANK_ENDPOINT,
+    F_RAG_RERANK_KEY,
+    F_RAG_RERANK_MODEL,
+    F_RAG_RERANK_TOP_N,
     F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
@@ -67,6 +88,19 @@ _VALUE_FIELDS: tuple[tuple[Field, str], ...] = (
     (F_LANG, "search_lang"),
     (F_UI_LANG, "ui_lang"),
     (F_MEDIA, "extract_media"),
+    (F_RAG_ENABLED, "rag_enabled"),
+    (F_RAG_EMBEDDING_ENDPOINT, "rag_embedding_endpoint"),
+    (F_RAG_EMBEDDING_MODEL, "rag_embedding_model"),
+    (F_RAG_QUERY_PREFIX, "rag_query_prefix"),
+    (F_RAG_BATCH, "rag_batch"),
+    (F_RAG_CONCURRENCY, "rag_concurrency"),
+    (F_RAG_EMBEDDING_KEY, "rag_embedding_key"),
+    (F_RAG_RERANK_ENABLED, "rag_rerank_enabled"),
+    (F_RAG_RERANK_ENDPOINT, "rag_rerank_endpoint"),
+    (F_RAG_RERANK_MODEL, "rag_rerank_model"),
+    (F_RAG_RERANK_CANDIDATES, "rag_rerank_candidates"),
+    (F_RAG_RERANK_TOP_N, "rag_rerank_top_n"),
+    (F_RAG_RERANK_KEY, "rag_rerank_key"),
 )
 
 #: Names this module wrote into the process environment. A value it wrote is
@@ -113,6 +147,19 @@ class Effective:
     search_lang: Value
     ui_lang: Value
     extract_media: Value
+    rag_enabled: Value
+    rag_embedding_endpoint: Value
+    rag_embedding_model: Value
+    rag_query_prefix: Value
+    rag_batch: Value
+    rag_concurrency: Value
+    rag_embedding_key: Value
+    rag_rerank_enabled: Value
+    rag_rerank_endpoint: Value
+    rag_rerank_model: Value
+    rag_rerank_candidates: Value
+    rag_rerank_top_n: Value
+    rag_rerank_key: Value
     keychain_available: bool
 
     def sources(self) -> dict[str, str]:
@@ -153,6 +200,17 @@ def _secret(
     return Value("", SOURCE_DEFAULT)
 
 
+def _runtime_default(value: Value, default: str) -> Value:
+    """What the runtime uses when an environment value is present but empty.
+
+    The embedding loader substitutes its default for an empty model, so the
+    screen must show that model rather than the empty text it was given.
+    """
+    if value.source == SOURCE_ENV and not value.text:
+        return Value(default, value.source, locked=value.locked)
+    return value
+
+
 def _read_secret(reader: Callable[[], str], store: ConfigStore) -> tuple[str, bool]:
     """A secret and whether the credential store could be used at all."""
     if not store.keychain_available():
@@ -184,7 +242,18 @@ def resolve(
             lambda: store.get_llm_key(profile.id), store
         )
     stored_search_key, search_available = _read_secret(store.get_search_key, store)
-    keychain_available = keychain_available and search_available
+    stored_rag_key, rag_available = _read_secret(
+        store.get_rag_embedding_key, store
+    )
+    stored_rerank_key, rerank_available = _read_secret(
+        store.get_rag_rerank_key, store
+    )
+    keychain_available = (
+        keychain_available
+        and search_available
+        and rag_available
+        and rerank_available
+    )
 
     generation = config.generation
     search = config.search
@@ -276,6 +345,109 @@ def resolve(
             process_keys=keys,
             environ=source,
         ),
+        "rag_enabled": _plain(
+            F_RAG_ENABLED.env,
+            "1" if config.rag.enabled else "0",
+            "0",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_endpoint": _plain(
+            F_RAG_EMBEDDING_ENDPOINT.env,
+            config.rag.embedding.endpoint,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_model": _runtime_default(
+            _plain(
+                F_RAG_EMBEDDING_MODEL.env,
+                config.rag.embedding.model,
+                DEFAULT_EMBEDDING_MODEL,
+                file_exists=exists,
+                process_keys=keys,
+                environ=source,
+            ),
+            DEFAULT_EMBEDDING_MODEL,
+        ),
+        "rag_query_prefix": _plain(
+            F_RAG_QUERY_PREFIX.env,
+            config.rag.embedding.query_prefix,
+            DEFAULT_QUERY_PREFIX,
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_batch": _plain(
+            F_RAG_BATCH.env,
+            str(config.rag.embedding.batch),
+            str(DEFAULT_BATCH),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_concurrency": _plain(
+            F_RAG_CONCURRENCY.env,
+            str(config.rag.embedding.concurrency),
+            str(DEFAULT_CONCURRENCY),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_key": _secret(
+            F_RAG_EMBEDDING_KEY.env,
+            stored_rag_key,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_enabled": _plain(
+            F_RAG_RERANK_ENABLED.env,
+            "1" if config.rag.rerank.enabled else "0",
+            "0",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_endpoint": _plain(
+            F_RAG_RERANK_ENDPOINT.env,
+            config.rag.rerank.endpoint,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_model": _plain(
+            F_RAG_RERANK_MODEL.env,
+            config.rag.rerank.model,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_candidates": _plain(
+            F_RAG_RERANK_CANDIDATES.env,
+            str(config.rag.rerank.candidates),
+            str(DEFAULT_CANDIDATE_LIMIT),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_top_n": _plain(
+            F_RAG_RERANK_TOP_N.env,
+            str(config.rag.rerank.top_n),
+            str(DEFAULT_TOP_N),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_rerank_key": _secret(
+            F_RAG_RERANK_KEY.env,
+            stored_rerank_key,
+            process_keys=keys,
+            environ=source,
+        ),
     }
     return Effective(keychain_available=keychain_available, **values)
 
@@ -304,6 +476,9 @@ def apply(
             continue
         if value.text:
             target[field.env] = value.text
+        elif field.empty_is_value:
+            # The loader distinguishes an empty value from a missing name.
+            target[field.env] = ""
         else:
             target.pop(field.env, None)
         if track:

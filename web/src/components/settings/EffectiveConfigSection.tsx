@@ -9,6 +9,7 @@ import {
   type InstallSettings,
   type ValueSource,
 } from "@/lib/install-settings";
+import { cn } from "@/lib/utils";
 
 /**
  * What the running core will actually use, and why.
@@ -23,11 +24,13 @@ function Row({
   value,
   source,
   mono,
+  multiline,
 }: {
   label: string;
   value: string;
   source?: ValueSource;
   mono?: boolean;
+  multiline?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -35,7 +38,15 @@ function Row({
         {label}
         {source ? <SourceBadge source={source} /> : null}
       </dt>
-      <dd className={mono ? "font-mono text-xs break-all" : "text-sm"}>{value}</dd>
+      <dd
+        className={cn(
+          "text-sm",
+          mono && "font-mono text-xs break-all",
+          multiline && "font-mono text-xs break-all whitespace-pre-wrap",
+        )}
+      >
+        {value}
+      </dd>
     </div>
   );
 }
@@ -140,6 +151,95 @@ export function EffectiveConfigSection({ install }: { install: InstallSettings }
             label={t("settings.search.uiLang")}
             value={text(install.search.uiLang)}
             source={source("search.uiLang")}
+          />
+        </dl>
+      </FieldGroup>
+
+      <FieldGroup title={t("settings.effective.groupRetrieval")}>
+        <dl className="flex flex-col gap-3">
+          <Row
+            label={t("settings.retrieval.enabled")}
+            value={
+              install.rag.enabled
+                ? t("settings.effective.on")
+                : t("settings.effective.off")
+            }
+            source={source("rag.enabled")}
+          />
+          <Row
+            label={t("settings.retrieval.endpoint")}
+            value={text(install.rag.embedding.endpoint)}
+            source={source("rag.embedding.endpoint")}
+            mono
+          />
+          <Row
+            label={t("settings.retrieval.model")}
+            value={text(install.rag.embedding.model)}
+            source={source("rag.embedding.model")}
+          />
+          <Row
+            label={t("settings.retrieval.queryPrefix")}
+            value={
+              install.rag.embedding.queryPrefix ||
+              t("settings.retrieval.queryPrefixNone")
+            }
+            source={source("rag.embedding.queryPrefix")}
+            multiline
+          />
+          <Row
+            label={t("settings.retrieval.batch")}
+            value={String(install.rag.embedding.batch)}
+            source={source("rag.embedding.batch")}
+          />
+          <Row
+            label={t("settings.retrieval.concurrency")}
+            value={String(install.rag.embedding.concurrency)}
+            source={source("rag.embedding.concurrency")}
+          />
+          <Row
+            label={t("settings.retrieval.apiKey")}
+            value={keyState(install.rag.embedding.apiKeySet)}
+            source={source("rag.embedding.apiKey")}
+          />
+        </dl>
+      </FieldGroup>
+
+      <FieldGroup title={t("settings.effective.groupRerank")}>
+        <dl className="flex flex-col gap-3">
+          <Row
+            label={t("settings.retrieval.rerankEnabled")}
+            value={
+              install.rag.rerank.enabled
+                ? t("settings.effective.on")
+                : t("settings.effective.off")
+            }
+            source={source("rag.rerank.enabled")}
+          />
+          <Row
+            label={t("settings.retrieval.rerankEndpoint")}
+            value={text(install.rag.rerank.endpoint)}
+            source={source("rag.rerank.endpoint")}
+            mono
+          />
+          <Row
+            label={t("settings.retrieval.rerankModel")}
+            value={text(install.rag.rerank.model)}
+            source={source("rag.rerank.model")}
+          />
+          <Row
+            label={t("settings.retrieval.candidates")}
+            value={String(install.rag.rerank.candidates)}
+            source={source("rag.rerank.candidates")}
+          />
+          <Row
+            label={t("settings.retrieval.topN")}
+            value={String(install.rag.rerank.topN)}
+            source={source("rag.rerank.topN")}
+          />
+          <Row
+            label={t("settings.retrieval.rerankApiKey")}
+            value={keyState(install.rag.rerank.apiKeySet)}
+            source={source("rag.rerank.apiKey")}
           />
         </dl>
       </FieldGroup>

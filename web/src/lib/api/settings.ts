@@ -12,6 +12,7 @@ import type {
   ProfileCreatePatch,
   ProfileUpdatePatch,
   ProviderId,
+  RagProbePatch,
   SettingsPatch,
 } from "@/lib/install-settings";
 
@@ -84,6 +85,54 @@ export function probeSearch(
   patch: Record<string, unknown>,
 ): Promise<{ ok: true; count: number }> {
   return postJson<{ ok: true; count: number }>("/settings/search/probe", patch);
+}
+
+/** The states the index reports; `unavailable` carries the reason. */
+export type RagIndexState =
+  | "disabled"
+  | "unavailable"
+  | "cold"
+  | "stale"
+  | "ready";
+
+export type RagIndexStatus = {
+  state: RagIndexState;
+  units: number;
+  chunks: number;
+  failed: number;
+  reason: string;
+};
+
+/** What one synchronous rebuild changed, and which pages it could not build. */
+export type RagRebuildReport = {
+  added: number;
+  updated: number;
+  unchanged: number;
+  deleted: number;
+  embeddedChunks: number;
+  rebuilt: boolean;
+  failures: { unitId: string; pageId: string; reason: string }[];
+};
+
+export function fetchRagStatus(): Promise<RagIndexStatus> {
+  return getJson<RagIndexStatus>("/settings/rag/status");
+}
+
+export function rebuildRagIndex(): Promise<RagRebuildReport> {
+  return postJson<RagRebuildReport>("/settings/rag/rebuild", {});
+}
+
+/** One trial embedding with the draft; nothing is saved or indexed. */
+export type RagProbeResult = {
+  ok: true;
+  dim: number;
+  durationSeconds: number;
+};
+
+export function probeRagEmbedding(
+  patch: RagProbePatch,
+): Promise<RagProbeResult> {
+  return postJson<RagProbeResult>("/settings/rag/probe", patch);
 }
 
 /** The explicit check: tool calling, then native search when it is in use. */

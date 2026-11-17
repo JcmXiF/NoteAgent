@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
@@ -26,10 +27,15 @@ from noteagent.llm.config import load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
 from noteagent.sessions.trace import SessionTrace
+from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
+
+if TYPE_CHECKING:
+    from noteagent.rag.settings import RagSettings
 
 logger = logging.getLogger(__name__)
 
@@ -141,14 +147,18 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     if layout is None:
         # A test that injected its own store and no tools asked for a bare run.
         return ToolRegistry()
-    return wiki_tools(layout, rag=_rag_backend(layout))
+    return wiki_tools(layout, rag=rag_backend(layout))
 
 
-class _UnavailableRag:
+class UnavailableRag:
     """A backend that only knows why it cannot answer."""
 
     def __init__(self, reason: str) -> None:
         self._reason = reason
+
+    @property
+    def reason(self) -> str:
+        return self._reason
 
     def search(self, query: str):
         from noteagent.rag.result import RagSearchResult
@@ -157,18 +167,33 @@ class _UnavailableRag:
             (), "lexical", True, (self._reason,)
         )
 
+    def status(self) -> IndexStatus:
+        """The settings screen's answer: unavailable, with the reason."""
+        return IndexStatus(STATUS_UNAVAILABLE, reason=self._reason)
 
-def _rag_backend(layout: ProjectLayout):
+    def rebuild(self) -> None:
+        """Refuse a rebuild: no usable backend exists to rebuild."""
+        raise Refusal(
+            "settings.ragUnavailable", self._reason, status=409
+        )
+
+
+def rag_backend(
+    layout: ProjectLayout, settings: "RagSettings | None" = None
+):
     """The cached hybrid backend, or a degraded one when it cannot be built.
 
     Imported lazily so a run with RAG off never loads the index engine.
+    ``settings`` is the already-resolved switch and services when the caller
+    has read them; the answer is the same either way.
     """
     try:
-        from noteagent.rag.settings import load_rag_settings
+        if settings is None:
+            from noteagent.rag.settings import load_rag_settings
 
-        settings = load_rag_settings()
+            settings = load_rag_settings()
     except Exception as err:  # noqa: BLE001 - a bad config must not stop chat
-        return _UnavailableRag(f"rag settings: {err}")
+        return UnavailableRag(f"rag settings: {err}")
     if not settings.enabled:
         return None
     try:
@@ -176,9 +201,9 @@ def _rag_backend(layout: ProjectLayout):
 
         backend = get_backend(layout, settings)
     except Exception as err:  # noqa: BLE001 - a bad config must not stop chat
-        return _UnavailableRag(f"rag unavailable: {err}")
+        return UnavailableRag(f"rag unavailable: {err}")
     if backend is None:
-        return _UnavailableRag(
+        return UnavailableRag(
             "rag unavailable: configure the embedding service"
         )
     return backend

@@ -18,10 +18,11 @@ import math
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -45,6 +46,17 @@ from noteagent.llm.config import (
     capture_process_env,
     process_env_keys,
 )
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_DIM,
+    DEFAULT_QUERY_PREFIX,
+    EmbeddingConfig,
+)
+from noteagent.rag.embedding import EmbeddingError, OpenAIEmbeddingClient
+from noteagent.rag.env import parse_boolean
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
     CredentialStore,
@@ -61,6 +73,19 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_BATCH,
+    F_RAG_CONCURRENCY,
+    F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_KEY,
+    F_RAG_EMBEDDING_MODEL,
+    F_RAG_ENABLED,
+    F_RAG_QUERY_PREFIX,
+    F_RAG_RERANK_CANDIDATES,
+    F_RAG_RERANK_ENABLED,
+    F_RAG_RERANK_ENDPOINT,
+    F_RAG_RERANK_KEY,
+    F_RAG_RERANK_MODEL,
+    F_RAG_RERANK_TOP_N,
     F_SEARCH_KEY,
     F_SEARCH_MODE,
     F_SEARCH_TIMEOUT,
@@ -86,6 +111,10 @@ from noteagent.util.refusal import CodedError, Refusal
 
 _PROBE_TIMEOUT = 20.0
 _PROBE_QUERY = "example"
+
+#: The trial embedding asks one short text and waits less than an index run.
+_RAG_PROBE_TEXT = "noteagent embedding probe"
+_RAG_PROBE_TIMEOUT = 10.0
 
 #: Model discovery is a suggestion, so it waits less than a real request.
 _MODELS_TIMEOUT = 15.0
@@ -114,6 +143,7 @@ __all__ = [
     "install_view",
     "list_models",
     "probe_llm",
+    "probe_rag_embedding",
     "probe_search",
     "settings_store",
 ]
@@ -196,15 +226,105 @@ def _finite(value: object, field: str) -> float:
     return number
 
 
-def clean_base_url(value: object) -> str:
+def _clean_url(value: object, field: str, noun: str, *, allow_empty: bool) -> str:
     if not isinstance(value, str):
-        raise _invalid(F_BASE.id, "base url is not text")
+        raise _invalid(field, f"{noun} is not text")
     text = value.strip().rstrip("/")
-    if not text or len(text) > 500 or any(ch.isspace() for ch in text):
-        raise _invalid(F_BASE.id, "base url is empty or not a single http(s) URL")
+    if not text:
+        if allow_empty:
+            return ""
+        raise _invalid(field, f"{noun} is empty")
+    if len(text) > 500 or any(ch.isspace() for ch in text):
+        raise _invalid(field, f"{noun} is not a single http(s) URL")
     parsed = urlsplit(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise _invalid(F_BASE.id, "base url must start with http:// or https://")
+        raise _invalid(field, f"{noun} must start with http:// or https://")
+    return text
+
+
+def clean_base_url(value: object) -> str:
+    return _clean_url(value, F_BASE.id, "base url", allow_empty=False)
+
+
+def clean_rag_endpoint(value: object) -> str:
+    """The embedding service address. Empty clears it; the switch decides if that is allowed."""
+    return _clean_url(
+        value,
+        F_RAG_EMBEDDING_ENDPOINT.id,
+        "embedding endpoint",
+        allow_empty=True,
+    )
+
+
+def clean_rag_model(value: object) -> str:
+    """The embedding model name. Empty clears it; the switch decides if that is allowed."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_EMBEDDING_MODEL.id, "embedding model is not text")
+    text = value.strip()
+    if len(text) > 200 or any(ch in text for ch in "\r\n"):
+        raise _invalid(
+            F_RAG_EMBEDDING_MODEL.id,
+            "embedding model is not a single line",
+        )
+    return text
+
+
+def _clean_int_in_range(
+    value: object, field: str, noun: str, *, low: int, high: int
+) -> int:
+    number = _finite(value, field)
+    if not number.is_integer() or not low <= int(number) <= high:
+        raise _invalid(field, f"{noun} is outside {low}..{high}")
+    return int(number)
+
+
+def clean_rag_query_prefix(value: object) -> str:
+    """The instruction before a query. Empty is a real choice: no prefix."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_QUERY_PREFIX.id, "query prefix is not text")
+    if len(value) > 2000 or "\x00" in value:
+        raise _invalid(
+            F_RAG_QUERY_PREFIX.id, "query prefix is not usable text"
+        )
+    return value
+
+
+def clean_rag_batch(value: object) -> int:
+    return _clean_int_in_range(
+        value, F_RAG_BATCH.id, "embedding batch", low=1, high=512
+    )
+
+
+def clean_rag_concurrency(value: object) -> int:
+    return _clean_int_in_range(
+        value,
+        F_RAG_CONCURRENCY.id,
+        "embedding concurrency",
+        low=1,
+        high=8,
+    )
+
+
+def clean_rag_rerank_endpoint(value: object) -> str:
+    """The rerank service address. Empty clears it; the switch decides."""
+    return _clean_url(
+        value,
+        F_RAG_RERANK_ENDPOINT.id,
+        "rerank endpoint",
+        allow_empty=True,
+    )
+
+
+def clean_rag_rerank_model(value: object) -> str:
+    """The rerank model name. Empty clears it; the switch decides."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_RERANK_MODEL.id, "rerank model is not text")
+    text = value.strip()
+    if len(text) > 200 or any(ch in text for ch in "\r\n"):
+        raise _invalid(
+            F_RAG_RERANK_MODEL.id,
+            "rerank model is not a single line",
+        )
     return text
 
 
@@ -234,13 +354,11 @@ def clean_temperature(value: object) -> str:
 
 
 def clean_max_tokens(value: object) -> str:
-    number = _finite(value, F_MAX_TOKENS.id)
-    if not number.is_integer():
-        raise _invalid(F_MAX_TOKENS.id, "max tokens is not a whole number")
-    whole = int(number)
-    if whole < 1 or whole > 128_000:
-        raise _invalid(F_MAX_TOKENS.id, "max tokens is outside 1..128000")
-    return str(whole)
+    return str(
+        _clean_int_in_range(
+            value, F_MAX_TOKENS.id, "max tokens", low=1, high=128_000
+        )
+    )
 
 
 def clean_llm_timeout(value: object) -> str:
@@ -321,6 +439,26 @@ def _read_int(field: Field, default: int, invalid: list[str]) -> int:
     return int(value)
 
 
+def _bool_text(value: object) -> str:
+    """One spelling for a boolean, so an environment override is compared by meaning."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value).strip().casefold()
+    parsed = parse_boolean(text)
+    return "1" if parsed is True else "0" if parsed is False else text
+
+
+def _read_bool(field: Field, default: bool, invalid: list[str]) -> bool:
+    raw = _current(field)
+    if not raw:
+        return default
+    value = parse_boolean(raw)
+    if value is None:
+        invalid.append(field.id)
+        return default
+    return value
+
+
 def _mapping(body: Mapping[str, Any], key: str) -> Mapping[str, Any] | None:
     value = body.get(key)
     if value is None:
@@ -364,9 +502,59 @@ class _SearchPatch:
     secret: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RerankPatch:
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    candidates: int | None = None
+    top_n: int | None = None
+    #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
+    secret: str | None = None
+
+    @property
+    def changes_service(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.enabled, self.endpoint, self.model)
+        )
+
+    @property
+    def changes_numbers(self) -> bool:
+        return self.candidates is not None or self.top_n is not None
+
+    @property
+    def changes_config(self) -> bool:
+        return self.changes_service or self.changes_numbers
+
+
+@dataclass(frozen=True, slots=True)
+class _RagPatch:
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    query_prefix: str | None = None
+    batch: int | None = None
+    concurrency: int | None = None
+    #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
+    secret: str | None = None
+    rerank: _RerankPatch = _RerankPatch()
+
+
 def _unchanged(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> bool:
     compare = normalise or (lambda value: value)
     return compare(_current(field) or "") == compare(new)
+
+
+def _read_enabled(body: Mapping[str, Any], field: Field) -> bool | None:
+    """A switch in a save request, or ``None`` when the request leaves it."""
+    if body.get("enabled") is None:
+        return None
+    value = body["enabled"]
+    if not isinstance(value, bool):
+        raise _invalid(field.id, "enabled is not true or false")
+    _check_locked(field, _bool_text(value), normalise=_bool_text)
+    return value
 
 
 def _read_secret_patch(
@@ -496,6 +684,244 @@ def _read_search_patch(body: Mapping[str, Any], context: _Context) -> _SearchPat
     )
 
 
+def _validate_rag(patch: _RagPatch, context: _Context) -> None:
+    """A switch that is on must name the service it will call.
+
+    The values checked are the ones the running core will use, so an endpoint
+    supplied only by the environment still counts. A patch that changes only a
+    number or a key does not re-check the service, so an unrelated edit is not
+    blocked by a state the reader cannot fix from this form.
+    """
+    touches_required = any(
+        value is not None
+        for value in (
+            patch.enabled,
+            patch.endpoint,
+            patch.model,
+            patch.query_prefix,
+        )
+    )
+    if not touches_required:
+        return
+    enabled = (
+        patch.enabled
+        if patch.enabled is not None
+        else parse_boolean(context.effective.rag_enabled.text) is True
+    )
+    if not enabled:
+        return
+    endpoint = (
+        patch.endpoint
+        if patch.endpoint is not None
+        else context.effective.rag_embedding_endpoint.text
+    )
+    model = (
+        patch.model
+        if patch.model is not None
+        else context.effective.rag_embedding_model.text
+    )
+    prefix = (
+        patch.query_prefix
+        if patch.query_prefix is not None
+        else context.effective.rag_query_prefix.text
+    )
+    _require_service(
+        enabled,
+        endpoint,
+        model,
+        endpoint_field=F_RAG_EMBEDDING_ENDPOINT,
+        model_field=F_RAG_EMBEDDING_MODEL,
+        noun="RAG",
+    )
+    if prefix and "{query}" not in prefix:
+        raise _invalid(
+            F_RAG_QUERY_PREFIX.id,
+            "the query prefix must contain the {query} placeholder",
+        )
+
+
+def _require_service(
+    enabled: bool,
+    endpoint: str,
+    model: str,
+    *,
+    endpoint_field: Field,
+    model_field: Field,
+    noun: str,
+) -> None:
+    """A switch that is on must name the service it will call."""
+    if not enabled:
+        return
+    if not endpoint:
+        raise _invalid(
+            endpoint_field.id, f"{noun} is on, so an endpoint is required"
+        )
+    if not model:
+        raise _invalid(
+            model_field.id, f"{noun} is on, so a model is required"
+        )
+
+
+def _int_or_default(value: effective_mod.Value, default: int) -> int:
+    try:
+        return int(value.text)
+    except ValueError:
+        return default
+
+
+def _validate_rerank(patch: _RerankPatch, context: _Context) -> None:
+    """A rerank switch that is on must name the service it will call."""
+    if patch.changes_service:
+        enabled = (
+            patch.enabled
+            if patch.enabled is not None
+            else parse_boolean(context.effective.rag_rerank_enabled.text)
+            is True
+        )
+        endpoint = (
+            patch.endpoint
+            if patch.endpoint is not None
+            else context.effective.rag_rerank_endpoint.text
+        )
+        model = (
+            patch.model
+            if patch.model is not None
+            else context.effective.rag_rerank_model.text
+        )
+        _require_service(
+            enabled,
+            endpoint,
+            model,
+            endpoint_field=F_RAG_RERANK_ENDPOINT,
+            model_field=F_RAG_RERANK_MODEL,
+            noun="rerank",
+        )
+    if patch.changes_numbers:
+        candidates = (
+            patch.candidates
+            if patch.candidates is not None
+            else _int_or_default(
+                context.effective.rag_rerank_candidates,
+                DEFAULT_CANDIDATE_LIMIT,
+            )
+        )
+        top_n = (
+            patch.top_n
+            if patch.top_n is not None
+            else _int_or_default(
+                context.effective.rag_rerank_top_n, DEFAULT_TOP_N
+            )
+        )
+        if top_n > candidates:
+            raise _invalid(
+                F_RAG_RERANK_TOP_N.id,
+                "topN must not exceed candidates",
+            )
+
+
+def _read_rerank_patch(
+    body: Mapping[str, Any], context: _Context
+) -> _RerankPatch:
+    enabled = _read_enabled(body, F_RAG_RERANK_ENABLED)
+
+    endpoint = None
+    if body.get("endpoint") is not None:
+        endpoint = clean_rag_rerank_endpoint(body["endpoint"])
+        _check_locked(F_RAG_RERANK_ENDPOINT, endpoint)
+    model = None
+    if body.get("model") is not None:
+        model = clean_rag_rerank_model(body["model"])
+        _check_locked(F_RAG_RERANK_MODEL, model)
+    candidates = None
+    if body.get("candidates") is not None:
+        candidates = _clean_int_in_range(
+            body["candidates"],
+            F_RAG_RERANK_CANDIDATES.id,
+            "rerank candidates",
+            low=1,
+            high=500,
+        )
+        _check_locked(F_RAG_RERANK_CANDIDATES, str(candidates))
+    top_n = None
+    if body.get("topN") is not None:
+        top_n = _clean_int_in_range(
+            body["topN"],
+            F_RAG_RERANK_TOP_N.id,
+            "rerank topN",
+            low=1,
+            high=100,
+        )
+        _check_locked(F_RAG_RERANK_TOP_N, str(top_n))
+    secret = _read_secret_patch(
+        body, F_RAG_RERANK_KEY, context.effective.rag_rerank_key
+    )
+
+    patch = _RerankPatch(
+        enabled=enabled,
+        endpoint=endpoint,
+        model=model,
+        candidates=candidates,
+        top_n=top_n,
+        secret=secret,
+    )
+    _validate_rerank(patch, context)
+    return patch
+
+
+def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
+    enabled = _read_enabled(body, F_RAG_ENABLED)
+
+    embedding = _mapping(body, "embedding")
+    endpoint = None
+    model = None
+    query_prefix = None
+    batch = None
+    concurrency = None
+    secret = None
+    if embedding is not None:
+        if embedding.get("endpoint") is not None:
+            endpoint = clean_rag_endpoint(embedding["endpoint"])
+            _check_locked(F_RAG_EMBEDDING_ENDPOINT, endpoint)
+        if embedding.get("model") is not None:
+            model = clean_rag_model(embedding["model"])
+            _check_locked(F_RAG_EMBEDDING_MODEL, model)
+        if embedding.get("queryPrefix") is not None:
+            query_prefix = clean_rag_query_prefix(embedding["queryPrefix"])
+            if query_prefix and "{query}" not in query_prefix:
+                raise _invalid(
+                    F_RAG_QUERY_PREFIX.id,
+                    "the query prefix must contain the {query} placeholder",
+                )
+            _check_locked(F_RAG_QUERY_PREFIX, query_prefix)
+        if embedding.get("batch") is not None:
+            batch = clean_rag_batch(embedding["batch"])
+            _check_locked(F_RAG_BATCH, str(batch))
+        if embedding.get("concurrency") is not None:
+            concurrency = clean_rag_concurrency(embedding["concurrency"])
+            _check_locked(F_RAG_CONCURRENCY, str(concurrency))
+        secret = _read_secret_patch(
+            embedding, F_RAG_EMBEDDING_KEY, context.effective.rag_embedding_key
+        )
+
+    rerank = _RerankPatch()
+    rerank_body = _mapping(body, "rerank")
+    if rerank_body is not None:
+        rerank = _read_rerank_patch(rerank_body, context)
+
+    patch = _RagPatch(
+        enabled=enabled,
+        endpoint=endpoint,
+        model=model,
+        query_prefix=query_prefix,
+        batch=batch,
+        concurrency=concurrency,
+        secret=secret,
+        rerank=rerank,
+    )
+    _validate_rag(patch, context)
+    return patch
+
+
 def _read_media(body: Mapping[str, Any]) -> bool | None:
     if "extractMedia" not in body or body["extractMedia"] is None:
         return None
@@ -619,19 +1045,80 @@ def _with_search(config: Config, search: _SearchPatch) -> Config:
     )
 
 
+_T = TypeVar("_T")
+
+
+def _merge(new: _T | None, current: _T) -> _T:
+    """The value a save sent, or what the document already holds."""
+    return current if new is None else new
+
+
+def _with_rag(config: Config, rag: _RagPatch) -> Config:
+    current = config.rag
+    embedding = current.embedding
+    embedding_changed = any(
+        value is not None
+        for value in (
+            rag.endpoint,
+            rag.model,
+            rag.query_prefix,
+            rag.batch,
+            rag.concurrency,
+        )
+    )
+    if embedding_changed:
+        embedding = replace(
+            embedding,
+            endpoint=_merge(rag.endpoint, embedding.endpoint),
+            model=_merge(rag.model, embedding.model),
+            query_prefix=_merge(
+                rag.query_prefix, embedding.query_prefix
+            ),
+            batch=_merge(rag.batch, embedding.batch),
+            concurrency=_merge(rag.concurrency, embedding.concurrency),
+        )
+    rerank = current.rerank
+    if rag.rerank.changes_config:
+        rerank = replace(
+            rerank,
+            enabled=_merge(rag.rerank.enabled, rerank.enabled),
+            endpoint=_merge(rag.rerank.endpoint, rerank.endpoint),
+            model=_merge(rag.rerank.model, rerank.model),
+            candidates=_merge(rag.rerank.candidates, rerank.candidates),
+            top_n=_merge(rag.rerank.top_n, rerank.top_n),
+        )
+    return replace(
+        config,
+        rag=replace(
+            current,
+            enabled=_merge(rag.enabled, current.enabled),
+            embedding=embedding,
+            rerank=rerank,
+        ),
+    )
+
+
 def _mutate(
     config: Config,
     llm: _LlmPatch,
     search: _SearchPatch,
+    rag: _RagPatch,
     media: bool | None,
 ) -> Config:
     config = _with_profile(config, llm)
     config = _with_generation(config, llm)
     config = _with_search(config, search)
+    config = _with_rag(config, rag)
     return config if media is None else replace(config, extract_media=media)
 
 
-def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _SearchPatch) -> None:
+def _write_secrets(
+    store: ConfigStore,
+    config: Config,
+    llm: _LlmPatch,
+    search: _SearchPatch,
+    rag: _RagPatch,
+) -> None:
     profile = config.active_profile
     if llm.secret is not None:
         if not llm.secret:
@@ -644,6 +1131,16 @@ def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _
             store.set_search_key(search.secret)
         else:
             store.delete_search_key()
+    if rag.secret is not None:
+        if rag.secret:
+            store.set_rag_embedding_key(rag.secret)
+        else:
+            store.delete_rag_embedding_key()
+    if rag.rerank.secret is not None:
+        if rag.rerank.secret:
+            store.set_rag_rerank_key(rag.rerank.secret)
+        else:
+            store.delete_rag_rerank_key()
 
 
 # --- the screen's answer -----------------------------------------------------
@@ -710,6 +1207,39 @@ def install_view(
             ),
             "configured": provider not in ("", "none") and bool(search_key),
         },
+        "rag": {
+            "enabled": _read_bool(F_RAG_ENABLED, False, invalid),
+            "embedding": {
+                "endpoint": context.effective.rag_embedding_endpoint.text,
+                "model": context.effective.rag_embedding_model.text,
+                "queryPrefix": context.effective.rag_query_prefix.text,
+                "batch": _read_int(F_RAG_BATCH, DEFAULT_BATCH, invalid),
+                "concurrency": _read_int(
+                    F_RAG_CONCURRENCY, DEFAULT_CONCURRENCY, invalid
+                ),
+                "apiKeySet": bool(
+                    context.effective.rag_embedding_key.text
+                ),
+            },
+            "rerank": {
+                "enabled": _read_bool(
+                    F_RAG_RERANK_ENABLED, False, invalid
+                ),
+                "endpoint": context.effective.rag_rerank_endpoint.text,
+                "model": context.effective.rag_rerank_model.text,
+                "candidates": _read_int(
+                    F_RAG_RERANK_CANDIDATES,
+                    DEFAULT_CANDIDATE_LIMIT,
+                    invalid,
+                ),
+                "topN": _read_int(
+                    F_RAG_RERANK_TOP_N, DEFAULT_TOP_N, invalid
+                ),
+                "apiKeySet": bool(
+                    context.effective.rag_rerank_key.text
+                ),
+            },
+        },
         "extractMedia": _media_enabled(),
         "locked": context.effective.locked(),
         "invalid": invalid,
@@ -755,11 +1285,18 @@ def apply_install(
         raise _invalid("revision", "revision is not a whole number")
     llm_body = _mapping(body, "llm")
     search_body = _mapping(body, "search")
+    rag_body = _mapping(body, "rag")
     llm = _read_llm_patch(llm_body, context) if llm_body is not None else _LlmPatch()
     search = _read_search_patch(search_body, context) if search_body is not None else _SearchPatch()
+    rag = _read_rag_patch(rag_body, context) if rag_body is not None else _RagPatch()
     media = _read_media(body)
 
-    writes_secret = llm.secret is not None or search.secret is not None
+    writes_secret = (
+        llm.secret is not None
+        or search.secret is not None
+        or rag.secret is not None
+        or rag.rerank.secret is not None
+    )
     if writes_secret:
         # The credential store is checked before the document changes, so the
         # common failure (no backend) leaves nothing half-saved. A backend that
@@ -768,12 +1305,12 @@ def apply_install(
         context.store.require_keychain()
 
     updated = context.store.update(
-        lambda current: _mutate(current, llm, search, media),
+        lambda current: _mutate(current, llm, search, rag, media),
         expected_revision=expected,
         force=writes_secret,
     )
     if writes_secret:
-        _write_secrets(context.store, updated, llm, search)
+        _write_secrets(context.store, updated, llm, search, rag)
     return install_view(path=path, credentials=credentials)
 
 
@@ -1045,6 +1582,124 @@ def probe_search(
     except SearchError as err:
         raise _probe_refusal(str(err), search=True) from err
     return len(run.cards)
+
+
+# --- RAG trial embedding -----------------------------------------------------
+
+
+def _rag_probe_refusal(message: str) -> Refusal:
+    """Why the trial embedding failed, in the words the screen can say."""
+    found = _HTTP_STATUS.search(message)
+    status_text = found.group(1) if found else ""
+    params = {"status": status_text} if status_text else {}
+    lowered = message.casefold()
+    if "dimension" in lowered:
+        return Refusal(
+            "settings.ragProbeDimension",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    if status_text in {"401", "403"}:
+        return Refusal(
+            "settings.ragProbeRejected",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    if (
+        "request failed" in message
+        or "exceeded its" in message
+        or "timed out" in lowered
+        or "connect" in lowered
+    ):
+        return Refusal(
+            "settings.ragProbeUnreachable",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    return Refusal(
+        "settings.ragProbeFailed", message[:300], params=params, status=502
+    )
+
+
+def probe_rag_embedding(
+    body: Mapping[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+    client_factory: Callable[[EmbeddingConfig], Any] | None = None,
+) -> dict[str, object]:
+    """Embed one fixed text with the draft, without saving or indexing."""
+    context = _context(path, credentials)
+    body = body or {}
+    endpoint = (
+        _use(F_RAG_EMBEDDING_ENDPOINT, clean_rag_endpoint(body["endpoint"]))
+        if body.get("endpoint") is not None
+        else context.effective.rag_embedding_endpoint.text
+    )
+    model = (
+        _use(F_RAG_EMBEDDING_MODEL, clean_rag_model(body["model"]))
+        if body.get("model") is not None
+        else context.effective.rag_embedding_model.text
+    )
+    if body.get("clearApiKey"):
+        key = ""
+    elif body.get("apiKey"):
+        key = _use(
+            F_RAG_EMBEDDING_KEY,
+            clean_secret(body["apiKey"], F_RAG_EMBEDDING_KEY.id),
+        )
+    else:
+        key = context.effective.rag_embedding_key.text
+    if not endpoint:
+        raise _invalid(
+            F_RAG_EMBEDDING_ENDPOINT.id,
+            "an embedding endpoint is required to test the service",
+        )
+    if not model:
+        raise _invalid(
+            F_RAG_EMBEDDING_MODEL.id,
+            "an embedding model is required to test the service",
+        )
+    if not body.get("apiKey") and not body.get("clearApiKey"):
+        # A stored key belongs to the address it was saved for. A draft that
+        # moves the address must bring its own key.
+        _key_fits_origin(
+            key,
+            context.effective.rag_embedding_endpoint.text,
+            endpoint,
+        )
+    config = EmbeddingConfig(
+        endpoint=endpoint,
+        model=model,
+        query_prefix=DEFAULT_QUERY_PREFIX,
+        dim=DEFAULT_DIM,
+        api_key=key,
+        retries=0,
+        query_timeout_s=_RAG_PROBE_TIMEOUT,
+        page_timeout_s=_RAG_PROBE_TIMEOUT,
+    )
+    client = (client_factory or OpenAIEmbeddingClient)(config)
+    started = time.perf_counter()
+    try:
+        vectors = client.embed([_RAG_PROBE_TEXT])
+    except EmbeddingError as err:
+        raise _rag_probe_refusal(str(err)) from err
+    elapsed = time.perf_counter() - started
+    if len(vectors) != 1 or len(vectors[0]) != config.dim:
+        got = len(vectors[0]) if vectors else 0
+        raise Refusal(
+            "settings.ragProbeDimension",
+            f"the service returned {got} dimensions, expected {config.dim}",
+            status=502,
+        )
+    return {
+        "ok": True,
+        "dim": config.dim,
+        "durationSeconds": round(elapsed, 3),
+    }
 
 
 # --- deep check --------------------------------------------------------------
