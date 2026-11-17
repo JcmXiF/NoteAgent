@@ -368,6 +368,174 @@ class SearchSettingsTests(unittest.TestCase):
                 self.assertEqual(active_llm_provider(), "")
 
 
+class RagSettingsTests(unittest.TestCase):
+    """The retrieval switch is install-wide: document, screen and runtime agree."""
+
+    def test_rag_is_off_by_default_and_reports_its_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            self.assertFalse(view["rag"]["enabled"])
+            self.assertEqual(view["rag"]["embedding"]["endpoint"], "")
+            self.assertEqual(
+                view["rag"]["embedding"]["model"], DEFAULT_EMBEDDING_MODEL
+            )
+            self.assertEqual(view["sources"]["rag.enabled"], "default")
+            self.assertEqual(view["sources"]["rag.embedding.model"], "default")
+            self.assertEqual(view["locked"], [])
+
+    def test_enabling_rag_writes_the_document_and_the_process_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(document["rag"]["enabled"])
+            self.assertEqual(
+                document["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertTrue(view["rag"]["enabled"])
+            self.assertEqual(
+                view["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertEqual(view["sources"]["rag.embedding.endpoint"], "config")
+            self.assertEqual(os.environ["NOTEAGENT_RAG_ENABLED"], "1")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_ENDPOINT"],
+                "http://localhost:8080/v1",
+            )
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_MODEL"], "qwen3-embedding:0.6b"
+            )
+
+    def test_turning_rag_off_writes_the_off_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+            view = apply_install({"rag": {"enabled": False}})
+
+            self.assertFalse(view["rag"]["enabled"])
+            self.assertEqual(os.environ["NOTEAGENT_RAG_ENABLED"], "0")
+
+    def test_enabling_without_an_endpoint_is_refused_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"enabled": True, "embedding": {"model": "m"}}}
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertEqual(caught.exception.status, 400)
+            self.assertFalse(path.exists())
+
+    def test_enabling_without_a_model_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {
+                        "rag": {
+                            "enabled": True,
+                            "embedding": {
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "",
+                            },
+                        }
+                    }
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertFalse(path.exists())
+
+    def test_clearing_the_endpoint_while_enabled_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+            with self.assertRaises(Refusal):
+                apply_install({"rag": {"embedding": {"endpoint": ""}}})
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                document["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+
+    def test_a_rag_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_ENDPOINT"] = "http://env/v1"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["embedding"]["endpoint"], "http://env/v1")
+            self.assertEqual(view["sources"]["rag.embedding.endpoint"], "env")
+            self.assertIn("rag.embedding.endpoint", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"embedding": {"endpoint": "http://other/v1"}}}
+                )
+            self.assertEqual(caught.exception.code, "settings.locked")
+
+    def test_an_empty_environment_model_means_the_runtime_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_MODEL"] = ""
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(
+                view["rag"]["embedding"]["model"], DEFAULT_EMBEDDING_MODEL
+            )
+            self.assertEqual(view["sources"]["rag.embedding.model"], "env")
+            self.assertIn("rag.embedding.model", view["locked"])
+
+            saved = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {"endpoint": "http://localhost:8080/v1"},
+                    }
+                }
+            )
+            self.assertTrue(saved["rag"]["enabled"])
+
+
 class ProbeTests(unittest.TestCase):
     def _save_connection(self, key: str = "secret") -> None:
         apply_install(
@@ -1140,6 +1308,47 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(saved.json()["search"]["mode"], "external")
             self.assertEqual(saved.json()["search"]["country"], "CN")
             self.assertEqual(client.get("/api/settings").json()["search"]["mode"], "external")
+
+    def test_rag_settings_save_through_the_settings_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            default = client.get("/api/settings")
+            self.assertEqual(default.status_code, 200, default.text)
+            self.assertFalse(default.json()["rag"]["enabled"])
+
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            self.assertTrue(body["rag"]["enabled"])
+            self.assertEqual(
+                body["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertEqual(body["sources"]["rag.embedding.endpoint"], "config")
+
+            refused = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"enabled": True, "embedding": {"endpoint": ""}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(refused.status_code, 400, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.invalid")
+            self.assertEqual(
+                refused.json()["params"]["field"], "rag.embedding.endpoint"
+            )
+            self.assertTrue(client.get("/api/settings").json()["rag"]["enabled"])
 
     def test_a_stale_revision_is_a_409_with_its_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

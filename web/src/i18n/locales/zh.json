@@ -1076,6 +1076,7 @@
       "model": "模型连接",
       "generation": "生成",
       "search": "搜索",
+      "retrieval": "检索",
       "deepCheck": "深度检查",
       "effective": "有效配置",
       "project": "项目说明",
@@ -1170,6 +1171,7 @@
       "intro": "程序当前实际使用的值，以及每个值的来源；这里只读。",
       "groupConnection": "模型连接",
       "groupSearch": "搜索",
+      "groupRetrieval": "检索",
       "groupFile": "文件",
       "profile": "当前连接",
       "noConnection": "没有活动连接",
@@ -1215,6 +1217,19 @@
       "testOk": "搜到了 {{count}} 条。",
       "testNone": "连接是通的，这次没有结果。",
       "testFailed": "这次试搜没有成功。"
+    },
+    "retrieval": {
+      "title": "检索（RAG）",
+      "intro": "让搜索同时使用关键词与语义，需要本地或自建的嵌入服务；关闭时保持原有的关键词搜索。",
+      "enabled": "使用混合检索",
+      "enabledHint": "开关只影响之后开始的任务，正在进行的那次沿用原设置。",
+      "groupService": "嵌入服务",
+      "endpoint": "服务地址",
+      "endpointHint": "兼容 OpenAI 的嵌入接口地址，例如 http://localhost:8080/v1。",
+      "model": "模型名",
+      "modelHint": "服务端提供的嵌入模型名，例如 Qwen3-Embedding-0.6B。",
+      "outbound": "开启后，wiki 内容页会发送到这里的嵌入服务；笔记与原始资料不会发送。",
+      "takesEffect": "保存后，下一次任务开始使用。"
     },
     "project": {
       "title": "这个项目在写什么",
@@ -1297,6 +1312,8 @@
     "invalid": {
       "name": "请填写连接名称。",
       "baseUrl": "服务地址要以 http:// 或 https:// 开头。",
+      "ragEndpoint": "请填写以 http:// 或 https:// 开头的嵌入服务地址。",
+      "ragModel": "请填写嵌入模型名。",
       "model": "请填写模型名。",
       "temperature": "温度要在 0 到 2 之间。",
       "maxTokens": "单次回答上限需为 1 到 128000 之间的整数。",

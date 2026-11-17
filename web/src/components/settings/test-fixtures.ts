@@ -44,6 +44,10 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
       uiLang: "",
       configured: false,
     },
+    rag: {
+      enabled: false,
+      embedding: { endpoint: "", model: "Qwen3-Embedding-0.6B" },
+    },
     extractMedia: true,
     locked: [],
     invalid: [],

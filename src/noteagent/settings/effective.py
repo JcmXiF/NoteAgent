@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from noteagent.llm.config import process_env_keys
+from noteagent.rag.config import DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL
 from noteagent.settings.credentials import CredentialStoreUnavailable
 from noteagent.settings.fields import (
     F_BASE,
@@ -28,6 +29,9 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_MODEL,
+    F_RAG_ENABLED,
     F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
@@ -67,6 +71,9 @@ _VALUE_FIELDS: tuple[tuple[Field, str], ...] = (
     (F_LANG, "search_lang"),
     (F_UI_LANG, "ui_lang"),
     (F_MEDIA, "extract_media"),
+    (F_RAG_ENABLED, "rag_enabled"),
+    (F_RAG_EMBEDDING_ENDPOINT, "rag_embedding_endpoint"),
+    (F_RAG_EMBEDDING_MODEL, "rag_embedding_model"),
 )
 
 #: Names this module wrote into the process environment. A value it wrote is
@@ -113,6 +120,9 @@ class Effective:
     search_lang: Value
     ui_lang: Value
     extract_media: Value
+    rag_enabled: Value
+    rag_embedding_endpoint: Value
+    rag_embedding_model: Value
     keychain_available: bool
 
     def sources(self) -> dict[str, str]:
@@ -151,6 +161,17 @@ def _secret(
     if stored:
         return Value(stored, SOURCE_KEYCHAIN)
     return Value("", SOURCE_DEFAULT)
+
+
+def _runtime_default(value: Value, default: str) -> Value:
+    """What the runtime uses when an environment value is present but empty.
+
+    The embedding loader substitutes its default for an empty model, so the
+    screen must show that model rather than the empty text it was given.
+    """
+    if value.source == SOURCE_ENV and not value.text:
+        return Value(default, value.source, locked=value.locked)
+    return value
 
 
 def _read_secret(reader: Callable[[], str], store: ConfigStore) -> tuple[str, bool]:
@@ -275,6 +296,33 @@ def resolve(
             file_exists=exists,
             process_keys=keys,
             environ=source,
+        ),
+        "rag_enabled": _plain(
+            F_RAG_ENABLED.env,
+            "1" if config.rag.enabled else "0",
+            "0",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_endpoint": _plain(
+            F_RAG_EMBEDDING_ENDPOINT.env,
+            config.rag.embedding.endpoint,
+            "",
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_model": _runtime_default(
+            _plain(
+                F_RAG_EMBEDDING_MODEL.env,
+                config.rag.embedding.model,
+                DEFAULT_EMBEDDING_MODEL,
+                file_exists=exists,
+                process_keys=keys,
+                environ=source,
+            ),
+            DEFAULT_EMBEDDING_MODEL,
         ),
     }
     return Effective(keychain_available=keychain_available, **values)

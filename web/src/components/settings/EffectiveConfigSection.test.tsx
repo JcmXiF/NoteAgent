@@ -55,6 +55,13 @@ const EFFECTIVE: Partial<InstallSettings> = {
     uiLang: "zh-CN",
     configured: true,
   },
+  rag: {
+    enabled: true,
+    embedding: {
+      endpoint: "http://localhost:8080/v1",
+      model: "qwen3-embedding:0.6b",
+    },
+  },
   extractMedia: false,
   locked: ["llm.temperature"],
   revision: 7,
@@ -74,6 +81,9 @@ const EFFECTIVE: Partial<InstallSettings> = {
     "search.country": "config",
     "search.searchLang": "config",
     "search.uiLang": "default",
+    "rag.enabled": "config",
+    "rag.embedding.endpoint": "config",
+    "rag.embedding.model": "config",
     extractMedia: "default",
   },
 };
@@ -105,6 +115,9 @@ describe("the effective configuration", () => {
     expect(text).toContain("CN");
     expect(text).toContain("zh-hans");
     expect(text).toContain("zh-CN");
+    expect(text).toContain("使用混合检索");
+    expect(text).toContain("http://localhost:8080/v1");
+    expect(text).toContain("qwen3-embedding:0.6b");
     // A key is reported as stored, never as text.
     expect(text).toContain("已保存");
     // The four sources the core can name.

@@ -242,9 +242,20 @@ class SearchSettingsBody(BaseModel):
     uiLang: str | None = None
 
 
+class RagEmbeddingSettingsBody(BaseModel):
+    endpoint: str | None = None
+    model: str | None = None
+
+
+class RagSettingsBody(BaseModel):
+    enabled: bool | None = None
+    embedding: RagEmbeddingSettingsBody | None = None
+
+
 class InstallSettingsBody(BaseModel):
     llm: LlmSettingsBody | None = None
     search: SearchSettingsBody | None = None
+    rag: RagSettingsBody | None = None
     extractMedia: bool | None = None
     #: The revision the form was built from. A save that read an older document
     #: is refused instead of overwriting a change it never saw.

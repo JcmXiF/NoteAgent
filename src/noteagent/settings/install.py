@@ -45,6 +45,7 @@ from noteagent.llm.config import (
     capture_process_env,
     process_env_keys,
 )
+from noteagent.rag.env import parse_boolean
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
     CredentialStore,
@@ -61,6 +62,9 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_MODEL,
+    F_RAG_ENABLED,
     F_SEARCH_KEY,
     F_SEARCH_MODE,
     F_SEARCH_TIMEOUT,
@@ -196,15 +200,46 @@ def _finite(value: object, field: str) -> float:
     return number
 
 
-def clean_base_url(value: object) -> str:
+def _clean_url(value: object, field: str, noun: str, *, allow_empty: bool) -> str:
     if not isinstance(value, str):
-        raise _invalid(F_BASE.id, "base url is not text")
+        raise _invalid(field, f"{noun} is not text")
     text = value.strip().rstrip("/")
-    if not text or len(text) > 500 or any(ch.isspace() for ch in text):
-        raise _invalid(F_BASE.id, "base url is empty or not a single http(s) URL")
+    if not text:
+        if allow_empty:
+            return ""
+        raise _invalid(field, f"{noun} is empty")
+    if len(text) > 500 or any(ch.isspace() for ch in text):
+        raise _invalid(field, f"{noun} is not a single http(s) URL")
     parsed = urlsplit(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise _invalid(F_BASE.id, "base url must start with http:// or https://")
+        raise _invalid(field, f"{noun} must start with http:// or https://")
+    return text
+
+
+def clean_base_url(value: object) -> str:
+    return _clean_url(value, F_BASE.id, "base url", allow_empty=False)
+
+
+def clean_rag_endpoint(value: object) -> str:
+    """The embedding service address. Empty clears it; the switch decides if that is allowed."""
+    return _clean_url(
+        value,
+        F_RAG_EMBEDDING_ENDPOINT.id,
+        "embedding endpoint",
+        allow_empty=True,
+    )
+
+
+def clean_rag_model(value: object) -> str:
+    """The embedding model name. Empty clears it; the switch decides if that is allowed."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_EMBEDDING_MODEL.id, "embedding model is not text")
+    text = value.strip()
+    if len(text) > 200 or any(ch in text for ch in "\r\n"):
+        raise _invalid(
+            F_RAG_EMBEDDING_MODEL.id,
+            "embedding model is not a single line",
+        )
     return text
 
 
@@ -321,6 +356,26 @@ def _read_int(field: Field, default: int, invalid: list[str]) -> int:
     return int(value)
 
 
+def _bool_text(value: object) -> str:
+    """One spelling for a boolean, so an environment override is compared by meaning."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value).strip().casefold()
+    parsed = parse_boolean(text)
+    return "1" if parsed is True else "0" if parsed is False else text
+
+
+def _read_bool(field: Field, default: bool, invalid: list[str]) -> bool:
+    raw = _current(field)
+    if not raw:
+        return default
+    value = parse_boolean(raw)
+    if value is None:
+        invalid.append(field.id)
+        return default
+    return value
+
+
 def _mapping(body: Mapping[str, Any], key: str) -> Mapping[str, Any] | None:
     value = body.get(key)
     if value is None:
@@ -362,6 +417,13 @@ class _SearchPatch:
     search_lang: str | None = None
     ui_lang: str | None = None
     secret: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RagPatch:
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
 
 
 def _unchanged(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> bool:
@@ -496,6 +558,68 @@ def _read_search_patch(body: Mapping[str, Any], context: _Context) -> _SearchPat
     )
 
 
+def _validate_rag(patch: _RagPatch, context: _Context) -> None:
+    """A switch that is on must name the service it will call.
+
+    The values checked are the ones the running core will use, so an endpoint
+    supplied only by the environment still counts.
+    """
+    if patch.enabled is None and patch.endpoint is None and patch.model is None:
+        return
+    enabled = (
+        patch.enabled
+        if patch.enabled is not None
+        else parse_boolean(context.effective.rag_enabled.text) is True
+    )
+    if not enabled:
+        return
+    endpoint = (
+        patch.endpoint
+        if patch.endpoint is not None
+        else context.effective.rag_embedding_endpoint.text
+    )
+    model = (
+        patch.model
+        if patch.model is not None
+        else context.effective.rag_embedding_model.text
+    )
+    if not endpoint:
+        raise _invalid(
+            F_RAG_EMBEDDING_ENDPOINT.id,
+            "RAG is on, so an embedding endpoint is required",
+        )
+    if not model:
+        raise _invalid(
+            F_RAG_EMBEDDING_MODEL.id,
+            "RAG is on, so an embedding model is required",
+        )
+
+
+def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
+    enabled = None
+    if body.get("enabled") is not None:
+        value = body["enabled"]
+        if not isinstance(value, bool):
+            raise _invalid(F_RAG_ENABLED.id, "enabled is not true or false")
+        _check_locked(F_RAG_ENABLED, _bool_text(value), normalise=_bool_text)
+        enabled = value
+
+    embedding = _mapping(body, "embedding")
+    endpoint = None
+    model = None
+    if embedding is not None:
+        if embedding.get("endpoint") is not None:
+            endpoint = clean_rag_endpoint(embedding["endpoint"])
+            _check_locked(F_RAG_EMBEDDING_ENDPOINT, endpoint)
+        if embedding.get("model") is not None:
+            model = clean_rag_model(embedding["model"])
+            _check_locked(F_RAG_EMBEDDING_MODEL, model)
+
+    patch = _RagPatch(enabled=enabled, endpoint=endpoint, model=model)
+    _validate_rag(patch, context)
+    return patch
+
+
 def _read_media(body: Mapping[str, Any]) -> bool | None:
     if "extractMedia" not in body or body["extractMedia"] is None:
         return None
@@ -619,15 +743,38 @@ def _with_search(config: Config, search: _SearchPatch) -> Config:
     )
 
 
+def _with_rag(config: Config, rag: _RagPatch) -> Config:
+    current = config.rag
+    embedding = current.embedding
+    if rag.endpoint is not None or rag.model is not None:
+        embedding = replace(
+            embedding,
+            endpoint=(
+                rag.endpoint if rag.endpoint is not None else embedding.endpoint
+            ),
+            model=rag.model if rag.model is not None else embedding.model,
+        )
+    return replace(
+        config,
+        rag=replace(
+            current,
+            enabled=rag.enabled if rag.enabled is not None else current.enabled,
+            embedding=embedding,
+        ),
+    )
+
+
 def _mutate(
     config: Config,
     llm: _LlmPatch,
     search: _SearchPatch,
+    rag: _RagPatch,
     media: bool | None,
 ) -> Config:
     config = _with_profile(config, llm)
     config = _with_generation(config, llm)
     config = _with_search(config, search)
+    config = _with_rag(config, rag)
     return config if media is None else replace(config, extract_media=media)
 
 
@@ -710,6 +857,13 @@ def install_view(
             ),
             "configured": provider not in ("", "none") and bool(search_key),
         },
+        "rag": {
+            "enabled": _read_bool(F_RAG_ENABLED, False, invalid),
+            "embedding": {
+                "endpoint": context.effective.rag_embedding_endpoint.text,
+                "model": context.effective.rag_embedding_model.text,
+            },
+        },
         "extractMedia": _media_enabled(),
         "locked": context.effective.locked(),
         "invalid": invalid,
@@ -755,8 +909,10 @@ def apply_install(
         raise _invalid("revision", "revision is not a whole number")
     llm_body = _mapping(body, "llm")
     search_body = _mapping(body, "search")
+    rag_body = _mapping(body, "rag")
     llm = _read_llm_patch(llm_body, context) if llm_body is not None else _LlmPatch()
     search = _read_search_patch(search_body, context) if search_body is not None else _SearchPatch()
+    rag = _read_rag_patch(rag_body, context) if rag_body is not None else _RagPatch()
     media = _read_media(body)
 
     writes_secret = llm.secret is not None or search.secret is not None
@@ -768,7 +924,7 @@ def apply_install(
         context.store.require_keychain()
 
     updated = context.store.update(
-        lambda current: _mutate(current, llm, search, media),
+        lambda current: _mutate(current, llm, search, rag, media),
         expected_revision=expected,
         force=writes_secret,
     )

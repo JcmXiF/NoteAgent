@@ -86,8 +86,9 @@ without touching the saved settings.
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
 
-The RAG variables are read from the environment for now; the settings document and screen do not
-include them yet.
+The retrieval switch, the embedding address and the model are also on the settings screen, under
+Retrieval. The remaining RAG variables are read from the environment only, and a value set there
+still wins over the saved document.
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
@@ -119,8 +120,9 @@ the material is. What moves, and what a migrated project keeps, is in
 
 ## Retrieval (RAG, off by default)
 
-`search` keeps its contract: a page slug and a short excerpt, never the page body. With RAG
-turned on, the same tool answers from a derived index instead of the full-text scan:
+`search` keeps its contract: a page slug and a short excerpt, never the page body. Turn it on
+under Settings → Retrieval (or with `NOTEAGENT_RAG_ENABLED`); the same tool then answers from a
+derived index instead of the full-text scan:
 
 - BM25F (CJK bigrams and words) and a vector index are fused by reciprocal-rank fusion. A page
   whose slug or title matches exactly ranks first unless the optional reranker changes the order.

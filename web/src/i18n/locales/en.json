@@ -1076,6 +1076,7 @@
       "model": "Connections",
       "generation": "Generation",
       "search": "Search",
+      "retrieval": "Retrieval",
       "deepCheck": "Deep check",
       "effective": "Effective config",
       "project": "Project",
@@ -1170,6 +1171,7 @@
       "intro": "What the program is actually using, and where each value came from. This view is read-only.",
       "groupConnection": "Model connection",
       "groupSearch": "Search",
+      "groupRetrieval": "Retrieval",
       "groupFile": "Files",
       "profile": "Current connection",
       "noConnection": "No active connection",
@@ -1215,6 +1217,19 @@
       "testOk": "Found {{count}}.",
       "testNone": "The connection works. This search had no results.",
       "testFailed": "The trial search did not succeed."
+    },
+    "retrieval": {
+      "title": "Retrieval (RAG)",
+      "intro": "Searches with keywords and meaning together. It needs an embedding service on this computer or one you run yourself; with the switch off, search stays keyword-only.",
+      "enabled": "Use hybrid retrieval",
+      "enabledHint": "The switch takes effect with the next run; one already answering keeps its setting.",
+      "groupService": "Embedding service",
+      "endpoint": "Service address",
+      "endpointHint": "An OpenAI-compatible embeddings address, e.g. http://localhost:8080/v1.",
+      "model": "Model name",
+      "modelHint": "The embedding model the service offers, e.g. Qwen3-Embedding-0.6B.",
+      "outbound": "Turning this on sends wiki pages to the embedding service configured here. Notes and raw sources are not sent.",
+      "takesEffect": "Takes effect with the next run."
     },
     "project": {
       "title": "What this project is for",
@@ -1297,6 +1312,8 @@
     "invalid": {
       "name": "Enter a connection name.",
       "baseUrl": "The service address must start with http:// or https://.",
+      "ragEndpoint": "Enter the embedding service address, starting with http:// or https://.",
+      "ragModel": "Enter the embedding model name.",
       "model": "Enter a model name.",
       "temperature": "Temperature must be between 0 and 2.",
       "maxTokens": "The reply limit must be a whole number from 1 to 128000.",

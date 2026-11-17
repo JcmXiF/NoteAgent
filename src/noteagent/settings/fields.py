@@ -33,6 +33,13 @@ F_COUNTRY = Field("search.country", "NOTEAGENT_SEARCH_COUNTRY")
 F_LANG = Field("search.searchLang", "NOTEAGENT_SEARCH_LANG")
 F_UI_LANG = Field("search.uiLang", "NOTEAGENT_SEARCH_UI_LANG")
 F_MEDIA = Field("extractMedia", "NOTEAGENT_EXTRACT_MEDIA")
+F_RAG_ENABLED = Field("rag.enabled", "NOTEAGENT_RAG_ENABLED")
+F_RAG_EMBEDDING_ENDPOINT = Field(
+    "rag.embedding.endpoint", "NOTEAGENT_RAG_EMBEDDING_ENDPOINT"
+)
+F_RAG_EMBEDDING_MODEL = Field(
+    "rag.embedding.model", "NOTEAGENT_RAG_EMBEDDING_MODEL"
+)
 
 FIELDS = (
     F_BASE,
@@ -49,6 +56,9 @@ FIELDS = (
     F_LANG,
     F_UI_LANG,
     F_MEDIA,
+    F_RAG_ENABLED,
+    F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_MODEL,
 )
 
 MANAGED_ENV_NAMES = frozenset(field.env for field in FIELDS)
@@ -65,6 +75,9 @@ __all__ = [
     "F_MEDIA",
     "F_MODEL",
     "F_PROVIDER",
+    "F_RAG_EMBEDDING_ENDPOINT",
+    "F_RAG_EMBEDDING_MODEL",
+    "F_RAG_ENABLED",
     "F_SEARCH_MODE",
     "F_SEARCH_KEY",
     "F_SEARCH_TIMEOUT",

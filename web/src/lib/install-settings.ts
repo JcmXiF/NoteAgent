@@ -90,10 +90,22 @@ export type SearchSettings = {
   configured: boolean;
 };
 
+export type RagEmbeddingSettings = {
+  endpoint: string;
+  model: string;
+};
+
+/** The install-wide hybrid-retrieval switch and the service it calls. */
+export type RagSettings = {
+  enabled: boolean;
+  embedding: RagEmbeddingSettings;
+};
+
 export type InstallSettings = {
   version: string;
   llm: LlmSettings;
   search: SearchSettings;
+  rag: RagSettings;
   extractMedia: boolean;
   locked: string[];
   invalid: string[];
@@ -134,9 +146,16 @@ export type SearchDraft = {
   extractMedia: boolean;
 };
 
+export type RagDraft = {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+};
+
 export type SettingsPatch = {
   llm?: Record<string, unknown>;
   search?: Record<string, unknown>;
+  rag?: Record<string, unknown>;
   extractMedia?: boolean;
   /** The revision the form was built from; a stale one is refused with 409. */
   revision?: number;
@@ -189,7 +208,7 @@ export function profileDraftFrom(profile: ProfileSettings): ProfileDraft {
   };
 }
 
-function trimmedBaseUrl(value: string): string {
+function trimmedUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
@@ -201,7 +220,7 @@ function changedProfileFields(
   const changes: Omit<ProfileUpdatePatch, "revision"> = {};
   if (draft.name.trim() !== profile.name) changes.name = draft.name.trim();
   if (draft.provider !== profile.provider) changes.provider = draft.provider;
-  if (trimmedBaseUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
+  if (trimmedUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
   if (draft.model.trim() !== profile.model) changes.model = draft.model.trim();
   if (draft.apiKey.trim()) changes.apiKey = draft.apiKey.trim();
   else if (draft.clearApiKey) changes.clearApiKey = true;
@@ -346,7 +365,7 @@ export function generationPatch(
 }
 
 function validBaseUrl(value: string): boolean {
-  const text = value.trim().replace(/\/+$/, "");
+  const text = trimmedUrl(value);
   if (!text || /\s/.test(text) || text.length > 500) return false;
   try {
     const url = new URL(text);
@@ -464,4 +483,51 @@ export function searchPatch(
   if (Object.keys(search).length > 0) patch.search = search;
   if (draft.extractMedia !== extractMedia) patch.extractMedia = draft.extractMedia;
   return patch.search || patch.extractMedia !== undefined ? patch : null;
+}
+
+export function ragDraftFrom(rag: RagSettings): RagDraft {
+  return {
+    enabled: rag.enabled,
+    endpoint: rag.embedding.endpoint,
+    model: rag.embedding.model,
+  };
+}
+
+/** i18n keys for values the core would refuse on a retrieval save. */
+export function ragProblems(draft: RagDraft): string[] {
+  const problems: string[] = [];
+  // The service fields are hidden while the switch is off, so a draft behind
+  // the switch must not block turning it off.
+  if (!draft.enabled) return problems;
+  if (!validBaseUrl(draft.endpoint)) problems.push("settings.invalid.ragEndpoint");
+  if (!draft.model.trim()) problems.push("settings.invalid.ragModel");
+  return problems;
+}
+
+export function ragDirty(draft: RagDraft, saved: RagSettings): boolean {
+  // The service fields are hidden while the switch is off, and a save while it
+  // is off sends only the switch: draft text behind it is not a change.
+  return (
+    draft.enabled !== saved.enabled ||
+    (draft.enabled &&
+      (trimmedUrl(draft.endpoint) !== saved.embedding.endpoint ||
+        draft.model.trim() !== saved.embedding.model))
+  );
+}
+
+/** Only the switch and the service fields that differ, and only while it is on. */
+export function ragPatch(draft: RagDraft, saved: RagSettings): SettingsPatch | null {
+  const rag: Record<string, unknown> = {};
+  if (draft.enabled !== saved.enabled) rag.enabled = draft.enabled;
+  if (draft.enabled) {
+    const embedding: Record<string, unknown> = {};
+    if (trimmedUrl(draft.endpoint) !== saved.embedding.endpoint) {
+      embedding.endpoint = trimmedUrl(draft.endpoint);
+    }
+    if (draft.model.trim() !== saved.embedding.model) {
+      embedding.model = draft.model.trim();
+    }
+    if (Object.keys(embedding).length > 0) rag.embedding = embedding;
+  }
+  return Object.keys(rag).length > 0 ? { rag } : null;
 }

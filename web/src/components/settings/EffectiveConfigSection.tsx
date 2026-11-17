@@ -144,6 +144,31 @@ export function EffectiveConfigSection({ install }: { install: InstallSettings }
         </dl>
       </FieldGroup>
 
+      <FieldGroup title={t("settings.effective.groupRetrieval")}>
+        <dl className="flex flex-col gap-3">
+          <Row
+            label={t("settings.retrieval.enabled")}
+            value={
+              install.rag.enabled
+                ? t("settings.effective.on")
+                : t("settings.effective.off")
+            }
+            source={source("rag.enabled")}
+          />
+          <Row
+            label={t("settings.retrieval.endpoint")}
+            value={text(install.rag.embedding.endpoint)}
+            source={source("rag.embedding.endpoint")}
+            mono
+          />
+          <Row
+            label={t("settings.retrieval.model")}
+            value={text(install.rag.embedding.model)}
+            source={source("rag.embedding.model")}
+          />
+        </dl>
+      </FieldGroup>
+
       <FieldGroup title={t("settings.effective.groupFile")}>
         <dl className="flex flex-col gap-3">
           <Row
