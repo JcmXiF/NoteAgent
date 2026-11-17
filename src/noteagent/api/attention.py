@@ -15,6 +15,8 @@ from noteagent.ingest.ingest_recovery import recovery_payload
 from noteagent.ingest.revision_inbox import revision_inbox_payload
 from noteagent.project.doctor import doctor_payload, doctor_project
 from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.jsonl import JsonlSessionStore
+from noteagent.sessions.recovery import interrupted_runs
 
 __all__ = ["attention_payload"]
 
@@ -30,9 +32,14 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
     doctor: dict[str, Any] | None = None
     if check:
         doctor = doctor_payload(doctor_project(layout), limit=DOCTOR_LIMIT)
+    interrupted = [
+        item.payload()
+        for item in interrupted_runs(JsonlSessionStore(layout))
+    ]
 
     revision_count = int(revision.get("openCount") or 0)
     recovery_count = int(recovery.get("openCount") or 0)
+    interrupted_count = len(interrupted)
     # An orphan page and a page from an older project layout are what a healthy
     # project looks like, so they are not things to do.
     doctor_count = 0
@@ -43,10 +50,17 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
         "revision": revision,
         "recovery": recovery,
         "doctor": doctor,
+        "interruptedRuns": interrupted,
         "counts": {
             "revision": revision_count,
             "recovery": recovery_count,
             "doctor": doctor_count,
+            "interrupted": interrupted_count,
         },
-        "total": revision_count + recovery_count + doctor_count,
+        "total": (
+            revision_count
+            + recovery_count
+            + doctor_count
+            + interrupted_count
+        ),
     }

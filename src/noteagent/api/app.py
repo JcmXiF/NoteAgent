@@ -102,6 +102,7 @@ from noteagent.api.session_access import (
     migrate_sessions,
     open_session_store,
     project_sessions,
+    recover_active_project_runs,
     session_busy,
     session_runtime,
     session_waits,
@@ -594,6 +595,9 @@ async def _app_lifespan(_app: FastAPI):
 
     # An upgrade brings the old chats across before the socket answers.
     migrate_active_project_chats(_app.state.deps)
+    # A crash leaves a run's last marker at running; recover its terminal state
+    # before the list and the session view can be read.
+    recover_active_project_runs(_app.state.deps)
 
     stop = asyncio.Event()
 

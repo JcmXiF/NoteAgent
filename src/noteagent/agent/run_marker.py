@@ -237,6 +237,31 @@ def infer_terminal(
     return TerminalInference(INTERRUPTED, last_id, f"last entry {kind!r}")
 
 
+def run_steps(
+    entries: Sequence[Mapping[str, object]], run_id: str
+) -> int:
+    """How many tool-call rounds the run completed after its start marker."""
+    start: int | None = None
+    for index, entry in enumerate(entries):
+        marker = parse_marker(entry)
+        if (
+            marker is not None
+            and marker.run_id == run_id
+            and marker.state == RUNNING
+        ):
+            start = index
+    if start is None:
+        return 0
+    return sum(
+        1
+        for entry in entries[start + 1 :]
+        if entry.get("type") == "message"
+        and entry.get("role") == "assistant"
+        and isinstance(entry.get("toolCalls"), list)
+        and entry.get("toolCalls")
+    )
+
+
 def _is_user_turn(entry: Mapping[str, object]) -> bool:
     return entry.get("type") == "message" and entry.get("role") == "user"
 
@@ -263,4 +288,5 @@ __all__ = [
     "marker_entry",
     "markers_by_run",
     "parse_marker",
+    "run_steps",
 ]

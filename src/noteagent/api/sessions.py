@@ -11,6 +11,7 @@ from noteagent.agent.model import Message
 from noteagent.agent.projection import TranscriptItem, project
 from noteagent.agent.store import SessionStore, WaitStore, last_timestamp
 from noteagent.agent.wait import wait_payload
+from noteagent.sessions.recovery import interrupted_payload
 
 
 def session_payload(
@@ -23,11 +24,15 @@ def session_payload(
     """One session, with its transcript and the state derived from its entries."""
     snapshot = store.load(session_id)
     projection = project(snapshot.entries)
+    state: dict[str, object] = {"busy": busy}
+    interrupted = interrupted_payload(snapshot.entries)
+    if interrupted is not None:
+        state["interrupted"] = interrupted
     body: dict[str, object] = {
         "id": snapshot.id,
         "title": snapshot.title,
         "updatedAt": last_timestamp(snapshot.entries),
-        "state": {"busy": busy},
+        "state": state,
         "messages": [_transcript_item(item) for item in projection.transcript],
         "derived": {
             "sections": dict(projection.sections),

@@ -31,6 +31,7 @@ from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
+from noteagent.sessions.recovery import scan_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
@@ -97,6 +98,34 @@ def migrate_active_project_chats(deps: AppDeps) -> None:
         # A project the process cannot read is reported when a route needs it;
         # it must not keep the core from starting.
         logger.warning("old chats cannot be migrated at startup: %s", err)
+
+
+def recover_active_project_runs(deps: AppDeps) -> None:
+    """Mark the runs a previous process left running, before the socket answers.
+
+    The scan is best effort: a project that cannot be read is reported when a
+    route needs it, and a session that cannot be parsed is skipped. It never
+    starts a run; a person chooses resume or abandon later.
+    """
+    if deps.sessions is not None:
+        # A test that injected its own store owns its recovery, the same way it
+        # owns its migration; production reads the active project's sessions.
+        return
+    try:
+        layout = get_active_layout()
+        store = _default_store(deps, layout)
+    except ProjectNotConfiguredError:
+        return
+    except (OSError, ValueError) as err:
+        logger.warning(
+            "the sessions cannot be scanned for interrupted runs: %s",
+            err,
+        )
+        return
+    try:
+        scan_store(store, clock=deps.clock, mark=True)
+    except Exception:
+        logger.exception("the interrupted-run scan failed")
 
 
 def open_session_store(
