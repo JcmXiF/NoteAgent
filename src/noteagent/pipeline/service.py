@@ -14,8 +14,10 @@ from dataclasses import dataclass, replace
 from threading import Event, Lock
 from typing import Protocol, runtime_checkable
 
+from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
+from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
 from noteagent.pipeline.run import (
     MATERIAL_MODES,
     QUERY_MODES,
@@ -128,6 +130,7 @@ class PipelineService:
         registry: PipelineRegistry | None = None,
         lock: ProjectLock | None = None,
         spawn: Callable[[Callable[[], None]], None] | None = None,
+        keep_runs: int = DEFAULT_KEEP_RUNS,
     ) -> None:
         self._layout = layout
         self._clock = clock
@@ -138,10 +141,14 @@ class PipelineService:
             # the store, so a mistyped name is refused where it is wired.
             if stage.name not in STAGES:
                 raise ValueError(f"unknown pipeline stage: {stage.name!r}")
+        if keep_runs < 1:
+            raise ValueError("a pipeline keeps at least one run's staging")
+        self._keep_runs = keep_runs
         self._registry = registry or PipelineRegistry()
         self._lock = lock or ProjectLock(layout.project_lock, clock=clock)
         self._spawn = spawn or _spawn_thread
         self._store = PipelineRunStore(layout)
+        self._materials = Materials(layout, clock=clock)
         self._project_key = str(layout.root.resolve())
 
     def start(
@@ -206,6 +213,46 @@ class PipelineService:
 
     def active(self) -> list[PipelineRun]:
         return self._store.active()
+
+    def materials(self) -> Materials:
+        return self._materials
+
+    def materials_for_run(self, run_id: str) -> list[MaterialState]:
+        return self._materials.for_run(run_id)
+
+    def stage_material(
+        self,
+        capture: Capture,
+        *,
+        run_id: str,
+        captured_at: str = "",
+    ) -> MaterialState:
+        """Stage one capture as a material, serialized with every other write."""
+        with self._registry.writer(self._project_key):
+            state = self._materials.stage(
+                capture, run_id=run_id, captured_at=captured_at
+            )
+            # Staging is where an unpromoted material accumulates; pruning here
+            # keeps a long-lived core from growing without a restart.
+            self._materials.clean(self._store.list(), keep=self._keep_runs)
+            return state
+
+    def prepare(self) -> None:
+        """Bring the project's runs and materials up to date at startup."""
+        self.mark_interrupted()
+        try:
+            self._lock.acquire("startup-prepare")
+        except ProjectBusy:
+            # Another process owns the project; its staging is not ours to prune.
+            return
+        try:
+            with self._registry.writer(self._project_key):
+                self._materials.backfill()
+                self._materials.clean(
+                    self._store.list(), keep=self._keep_runs
+                )
+        finally:
+            self._lock.release("startup-prepare")
 
     def cancel(self, run_id: str) -> PipelineRun | None:
         """Ask the run to stop; a run that is already done is returned as it is."""

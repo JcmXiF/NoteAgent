@@ -29,21 +29,24 @@ def pipeline_service(deps: AppDeps) -> PipelineService:
         stages=deps.pipeline_stages,
         registry=deps.pipeline_registry,
         spawn=deps.pipeline_spawn,
+        keep_runs=deps.pipeline_keep_runs,
     )
 
 
-def mark_active_project_runs(deps: AppDeps) -> None:
-    """Close runs a previous core left open, before any route can read one."""
+def prepare_active_project(deps: AppDeps) -> None:
+    """Close runs a previous core left open and settle the material store.
+
+    A core with no project yet, or one whose pointer cannot be read, has nothing
+    to prepare; that is a normal start, not a failure.
+    """
     try:
         service = pipeline_service(deps)
     except (CodedHTTPException, OSError, ValueError):
-        # A core with no project yet, or one whose pointer cannot be read, has
-        # nothing to close; that is a normal start, not a failure.
         return
     try:
-        service.mark_interrupted()
+        service.prepare()
     except OSError:
         return
 
 
-__all__ = ["mark_active_project_runs", "pipeline_service"]
+__all__ = ["pipeline_service", "prepare_active_project"]

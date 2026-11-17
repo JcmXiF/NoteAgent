@@ -291,6 +291,16 @@
       "confirm": "Waiting for confirmation",
       "compile": "Writing pages",
       "done": "Done"
+    },
+    "materials": "Materials {{count}}",
+    "material": {
+      "staged": "Staged",
+      "framed": "Framed",
+      "planned": "Planned",
+      "promoted": "Promoted",
+      "compiled": "Compiled",
+      "changed": "Changed",
+      "dropped": "Dropped"
     }
   },
   "plan": {

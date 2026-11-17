@@ -321,6 +321,22 @@ def _write_one(
     return RawWriteItem(code, identity, url, "")
 
 
+def capture_kind(capture: Capture) -> str:
+    """Which original a capture carries: html, pdf, office or image."""
+    if _is_pdf_capture(capture):
+        return "pdf"
+    if _is_office_capture(capture):
+        return "office"
+    if _is_image_capture(capture):
+        return "image"
+    return "html"
+
+
+def raw_relative_for_capture(capture: Capture) -> str:
+    """The `raw/` path this capture will occupy once it is promoted."""
+    return _raw_relative_for_capture(capture, kind=capture_kind(capture))
+
+
 def _raw_relative_for_capture(capture: Capture, *, kind: str) -> str:
     url = capture.url.strip()
     if is_local_capture_url(url):

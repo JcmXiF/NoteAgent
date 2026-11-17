@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api/client";
 import {
   cancelPipelineRun,
+  fetchPipelineMaterials,
   fetchPipelineRuns,
   startPipelineRun,
+  type PipelineMaterial,
   type PipelineRun,
   type PipelineRunStatus,
 } from "@/lib/api/pipeline";
@@ -30,6 +32,7 @@ const ACTIVE: ReadonlySet<PipelineRunStatus> = new Set([
 export function PipelineRunPanel() {
   const { t } = useTranslation();
   const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [materials, setMaterials] = useState<PipelineMaterial[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -38,10 +41,15 @@ export function PipelineRunPanel() {
   const latest = runs[0] ?? null;
   const active = latest !== null && ACTIVE.has(latest.status);
 
-  const fetchRuns = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     try {
       const data = await fetchPipelineRuns();
       setRuns(data.runs);
+      const newest = data.runs[0];
+      const listed = newest
+        ? await fetchPipelineMaterials(newest.id)
+        : { materials: [] };
+      setMaterials(listed.materials);
       return true;
     } catch (err) {
       setError(errorMessage(err, t("pipeline.loadFailed")));
@@ -52,8 +60,8 @@ export function PipelineRunPanel() {
   }, [t]);
 
   const load = useCallback(async () => {
-    if (await fetchRuns()) setError(null);
-  }, [fetchRuns]);
+    if (await fetchAll()) setError(null);
+  }, [fetchAll]);
 
   useEffect(() => {
     void load();
@@ -72,11 +80,13 @@ export function PipelineRunPanel() {
       const run = await startPipelineRun({ intent });
       setRuns((current) => [run, ...current]);
       setDraft("");
+      void load();
     } catch (err) {
       setError(errorMessage(err, t("pipeline.startFailed")));
       // A refusal is usually another run holding the project; showing that run
-      // is the answer, and it starts the poll.
-      void fetchRuns();
+      // is the answer, and it starts the poll. The reason the start failed stays
+      // on screen, so this refresh does not clear the error.
+      void fetchAll();
     } finally {
       setBusy(false);
     }
@@ -143,6 +153,33 @@ export function PipelineRunPanel() {
           </p>
           {latest.error ? (
             <p className="text-[10px] text-destructive">{latest.error}</p>
+          ) : null}
+          {materials.length > 0 ? (
+            <div className="mt-1 border-t pt-1">
+              <p className="text-[10px] font-medium text-muted-foreground">
+                {t("pipeline.materials", { count: materials.length })}
+              </p>
+              <ul className="mt-0.5 flex flex-col gap-0.5">
+                {materials.slice(0, 6).map((item) => (
+                  <li
+                    key={item.material}
+                    className="flex items-center gap-1 text-[10px]"
+                  >
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      title={item.material}
+                    >
+                      {item.title}
+                    </span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {t(`pipeline.material.${item.state}`, {
+                        defaultValue: item.state,
+                      })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           {active ? (
             <Button

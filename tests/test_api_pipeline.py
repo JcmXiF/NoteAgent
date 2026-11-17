@@ -15,8 +15,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
+from noteagent.acquire.types import Capture
 from noteagent.pipeline.lock import ProjectLock
+from noteagent.pipeline.materials import Materials
 from noteagent.pipeline.run import PipelineRun
+from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.init import init_project
 
@@ -39,6 +42,23 @@ def _deps(*, stages=(), spawn=None) -> AppDeps:
         ids=SequentialIds(),
         pipeline_stages=tuple(stages),
         pipeline_spawn=spawn,
+    )
+
+
+def _capture() -> Capture:
+    html = (
+        "<html><head><title>熵</title></head><body><article>"
+        '<p data-na-block="b1">熵是不确定性的度量。</p>'
+        "</article></body></html>"
+    )
+    return Capture(
+        url="https://example.com/entropy",
+        title="熵",
+        markdown="熵是不确定性的度量。",
+        html=html,
+        capture_method="test",
+        fidelity="ok",
+        reasons=(),
     )
 
 
@@ -198,6 +218,88 @@ class PipelineStartTests(unittest.TestCase):
                 )
                 self.assertEqual(settled["status"], "cancelled")
                 self.assertEqual(calls, [], "a later stage ran after the cancel")
+
+    def test_a_run_lists_the_materials_it_collected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(create_app(_deps(spawn=lambda work: work())))
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "写一篇熵的笔记"}
+                )
+                self.assertEqual(started.status_code, 201, started.text)
+                run_id = started.json()["id"]
+
+                PipelineService(
+                    layout,
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    spawn=lambda work: work(),
+                ).stage_material(_capture(), run_id=run_id)
+                response = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                items = response.json()["materials"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["state"], "staged")
+                self.assertEqual(items[0]["title"], "熵")
+                self.assertTrue(items[0]["material"].startswith("raw/web/"))
+
+    def test_materials_for_an_unknown_run_are_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(create_app(_deps(spawn=lambda work: work())))
+                response = client.get(
+                    "/api/v1/pipeline/runs/does-not-exist/materials"
+                )
+
+                self.assertEqual(response.status_code, 404, response.text)
+                self.assertEqual(response.json()["code"], "pipeline.notFound")
+
+    def test_opening_a_project_backfills_its_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            raw = layout.raw / "web" / "entropy-a1.html"
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_text("<html></html>", encoding="utf-8")
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                client = TestClient(create_app(_deps(spawn=lambda work: work())))
+                response = client.post(
+                    "/api/projects/use", json={"name": "demo"}
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                state = Materials(layout, clock=FixedClock()).states()[
+                    "raw/web/entropy-a1.html"
+                ]
+                self.assertEqual(state.state, "promoted")
+
+    def test_startup_backfills_materials_from_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            raw = layout.raw / "web" / "entropy-a1.html"
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_text("<html></html>", encoding="utf-8")
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                with TestClient(create_app(_deps(spawn=lambda work: work()))):
+                    pass
+
+                state = Materials(layout, clock=FixedClock()).states()[
+                    "raw/web/entropy-a1.html"
+                ]
+
+            self.assertEqual(state.state, "promoted")
+            self.assertTrue(state.detail.get("backfilled"))
 
     def test_a_run_left_open_by_a_previous_core_is_marked_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

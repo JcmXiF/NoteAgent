@@ -121,6 +121,16 @@ class ProjectLayout:
         return self.pipeline / "runs"
 
     @property
+    def staging(self) -> Path:
+        """Captures waiting to be promoted, one folder per pipeline run."""
+        return self.meta / "staging"
+
+    @property
+    def materials_log(self) -> Path:
+        """Every material transition, append-only. The state is read from it."""
+        return self.meta / "materials.jsonl"
+
+    @property
     def project_lock(self) -> Path:
         """Who is writing this project; one core holds it at a time."""
         return self.meta / "project.lock"

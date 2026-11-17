@@ -38,6 +38,26 @@ export type PipelineStartInput = {
   materialMode?: PipelineMaterialMode;
 };
 
+export type PipelineMaterialState =
+  | "staged"
+  | "framed"
+  | "planned"
+  | "promoted"
+  | "compiled"
+  | "changed"
+  | "dropped";
+
+/** One original this run collected, and where it stands. */
+export type PipelineMaterial = {
+  material: string;
+  state: PipelineMaterialState;
+  runId: string;
+  updatedAt: string;
+  title: string;
+  kind: string;
+  fidelity: string;
+};
+
 /** Starts one run; the project refuses a second while the first is active. */
 export function startPipelineRun(input: PipelineStartInput): Promise<PipelineRun> {
   return postJson<PipelineRun>("/pipeline/runs", input);
@@ -45,6 +65,14 @@ export function startPipelineRun(input: PipelineStartInput): Promise<PipelineRun
 
 export function fetchPipelineRuns(): Promise<{ runs: PipelineRun[] }> {
   return getJson<{ runs: PipelineRun[] }>("/pipeline/runs");
+}
+
+export function fetchPipelineMaterials(
+  runId: string,
+): Promise<{ materials: PipelineMaterial[] }> {
+  return getJson<{ materials: PipelineMaterial[] }>(
+    `/pipeline/runs/${encodeURIComponent(runId)}/materials`,
+  );
 }
 
 export function cancelPipelineRun(id: string): Promise<PipelineRun> {

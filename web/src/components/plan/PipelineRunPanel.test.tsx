@@ -6,6 +6,7 @@ import i18n from "@/i18n";
 import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
 import {
   cancelPipelineRun,
+  fetchPipelineMaterials,
   fetchPipelineRuns,
   startPipelineRun,
   type PipelineRun,
@@ -13,6 +14,7 @@ import {
 
 vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineRuns: vi.fn(),
+  fetchPipelineMaterials: vi.fn(),
   startPipelineRun: vi.fn(),
   cancelPipelineRun: vi.fn(),
 }));
@@ -41,6 +43,7 @@ describe("PipelineRunPanel", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.mocked(fetchPipelineRuns).mockResolvedValue({ runs: [] });
+    vi.mocked(fetchPipelineMaterials).mockResolvedValue({ materials: [] });
   });
 
   afterEach(() => {
@@ -94,6 +97,28 @@ describe("PipelineRunPanel", () => {
     expect(vi.mocked(startPipelineRun).mock.calls[0][0].intent).toBe(
       "写一篇熵的笔记",
     );
+  });
+
+  it("lists the materials the run collected", async () => {
+    vi.mocked(fetchPipelineRuns).mockResolvedValue({ runs: [running] });
+    vi.mocked(fetchPipelineMaterials).mockResolvedValue({
+      materials: [
+        {
+          material: "raw/web/entropy-a1.html",
+          state: "staged",
+          runId: "pr-1",
+          updatedAt: "2026-11-10T09:00:01Z",
+          title: "熵",
+          kind: "html",
+          fidelity: "ok",
+        },
+      ],
+    });
+
+    await render();
+
+    expect(container.textContent).toContain("熵");
+    expect(container.textContent).toContain(i18n.t("pipeline.material.staged"));
   });
 
   it("cancels the active run", async () => {

@@ -291,6 +291,16 @@
       "confirm": "等确认",
       "compile": "写入",
       "done": "完成"
+    },
+    "materials": "材料 {{count}}",
+    "material": {
+      "staged": "暂存",
+      "framed": "已画框",
+      "planned": "已规划",
+      "promoted": "已转正",
+      "compiled": "已编译",
+      "changed": "有变更",
+      "dropped": "已丢弃"
     }
   },
   "plan": {

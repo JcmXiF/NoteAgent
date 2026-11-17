@@ -72,7 +72,7 @@ from noteagent.api.pages import (
     page_view_payload,
     project_search_payload,
 )
-from noteagent.api.pipeline import mark_active_project_runs, pipeline_service
+from noteagent.api.pipeline import pipeline_service, prepare_active_project
 from noteagent.pipeline.lock import ProjectBusy
 from noteagent.pipeline.run import run_to_dict
 from noteagent.pipeline.service import PipelineBusy
@@ -581,9 +581,9 @@ async def _app_lifespan(_app: FastAPI):
 
     # An upgrade brings the old chats across before the socket answers.
     migrate_active_project_chats(_app.state.deps)
-    # A run a previous core left open is not still running; say so before any
-    # route can hand it to a reader as if it were.
-    mark_active_project_runs(_app.state.deps)
+    # A run a previous core left open is not still running, and originals that
+    # predate the material log get a record; both before any route can read them.
+    prepare_active_project(_app.state.deps)
 
     stop = asyncio.Event()
 
@@ -603,6 +603,13 @@ async def _app_lifespan(_app: FastAPI):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+def _pipeline_not_found(run_id: str) -> CodedHTTPException:
+    """The one answer for a run id no route could resolve."""
+    return CodedHTTPException(
+        404, f"no pipeline run: {run_id}", code="pipeline.notFound"
+    )
 
 
 def create_app(deps: AppDeps | None = None) -> FastAPI:
@@ -671,12 +678,20 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def pipeline_run(run_id: str) -> dict[str, object]:
         run = pipeline_service(deps).get(run_id)
         if run is None:
-            raise CodedHTTPException(
-                404,
-                f"no pipeline run: {run_id}",
-                code="pipeline.notFound",
-            )
+            raise _pipeline_not_found(run_id)
         return run_to_dict(run)
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/materials")
+    def pipeline_run_materials(run_id: str) -> dict[str, object]:
+        """The materials this run collected, with their current state."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return {
+            "materials": [
+                state.payload() for state in service.materials_for_run(run_id)
+            ]
+        }
 
     @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
     def pipeline_cancel(run_id: str) -> dict[str, object]:
@@ -688,11 +703,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 409, str(err), code="pipeline.projectBusy"
             ) from err
         if run is None:
-            raise CodedHTTPException(
-                404,
-                f"no pipeline run: {run_id}",
-                code="pipeline.notFound",
-            )
+            raise _pipeline_not_found(run_id)
         return run_to_dict(run)
 
     @app.get("/api/v1/sessions")
@@ -940,9 +951,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/projects/use")
     def projects_use(body: ProjectUseBody) -> dict[str, object]:
         try:
-            return use_project(body.name)
+            result = use_project(body.name)
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
+        # An older project's originals predate the material log; give them their
+        # records when the project is opened, not only when the core starts.
+        prepare_active_project(deps)
+        return result
 
     @app.post("/api/projects")
     def projects_create(body: ProjectCreateBody) -> dict[str, object]:
@@ -959,9 +974,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/folders/open")
     def folders_open(body: FolderOpenBody) -> dict[str, object]:
         try:
-            return open_existing_folder(body.path, name=body.name, mode=body.mode)
+            result = open_existing_folder(body.path, name=body.name, mode=body.mode)
         except Exception as err:
             raise _project_http_error(err) from err
+        prepare_active_project(deps)
+        return result
 
     @app.post("/api/projects/{name}/init")
     def projects_init(name: str) -> dict[str, object]:
