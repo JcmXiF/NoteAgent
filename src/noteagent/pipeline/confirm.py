@@ -12,11 +12,12 @@ import hashlib
 import json
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from noteagent.ingest.auto_ingest import IngestResult
 from noteagent.ingest.clips import (
     GATE_ACTIONS,
+    ClipCollection,
     ClipStore,
     GateDecision,
     decision_to_dict,
@@ -76,6 +77,9 @@ class Confirmation:
     revision: int
     topic_map: TopicMap
     pages: tuple[PageDecision, ...]
+    #: The selections the pages to write are drawn from. Only these materials
+    #: need to be durable before the compile; everything else stays staged.
+    selections: tuple[ClipCollection, ...] = ()
     choices: tuple[GateDecision, ...] = ()
 
     @property
@@ -177,8 +181,42 @@ def derive_confirmation(
         revision=revision,
         topic_map=plan,
         pages=tuple(pages),
+        selections=_write_selections(plan, pages, store.collections),
         choices=tuple(choices),
     )
+
+
+def _write_selections(
+    plan: TopicMap,
+    pages: Sequence[PageDecision],
+    collections: Sequence[ClipCollection],
+) -> tuple[ClipCollection, ...]:
+    """The selections a write page cites, in plan order, once each.
+
+    The selected sections decide when they cite a collection; a page with no
+    such citations falls back to the collections the plan gave its node. This is
+    the same rule the compile uses to derive a page's locators.
+    """
+    by_id = {collection.id: collection for collection in collections}
+    wanted: list[str] = []
+    for page in pages:
+        if page.action != "write":
+            continue
+        node = plan.node_for_slug(page.slug)
+        if node is None:
+            continue
+        cited = [
+            section.collection_id
+            for section in node.outline
+            if (not page.section_ids or section.id in page.section_ids)
+            and section.collection_id
+        ]
+        if not cited:
+            cited = list(node.collection_ids)
+        for collection_id in cited:
+            if collection_id in by_id and collection_id not in wanted:
+                wanted.append(collection_id)
+    return tuple(by_id[collection_id] for collection_id in wanted)
 
 
 def confirmation_digest(store: ClipStore) -> str:
@@ -222,18 +260,30 @@ def confirmation_payload(confirmation: Confirmation) -> dict[str, object]:
     }
 
 
+def store_for_compile(
+    store: ClipStore, confirmation: Confirmation
+) -> ClipStore:
+    """The store a compile reads: only the selections behind pages being written.
+
+    Material a person did not ask to write stays in staging and is not required
+    to be durable.
+    """
+    return replace(store, collections=confirmation.selections)
+
+
 def default_compile(
     layout: ProjectLayout,
     confirmation: Confirmation,
     cancel: threading.Event | None = None,
 ) -> CompileResult:
     """Compile the confirmed pages through the existing write path."""
+    store = store_for_compile(load_clip_store(layout), confirmation)
     result = ingest_confirmed(
         layout,
         confirmed=[page.confirmed() for page in confirmation.pages],
         intent=confirmation.intent,
         topic_map=confirmation.topic_map,
-        store=load_clip_store(layout),
+        store=store,
         run_logger=RunLogger.for_layout(layout),
         cancel=cancel,
     )
@@ -332,4 +382,5 @@ __all__ = [
     "confirmation_payload",
     "default_compile",
     "derive_confirmation",
+    "store_for_compile",
 ]

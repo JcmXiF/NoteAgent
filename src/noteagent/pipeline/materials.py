@@ -14,22 +14,33 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from noteagent.acquire.adapters.image_source import ImageSourceAdapter
 from noteagent.acquire.adapters.office_source import OfficeSourceAdapter
-from noteagent.acquire.adapters.pdf_source import PdfSourceAdapter
+from noteagent.acquire.adapters.pdf_source import (
+    PdfSourceAdapter,
+    blocks_from_payload,
+    save_derived_blocks,
+)
 from noteagent.acquire.derive import blocks_payload
 from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.types import Capture
-from noteagent.acquire.write_raw import capture_kind, raw_relative_for_capture, render_capture_source
+from noteagent.acquire.write_raw import (
+    capture_kind,
+    raw_relative_for_capture,
+    render_capture_source,
+    resolve_raw_write_path,
+)
 from noteagent.agent.clock import Clock, iso_timestamp
+from noteagent.ingest.clips import ClipCollection, block_from_dict
 from noteagent.io.atomic import write_bytes_atomic, write_text_atomic
 from noteagent.pipeline.run import PipelineRun, is_run_id
 from noteagent.project.identity import source_identity
@@ -64,6 +75,15 @@ _KIND_FROM_RAW = {
     "media": "image",
 }
 
+#: Kinds whose blocks raw/ cannot enumerate without a derived sidecar.
+_SIDECAR_KINDS = frozenset({"pdf", "office", "image"})
+
+class PromotionError(RuntimeError):
+    """A material cannot be made durable: nothing staged and nothing in raw/."""
+
+
+logger = logging.getLogger(__name__)
+
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
 
@@ -84,6 +104,26 @@ def preview_text(text: str, limit: int = PREVIEW_CHARS) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1] + "…"
+
+
+def hydrate_collection(
+    collection: ClipCollection,
+    blocks: Sequence[Mapping[str, object]],
+) -> ClipCollection | None:
+    """A selection carrying the staged texts of the blocks it names.
+
+    ``None`` when none of its block ids are in the staged blocks: the selection
+    is about text this staging no longer has.
+    """
+    by_id = {
+        str(block.get("id")): block for block in blocks if block.get("id")
+    }
+    hydrated = tuple(
+        block_from_dict(by_id[block_id])
+        for block_id in collection.block_ids
+        if block_id in by_id
+    )
+    return replace(collection, blocks=hydrated) if hydrated else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +389,12 @@ class StagingArea:
         """Where one material's full block texts are."""
         return self._material_directory(material, run_id=run_id) / "blocks.json"
 
+    def source_path(self, material: str, *, run_id: str) -> Path | None:
+        """The staged original, or ``None`` when this run no longer has one."""
+        directory = self._material_directory(material, run_id=run_id)
+        found = sorted(directory.glob("source.*"))
+        return found[0] if found else None
+
     def _material_directory(self, material: str, *, run_id: str) -> Path:
         if not is_run_id(run_id):
             raise ValueError(f"not a pipeline run id: {run_id!r}")
@@ -479,6 +525,72 @@ class Materials:
             return None
         return [dict(item) for item in raw if isinstance(item, Mapping)]
 
+    def promote(self, material: str, *, run_id: str) -> MaterialState | None:
+        """Make one staged original durable under raw/, once.
+
+        A material already settled in the log and present under raw/ is left
+        alone, so promoting the same material twice writes neither a second file
+        nor a second row.
+        """
+        key = (material or "").replace("\\", "/").strip()
+        raw_path = _raw_path_for(self._layout, key)
+        state = self._log.state_for(key)
+        if raw_path.is_file() and state is not None and state.state in _SETTLED:
+            return state
+        staged = self._staging.source_path(key, run_id=run_id)
+        if staged is None or not staged.is_file():
+            if raw_path.is_file():
+                return self.mark(
+                    key,
+                    "promoted",
+                    run_id=run_id,
+                    detail={"existing": True},
+                )
+            raise PromotionError(f"the staged source is gone: {key}")
+        data = staged.read_bytes()
+        manifest = self.manifest(key, run_id=run_id) or {}
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        write_bytes_atomic(raw_path, data)
+        self._write_derived(key, run_id=run_id)
+        return self.mark(
+            key,
+            "promoted",
+            run_id=run_id,
+            detail={
+                "digest": hashlib.sha256(data).hexdigest(),
+                "title": str(manifest.get("title") or _stem(key)),
+                "kind": str(manifest.get("kind") or ""),
+            },
+        )
+
+    def _write_derived(self, material: str, *, run_id: str) -> None:
+        """Keep the block cache for a binary original, which raw/ cannot enumerate."""
+        manifest = self.manifest(material, run_id=run_id)
+        blocks = self.blocks(material, run_id=run_id)
+        if manifest is None or blocks is None:
+            return
+        kind = str(manifest.get("kind") or "")
+        if kind not in _SIDECAR_KINDS:
+            return
+        derived = blocks_from_payload({"blocks": blocks})
+        if derived is None:
+            return
+        try:
+            save_derived_blocks(
+                self._layout,
+                material,
+                derived,
+                source_url=str(manifest.get("sourceUrl") or ""),
+                captured_at=str(manifest.get("capturedAt") or ""),
+                kind=kind,
+            )
+        except (OSError, ValueError):
+            # The original is what matters; the cache can be derived again, but
+            # the failure is worth knowing about.
+            logger.warning(
+                "a derived block cache could not be written: %s", material
+            )
+
     def mark(
         self,
         material: str,
@@ -607,6 +719,13 @@ def _mtime_iso(path: Path) -> str:
     return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _raw_path_for(layout: ProjectLayout, material: str) -> Path:
+    try:
+        return resolve_raw_write_path(layout, material)
+    except ValueError as err:
+        raise PromotionError(str(err)) from err
+
+
 def _stem(material: str) -> str:
     name = material.replace("\\", "/").rsplit("/", 1)[-1]
     return name.rsplit(".", 1)[0] if "." in name else name
@@ -620,7 +739,9 @@ __all__ = [
     "MaterialTransition",
     "Materials",
     "PREVIEW_CHARS",
+    "PromotionError",
     "StagedMaterial",
     "StagingArea",
+    "hydrate_collection",
     "preview_text",
 ]

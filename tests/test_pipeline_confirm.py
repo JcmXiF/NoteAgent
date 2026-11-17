@@ -8,7 +8,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from noteagent.ingest.auto_ingest import IngestResult
-from noteagent.ingest.clips import ClipCollection, ClipStore, GateDecision
+from noteagent.ingest.clips import (
+    ClipCollection,
+    ClipStore,
+    GateDecision,
+    save_clip_store,
+)
 from noteagent.ingest.parse_file_blocks import ParseFileBlocksResult
 from noteagent.ingest.write_file_blocks import (
     WriteFileBlocksResult,
@@ -24,6 +29,7 @@ from noteagent.pipeline.confirm import (
     confirmation_digest,
     confirmation_payload,
     derive_confirmation,
+    store_for_compile,
 )
 from noteagent.project.init import init_project
 
@@ -188,6 +194,78 @@ class ConfirmationTests(unittest.TestCase):
             GateDecision("entropy", "write", ("s2",)), confirmation.choices
         )
 
+    def test_only_the_write_pages_selections_need_durable_material(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            confirmation = _confirm(tmp)
+
+        self.assertEqual(
+            [collection.id for collection in confirmation.selections],
+            ["frame-1"],
+        )
+
+    def test_an_overridden_write_page_brings_its_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            confirmation = _confirm(
+                tmp,
+                overrides=[
+                    {
+                        "slug": "measurement",
+                        "action": "write",
+                        "sectionIds": [],
+                    }
+                ],
+            )
+
+        self.assertEqual(
+            [collection.id for collection in confirmation.selections],
+            ["frame-1", "frame-2"],
+        )
+
+    def test_a_page_cites_only_the_collections_of_its_chosen_sections(self) -> None:
+        plan = {
+            "intent": INTENT,
+            "candidates": [
+                {
+                    "slug": "entropy",
+                    "title": "熵",
+                    "coverage": "write",
+                    "wikiPath": "wiki/entropy.md",
+                    "collectionIds": ["frame-1", "frame-2"],
+                    "outline": [
+                        {
+                            "id": "s1",
+                            "title": "定义",
+                            "collectionId": "frame-1",
+                            "blockIds": ["b1"],
+                        },
+                        {
+                            "id": "s2",
+                            "title": "测量",
+                            "collectionId": "frame-2",
+                            "blockIds": ["b3"],
+                        },
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            confirmation = _confirm(
+                tmp,
+                plan=plan,
+                overrides=[
+                    {
+                        "slug": "entropy",
+                        "action": "write",
+                        "sectionIds": ["s2"],
+                    }
+                ],
+            )
+
+        self.assertEqual(
+            [collection.id for collection in confirmation.selections],
+            ["frame-2"],
+        )
+
     def test_a_write_page_without_a_path_gets_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             confirmation = _confirm(tmp, plan=_plan(entropy_path=""))
@@ -267,13 +345,13 @@ class ConfirmationTests(unittest.TestCase):
         outcome = compile_outcome(
             confirmation,
             CompileResult(
-                written=("wiki/entropy.md",),
+                written=("wiki/entropy.md", "wiki/log.md"),
                 skipped=(PageProblem("wiki/other.md", "unsafe path"),),
             ),
         )
 
         self.assertEqual(outcome["planRevision"], 1)
-        self.assertEqual(outcome["written"], ["wiki/entropy.md"])
+        self.assertEqual(outcome["written"], ["wiki/entropy.md", "wiki/log.md"])
         self.assertEqual(
             outcome["skipped"],
             [
@@ -283,6 +361,33 @@ class ConfirmationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(outcome["failed"], [])
+
+    def test_the_compile_store_has_only_the_write_pages_selections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            store = ClipStore(
+                intent=INTENT,
+                collections=(
+                    _collection(),
+                    _collection("frame-2", "raw/web/measurement.html"),
+                ),
+                topic_map=_plan(),
+            )
+            save_clip_store(layout, store)
+            confirmation = derive_confirmation(
+                layout,
+                run_id="pr-1",
+                intent=INTENT,
+                revision=1,
+                store=store,
+            )
+
+            handed = store_for_compile(store, confirmation)
+
+        self.assertEqual(
+            [collection.id for collection in handed.collections],
+            ["frame-1"],
+        )
 
     def test_the_compile_outcome_is_written_skipped_and_failed(self) -> None:
         result = IngestResult(

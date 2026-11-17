@@ -17,13 +17,12 @@ from noteagent.ingest.clips import (
     MAX_INTENT_CHARS,
     ClipCollection,
     ClipStore,
-    block_from_dict,
     load_clip_store,
     save_clip_store,
 )
 from noteagent.ingest.topic_map import TopicMap, carry_over_choices, map_clips
 from noteagent.pipeline.confirm import confirmation_digest
-from noteagent.pipeline.materials import Materials
+from noteagent.pipeline.materials import Materials, hydrate_collection
 from noteagent.pipeline.run import PipelineRun
 from noteagent.pipeline.stage import PlanSummary, StageContext
 from noteagent.project.layout import ProjectLayout
@@ -126,20 +125,11 @@ class Planning:
                 raise PlanError(
                     f"the staged blocks for {state.material} are gone"
                 )
-            by_id = {
-                str(block.get("id")): block
-                for block in blocks
-                if block.get("id")
-            }
             frames = 0
             for collection in material_collections:
-                hydrated = tuple(
-                    block_from_dict(by_id[block_id])
-                    for block_id in collection.block_ids
-                    if block_id in by_id
-                )
-                if hydrated:
-                    chosen.append(replace(collection, blocks=hydrated))
+                hydrated = hydrate_collection(collection, blocks)
+                if hydrated is not None:
+                    chosen.append(hydrated)
                     frames += 1
             if frames:
                 used.append((state.material, frames))

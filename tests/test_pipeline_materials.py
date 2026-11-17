@@ -9,16 +9,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_fakes import FixedClock
+from noteagent.acquire.adapters.pdf_source import load_derived_payload
 from noteagent.acquire.types import Capture
 from noteagent.pipeline.materials import (
     DEFAULT_KEEP_RUNS,
     MaterialLog,
     MaterialTransition,
     Materials,
+    PromotionError,
     preview_text,
 )
 from noteagent.pipeline.run import PipelineRun
 from noteagent.project.init import init_project
+
+try:
+    from pdf_fixtures import HELLO_PDF
+except ImportError:  # python -m unittest tests.test_pipeline_materials
+    from tests.pdf_fixtures import HELLO_PDF
 
 _LONG = "熵是不确定性的度量，它衡量一个随机变量的平均信息量。"
 
@@ -45,6 +52,22 @@ def _capture(**overrides: object) -> Capture:
     }
     values.update(overrides)
     return Capture(**values)  # type: ignore[arg-type]
+
+
+def _pdf_capture() -> Capture:
+    return Capture(
+        url="https://example.com/paper.pdf",
+        title="Paper",
+        markdown="[p1] Hello PDF",
+        html="",
+        capture_method="pdf-http",
+        fidelity="ok",
+        reasons=(),
+        kind="pdf",
+        pdf_bytes=HELLO_PDF,
+        page_count=1,
+        char_count=9,
+    )
 
 
 def _run(run_id: str, hour: int = 9) -> PipelineRun:
@@ -233,6 +256,100 @@ class BackfillTests(unittest.TestCase):
 
             self.assertEqual(materials.backfill(), 1)
             self.assertEqual(materials.states()[state.material].state, "promoted")
+
+
+class PromotionTests(unittest.TestCase):
+    def test_a_staged_original_is_copied_under_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            state = materials.stage(_capture(), run_id="pr-1")
+            staged = (
+                layout.staging
+                / "pr-1"
+                / state.material.replace("/", "__")
+                / "source.html"
+            )
+            raw = layout.root / state.material
+            self.assertFalse(raw.exists())
+
+            promoted = materials.promote(state.material, run_id="pr-1")
+
+            self.assertEqual(promoted.state, "promoted")
+            self.assertEqual(raw.read_bytes(), staged.read_bytes())
+            promoted_rows = [
+                item
+                for item in MaterialLog(layout.materials_log).transitions()
+                if item.state == "promoted"
+            ]
+            self.assertEqual(len(promoted_rows), 1)
+            self.assertEqual(promoted_rows[0].run_id, "pr-1")
+
+    def test_promoting_twice_writes_one_file_and_one_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            state = materials.stage(_capture(), run_id="pr-1")
+
+            materials.promote(state.material, run_id="pr-1")
+            materials.promote(state.material, run_id="pr-1")
+
+            raw_files = [path for path in layout.raw.rglob("*") if path.is_file()]
+            self.assertEqual([path.name for path in raw_files], [Path(state.material).name])
+            promoted_rows = [
+                item
+                for item in MaterialLog(layout.materials_log).transitions()
+                if item.state == "promoted"
+            ]
+            self.assertEqual(len(promoted_rows), 1)
+
+    def test_a_binary_original_keeps_its_block_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            state = materials.stage(_pdf_capture(), run_id="pr-1")
+
+            materials.promote(state.material, run_id="pr-1")
+
+            self.assertEqual((layout.root / state.material).read_bytes(), HELLO_PDF)
+            sidecar = load_derived_payload(layout, state.material)
+            self.assertIsNotNone(sidecar)
+            self.assertEqual(sidecar["blocks"][0]["id"], "p1")
+            self.assertIn("Hello PDF", sidecar["blocks"][0]["text"])
+
+    def test_a_material_with_no_staged_source_and_no_raw_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            state = materials.stage(_capture(), run_id="pr-1")
+            directory = layout.staging / "pr-1" / state.material.replace("/", "__")
+            for path in directory.glob("source.*"):
+                path.unlink()
+
+            with self.assertRaises(PromotionError):
+                materials.promote(state.material, run_id="pr-1")
+
+    def test_unused_material_stays_staged_until_retention_drops_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            used = materials.stage(_capture(), run_id="pr-1")
+            unused = materials.stage(
+                _capture(url="https://example.com/other"), run_id="pr-1"
+            )
+
+            materials.promote(used.material, run_id="pr-1")
+
+            states = materials.states()
+            self.assertEqual(states[used.material].state, "promoted")
+            self.assertEqual(states[unused.material].state, "staged")
+            self.assertTrue((layout.staging / "pr-1").is_dir())
+
+            materials.clean([_run("pr-1")], keep=0)
+
+            states = materials.states()
+            self.assertEqual(states[used.material].state, "promoted")
+            self.assertEqual(states[unused.material].state, "dropped")
 
 
 class RetentionTests(unittest.TestCase):

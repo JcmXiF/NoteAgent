@@ -14,12 +14,22 @@ from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.ingest.clips import load_clip_store
+from noteagent.ingest.compile_cache import read_records
+from noteagent.ingest.confirmed import ingest_confirmed
+from noteagent.ingest.frontmatter import parse_inline_list, parse_page
 from noteagent.ingest.topic_map import map_clips
 from noteagent.pipeline.acquire import AcquireStage
-from noteagent.pipeline.confirm import CompileResult
+from noteagent.pipeline.confirm import (
+    CompileResult,
+    compile_result_from,
+    store_for_compile,
+)
 from noteagent.pipeline.framing import FrameStage
+from noteagent.pipeline.materials import MaterialLog
 from noteagent.pipeline.planning import PlanStage
 from noteagent.project.init import init_project
+from noteagent.project.layout import ProjectLayout
 
 try:
     from fastapi.testclient import TestClient
@@ -146,6 +156,46 @@ def _scripted_compile(
     return compile, calls
 
 
+def _file_block(page) -> str:
+    return (
+        f"---FILE: {page.wiki_path}---\n"
+        "---\n"
+        "type: concept\n"
+        f"title: {page.name}\n"
+        "created: 2026-11-18\n"
+        "updated: 2026-11-18\n"
+        "tags: []\n"
+        "related: []\n"
+        'sources: []\n'
+        "---\n\n"
+        f"# {page.name}\n\n熵的定义。\n"
+        "---END FILE---\n"
+    )
+
+
+def _writing_compile():
+    """The real write path, with the pages handed over instead of generated."""
+    calls = []
+
+    def compile(layout, confirmation, cancel):
+        calls.append(confirmation)
+        store = store_for_compile(load_clip_store(layout), confirmation)
+        result = ingest_confirmed(
+            layout,
+            confirmed=[page.confirmed() for page in confirmation.pages],
+            intent=confirmation.intent,
+            topic_map=confirmation.topic_map,
+            store=store,
+            generation_text="\n".join(
+                _file_block(page) for page in confirmation.writes
+            ),
+            cancel=cancel,
+        )
+        return compile_result_from(result)
+
+    return compile, calls
+
+
 def _client(tmp: str, *, stages, planner, compile, spawn=None):
     repo = Path(tmp)
     init_project(repo / "projects" / "demo")
@@ -268,6 +318,109 @@ class PipelineConfirmationTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(clips["choices"], [])
+
+    def test_approval_promotes_only_the_write_pages_material(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan, _plan_calls = _three_page_plan()
+            compile, _compile_calls = _scripted_compile()
+            stage = AcquireStage(
+                search=lambda query: _cards(2),
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", Path(tmp)):
+                client = _client(
+                    tmp,
+                    stages=[stage, FrameStage(), PlanStage()],
+                    planner=plan,
+                    compile=compile,
+                )
+                run_id, _run = _awaiting(client)
+                clips = client.get("/api/projects/demo/clips").json()
+                collection_id = clips["topicMap"]["candidates"][0][
+                    "collectionIds"
+                ][0]
+                source = next(
+                    item["sourceKey"]
+                    for item in clips["collections"]
+                    if item["id"] == collection_id
+                )
+                approved = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/approve",
+                    json={"planRevision": 1},
+                )
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+
+            self.assertEqual(approved.status_code, 202, approved.text)
+            states = {
+                item["material"]: item["state"] for item in materials
+            }
+            self.assertEqual(len(states), 2)
+            self.assertEqual(states[source], "promoted")
+            unused = [name for name in states if name != source]
+            # Planned by the run, never asked to be written: still only staged.
+            self.assertEqual(states[unused[0]], "planned")
+            layout = ProjectLayout(Path(tmp) / "projects" / "demo")
+            self.assertTrue((layout.root / source).is_file())
+            raw_files = [
+                path for path in layout.raw.rglob("*") if path.is_file()
+            ]
+            self.assertEqual(raw_files, [layout.root / source])
+            promoted = [
+                item
+                for item in MaterialLog(layout.materials_log).transitions()
+                if item.state == "promoted"
+            ]
+            self.assertEqual(len(promoted), 1)
+            self.assertEqual(promoted[0].run_id, run_id)
+            # The material nobody asked to write is still in staging.
+            self.assertTrue((layout.staging / run_id).is_dir())
+            self.assertTrue(
+                all(
+                    item["sourceKey"].startswith("raw/")
+                    for item in clips["collections"]
+                )
+            )
+
+    def test_a_real_compile_writes_the_page_from_the_promoted_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan, _plan_calls = _three_page_plan()
+            compile, compile_calls = _writing_compile()
+            stage = AcquireStage(
+                search=lambda query: _cards(1),
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", Path(tmp)):
+                client = _client(
+                    tmp,
+                    stages=[stage, FrameStage(), PlanStage()],
+                    planner=plan,
+                    compile=compile,
+                )
+                run_id, _run = _awaiting(client)
+                approved = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/approve",
+                    json={"planRevision": 1},
+                )
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+
+            self.assertEqual(approved.status_code, 202, approved.text)
+            self.assertEqual(len(compile_calls), 1)
+            source = compile_calls[0].selections[0].source_key
+            layout = ProjectLayout(Path(tmp) / "projects" / "demo")
+            page_path = layout.wiki / "entropy.md"
+            self.assertTrue(page_path.is_file())
+            sources = parse_inline_list(
+                parse_page(page_path.read_text(encoding="utf-8")).fields.get(
+                    "sources", "[]"
+                )
+            )
+            self.assertIn(f"{source}#b1", sources)
+            self.assertIn("wiki/entropy.md", run["result"]["written"])
+            records = read_records(layout)
+            self.assertIn(source, records)
+            self.assertIn("wiki/entropy.md", records[source].wrote)
 
     def test_an_override_changes_the_action_and_the_sections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

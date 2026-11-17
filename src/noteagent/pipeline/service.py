@@ -16,7 +16,12 @@ from typing import TypeVar
 
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
-from noteagent.ingest.clips import load_clip_store, save_clip_store
+from noteagent.ingest.clips import (
+    ClipCollection,
+    ClipStore,
+    load_clip_store,
+    save_clip_store,
+)
 from noteagent.pipeline.captures import CaptureInbox, LoginWall
 from noteagent.pipeline.confirm import (
     CompileFn,
@@ -31,7 +36,12 @@ from noteagent.pipeline.confirm import (
 from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
-from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
+from noteagent.pipeline.materials import (
+    DEFAULT_KEEP_RUNS,
+    MaterialState,
+    Materials,
+    hydrate_collection,
+)
 from noteagent.pipeline.planning import PlanError, PlanFn, Planning
 from noteagent.pipeline.run import (
     MATERIAL_MODES,
@@ -428,16 +438,46 @@ class PipelineService:
                 "the plan changed since this revision; review it again"
             )
         try:
+            hydrated = self._store_with_blocks(run, clip_store)
             return derive_confirmation(
                 self._layout,
                 run_id=run.id,
                 intent=run.intent,
                 revision=run.plan_revision,
-                store=clip_store,
+                store=hydrated,
                 overrides=overrides,
             )
         except PlanMissing as err:
             raise PipelineConflict(str(err)) from err
+
+    def _store_with_blocks(self, run: PipelineRun, store: ClipStore) -> ClipStore:
+        """The store as this run sees it: its selections carry their block texts.
+
+        Framing stores block ids, not texts; a confirmation that needs the text
+        reads it from the run's staging, where the capture put it. The saved
+        selection keeps only ids, as the material identity says it should.
+        """
+        run_materials = {
+            state.material for state in self._materials.for_run(run.id)
+        }
+        collections: list[ClipCollection] = []
+        for collection in store.collections:
+            blocks = self._materials.blocks(
+                collection.source_key, run_id=run.id
+            )
+            if blocks is None:
+                if collection.source_key in run_materials:
+                    raise PlanMissing(
+                        "the staged blocks for "
+                        f"{collection.source_key} are gone"
+                    )
+                collections.append(collection)
+                continue
+            hydrated = hydrate_collection(collection, blocks)
+            collections.append(
+                collection if hydrated is None else hydrated
+            )
+        return replace(store, collections=tuple(collections))
 
     def write_clips(self, work: Callable[[], _T]) -> _T:
         """Run a selection write under the project's lock and single writer."""
@@ -650,6 +690,9 @@ class PipelineService:
     ) -> None:
         current = run
         try:
+            # Only the pages being written need durable originals; everything
+            # else this run collected stays in staging for retention.
+            self._promote_for(current, confirmation)
             result = self._compile(self._layout, confirmation, cancel)
             self._save(
                 replace(
@@ -666,6 +709,21 @@ class PipelineService:
             self._save(replace(current, status="failed", error=str(err)[:500]))
         finally:
             self._release_run(current)
+
+    def _promote_for(
+        self, run: PipelineRun, confirmation: Confirmation
+    ) -> None:
+        """Make the write pages' originals durable; unused material stays staged."""
+        sources = {
+            collection.source_key.replace("\\", "/").strip()
+            for collection in confirmation.selections
+        }
+        with self._registry.writer(self._project_key):
+            for source in sorted(sources):
+                if not source.startswith("raw/"):
+                    # A preview key belongs to the manual path's storage step.
+                    continue
+                self._materials.promote(source, run_id=run.id)
 
     def _replan_work(self, run: PipelineRun, cancel: Event) -> None:
         current = run
