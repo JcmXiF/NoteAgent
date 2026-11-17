@@ -39,15 +39,6 @@ _NO_RETRY_CODES = frozenset(
     }
 )
 
-#: A 429 that is about the account's spend, not a transient rate.
-_SPEND_WORDS = (
-    "billing",
-    "credit balance",
-    "exceeded your current quota",
-    "insufficient_quota",
-    "spend limit",
-)
-
 _CONTENT_EVENTS = (
     ModelTextDelta,
     ModelThinkingDelta,
@@ -100,18 +91,34 @@ class RetryingModel:
                 delay,
                 error.code,
             )
+            if request.cancel is not None and request.cancel.is_set():
+                yield ModelErrorEvent(
+                    "cancelled",
+                    "the run was cancelled",
+                    retryable=True,
+                )
+                return
+            if request.pause is not None and request.pause.is_set():
+                return
             self._sleep(delay)
+            if request.cancel is not None and request.cancel.is_set():
+                yield ModelErrorEvent(
+                    "cancelled",
+                    "the run was cancelled",
+                    retryable=True,
+                )
+                return
+            if request.pause is not None and request.pause.is_set():
+                return
 
     @staticmethod
     def _retryable(error: ModelErrorEvent, emitted: bool) -> bool:
         if emitted or not error.retryable:
             return False
-        if error.code in _NO_RETRY_CODES:
-            return False
-        message = error.message.lower()
-        return not any(word in message for word in _SPEND_WORDS)
+        return error.code not in _NO_RETRY_CODES
 
     def _delay(self, error: ModelErrorEvent, attempt: int) -> float:
         if error.retry_after_s is not None and error.retry_after_s > 0:
-            return min(self._max_delay, error.retry_after_s)
+            # The provider's own instruction wins over the local backoff cap.
+            return error.retry_after_s
         return min(self._max_delay, self._base_delay * (2**attempt))

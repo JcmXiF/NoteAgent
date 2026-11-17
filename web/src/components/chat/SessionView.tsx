@@ -282,7 +282,9 @@ export function SessionView({
                 {turn.cards?.length ? (
                   <SessionCards observations={turn.cards} onOpen={onOpenLink} />
                 ) : null}
-                {!turn.isStep && turn.stopReason !== "aborted" ? (
+                {!turn.isStep &&
+                turn.stopReason !== "aborted" &&
+                turn.stopReason !== "incomplete" ? (
                   <SaveRemark
                     answer={turn.content}
                     question={questionBefore(session.messages, index)}
@@ -294,6 +296,11 @@ export function SessionView({
             {turn.stopReason === "aborted" ? (
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {t("chat.aborted")}
+              </p>
+            ) : null}
+            {turn.stopReason === "incomplete" ? (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {t("chat.incomplete")}
               </p>
             ) : null}
           </article>

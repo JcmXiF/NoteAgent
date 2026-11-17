@@ -465,7 +465,7 @@ class SessionQueryBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=100_000)
 
 
-class ResumeRunBody(BaseModel):
+class RunIdBody(BaseModel):
     """Which interrupted run the reader wants to resume or abandon."""
 
     runId: str = Field(..., min_length=1, max_length=200)
@@ -796,28 +796,42 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/v1/sessions/{session_id}/resume")
     def kernel_session_resume(
-        session_id: str, body: ResumeRunBody
+        session_id: str, body: RunIdBody
     ) -> StreamingResponse:
         """Continue the run a crash left interrupted, from its last turn."""
         layout = active_layout(deps)
         store = open_session_store(deps, session_id, layout=layout)
-        if session_busy(deps, session_id):
+        claim = None
+        if deps.runtime is None:
+            # Claim before the response is sent: two resumes, or a resume racing
+            # an abandon, then see one busy answer rather than an SSE error.
+            try:
+                claim = deps.runs.claim(session_id)
+            except BusyError as err:
+                raise _session_busy_refusal(session_id) from err
+        elif session_busy(deps, session_id):
             raise _session_busy_refusal(session_id)
-        if interrupted_run(store, session_id, body.runId) is None:
-            raise CodedHTTPException(
-                409,
-                f"session {session_id} is not interrupted on run {body.runId}",
-                code="session.notInterrupted",
-                params={"id": session_id, "run": body.runId},
-            )
         try:
+            if interrupted_run(store, session_id, body.runId) is None:
+                raise CodedHTTPException(
+                    409,
+                    f"session {session_id} is not interrupted on run {body.runId}",
+                    code="session.notInterrupted",
+                    params={"id": session_id, "run": body.runId},
+                )
             runtime = session_runtime(deps, store, layout)
         except LlmConfigError as err:
+            if claim is not None:
+                deps.runs.release(session_id)
             raise http_error(err, 503) from err
+        except Exception:
+            if claim is not None:
+                deps.runs.release(session_id)
+            raise
         return StreamingResponse(
             iter_run_sse(
                 runtime,
-                RunResume(session_id, body.runId),
+                RunResume(session_id, body.runId, claim=claim),
                 store=store,
                 waits=session_waits(deps, store),
             ),
@@ -827,18 +841,33 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+            # A stream that never starts still releases the run slot the route
+            # took; the kernel already releases it when the run ends.
+            background=BackgroundTask(deps.runs.release, session_id),
         )
 
     @app.post("/api/v1/sessions/{session_id}/abandon")
     def kernel_session_abandon(
-        session_id: str, body: ResumeRunBody
+        session_id: str, body: RunIdBody
     ) -> dict[str, object]:
         """Stop waiting on an interrupted run; the transcript is left as it is."""
         layout = active_layout(deps)
         store = open_session_store(deps, session_id, layout=layout)
-        marker, changed = abandon_run(
-            store, session_id, body.runId, clock=deps.clock
-        )
+        claim = None
+        if deps.runtime is None:
+            try:
+                claim = deps.runs.claim(session_id)
+            except BusyError as err:
+                raise _session_busy_refusal(session_id) from err
+        elif session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        try:
+            marker, changed = abandon_run(
+                store, session_id, body.runId, clock=deps.clock
+            )
+        finally:
+            if claim is not None:
+                deps.runs.release(session_id)
         if marker is None:
             raise CodedHTTPException(
                 409,

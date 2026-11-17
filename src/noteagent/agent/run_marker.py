@@ -215,6 +215,8 @@ def infer_terminal(
     if kind == "message" and last.get("role") == "assistant":
         if _text(last.get("stopReason")) == "aborted":
             return TerminalInference(CANCELLED, last_id, "aborted answer")
+        if _text(last.get("stopReason")) == "incomplete":
+            return TerminalInference(FAILED, last_id, "incomplete answer")
         calls = last.get("toolCalls")
         if isinstance(calls, list) and calls:
             return TerminalInference(
@@ -245,15 +247,7 @@ def run_steps(
     entries: Sequence[Mapping[str, object]], run_id: str
 ) -> int:
     """How many tool-call rounds the run completed after its start marker."""
-    start: int | None = None
-    for index, entry in enumerate(entries):
-        marker = parse_marker(entry)
-        if (
-            marker is not None
-            and marker.run_id == run_id
-            and marker.state == RUNNING
-        ):
-            start = index
+    start = _run_start(entries, run_id)
     if start is None:
         return 0
     return sum(
@@ -270,16 +264,7 @@ def missing_tool_calls(
     entries: Sequence[Mapping[str, object]], run_id: str
 ) -> tuple[tuple[str, str], ...]:
     """The calls a run started but never got a result for, in call order."""
-    start: int | None = None
-    for index, entry in enumerate(entries):
-        marker = parse_marker(entry)
-        if (
-            marker is not None
-            and marker.run_id == run_id
-            and marker.state == RUNNING
-        ):
-            start = index
-    scope = entries[start + 1 :] if start is not None else entries
+    scope = _run_scope(entries, run_id)
     answered = {
         entry.get("toolCallId")
         for entry in scope
@@ -312,6 +297,54 @@ def missing_tool_calls(
     return tuple(missing)
 
 
+def interrupted_marker(
+    entries: Sequence[Mapping[str, object]], run_id: str
+) -> RunMarker | None:
+    """The latest marker when it is this run's interruption, or ``None``."""
+    marker = last_marker(entries)
+    if (
+        marker is None
+        or marker.state != INTERRUPTED
+        or marker.run_id != run_id
+    ):
+        return None
+    return marker
+
+
+def last_content_entry_id(
+    entries: Sequence[Mapping[str, object]],
+) -> str:
+    """The id of the last entry that is not a marker, or an empty string."""
+    for entry in reversed(entries):
+        if entry.get("type") == MARKER_TYPE:
+            continue
+        ident = entry.get("id")
+        return ident if isinstance(ident, str) else ""
+    return ""
+
+
+def _run_start(
+    entries: Sequence[Mapping[str, object]], run_id: str
+) -> int | None:
+    start: int | None = None
+    for index, entry in enumerate(entries):
+        marker = parse_marker(entry)
+        if (
+            marker is not None
+            and marker.run_id == run_id
+            and marker.state == RUNNING
+        ):
+            start = index
+    return start
+
+
+def _run_scope(
+    entries: Sequence[Mapping[str, object]], run_id: str
+) -> Sequence[Mapping[str, object]]:
+    start = _run_start(entries, run_id)
+    return entries[start + 1 :] if start is not None else entries
+
+
 def _is_user_turn(entry: Mapping[str, object]) -> bool:
     return entry.get("type") == "message" and entry.get("role") == "user"
 
@@ -334,6 +367,8 @@ __all__ = [
     "TerminalInference",
     "WAITING",
     "infer_terminal",
+    "interrupted_marker",
+    "last_content_entry_id",
     "last_marker",
     "marker_entry",
     "markers_by_run",

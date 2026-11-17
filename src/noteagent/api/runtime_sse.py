@@ -47,7 +47,7 @@ def iter_run_sse(
     request = replace(request, pause=pause)
     #: Set once the run behind this stream has reported something. Only a run
     #: that claimed the session reaches the caller's sink, so this is the
-    #: evidence that a disconnect may cancel it without reaching someone else.
+    #: evidence that a disconnect may pause it without reaching someone else.
     owns_run = threading.Event()
     terminated = False
 

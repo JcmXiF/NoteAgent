@@ -6,6 +6,7 @@ import unittest
 
 from noteagent.agent.run_marker import (
     CANCELLED,
+    FAILED,
     FINISHED,
     INTERRUPTED,
     RUNNING,
@@ -168,6 +169,13 @@ class TerminalInferenceTests(unittest.TestCase):
         inferred = infer_terminal([_user(), _assistant(stop_reason="aborted")])
 
         self.assertEqual(inferred.state, CANCELLED)
+
+    def test_an_incomplete_answer_is_failed(self) -> None:
+        inferred = infer_terminal(
+            [_user(), _assistant(stop_reason="incomplete")]
+        )
+
+        self.assertEqual(inferred.state, FAILED)
 
     def test_a_terminal_marker_is_trusted(self) -> None:
         inferred = infer_terminal(

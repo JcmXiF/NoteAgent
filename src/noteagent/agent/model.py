@@ -109,6 +109,8 @@ class ModelRequest:
     cache_retention: str = ""
     #: The abort signal, checked between deltas.
     cancel: Event | None = None
+    #: A reader that went away: stop the stream at the next delta.
+    pause: Event | None = None
 
 
 @dataclass(frozen=True, slots=True)

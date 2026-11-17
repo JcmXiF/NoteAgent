@@ -74,8 +74,9 @@ class RunResume:
 
     session_id: str
     run_id: str
-    on_busy: OnBusy = OnBusy.REJECT
     pause: Event | None = field(default=None, repr=False, compare=False)
+    #: A run slot the route already claimed; the kernel must not claim twice.
+    claim: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

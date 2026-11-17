@@ -61,7 +61,8 @@ from noteagent.agent.run_marker import (
     WAITING,
     RunFingerprint,
     RunMarker,
-    last_marker,
+    interrupted_marker,
+    last_content_entry_id,
     marker_entry,
     missing_tool_calls,
 )
@@ -210,7 +211,14 @@ class KernelRuntime:
         if isinstance(request, Retry):
             raise ValueError("no route opens a retry yet")
         session_id = request.session_id
-        cancel = self._registry.claim(session_id)
+        preclaimed = (
+            request.claim if isinstance(request, RunResume) else None
+        )
+        cancel = (
+            preclaimed
+            if preclaimed is not None
+            else self._registry.claim(session_id)
+        )
         pause = request.pause
         run_id = self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
@@ -357,12 +365,9 @@ class KernelRuntime:
         try:
             _check_cancel(cancel)
             snapshot = self._sessions.load(session_id)
-            marker = last_marker(snapshot.entries)
-            if (
-                marker is None
-                or marker.state != INTERRUPTED
-                or marker.run_id != request.run_id
-            ):
+            if interrupted_marker(
+                snapshot.entries, request.run_id
+            ) is None:
                 raise ValueError(
                     f"session {session_id} is not interrupted on "
                     f"run {request.run_id}"
@@ -512,20 +517,12 @@ class KernelRuntime:
                         if compacted:
                             # The prompt is smaller now; ask once more.
                             continue
-                    text = "".join(partial).strip()
-                    if text:
-                        # The provider wrote this much before it failed. Keep
-                        # it, but mark it incomplete so nothing reads it as a
-                        # finished answer; a retry here would repeat the text.
-                        self._sessions.append(
-                            session_id,
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": text[:MAX_ABORTED_CHARS],
-                                "stopReason": "incomplete",
-                            },
-                        )
+                    # The provider wrote this much before it failed. Keep it,
+                    # but mark it incomplete so nothing reads it as finished;
+                    # a retry here would repeat the text.
+                    self._commit_partial(
+                        session_id, "".join(partial), "incomplete"
+                    )
                     self._mark(
                         session_id,
                         run_id,
@@ -648,7 +645,7 @@ class KernelRuntime:
         """
         try:
             snapshot = self._sessions.load(session_id)
-            last = snapshot.entries[-1].get("id") if snapshot.entries else ""
+            last = last_content_entry_id(snapshot.entries)
             config_hash = _sections_digest(project(snapshot.entries).sections)
             fingerprint = RunFingerprint.from_mapping(
                 self._fingerprint,
@@ -659,7 +656,7 @@ class KernelRuntime:
             marker = RunMarker(
                 run_id=run_id,
                 state=state,
-                last_entry_id=last if isinstance(last, str) else "",
+                last_entry_id=last,
                 fingerprint=fingerprint,
                 resumes=resumes,
                 note=note,
@@ -896,6 +893,26 @@ class KernelRuntime:
         )
         return RunResult(session_id, run_id, "failed", error=str(err))
 
+    def _commit_partial(
+        self,
+        session_id: str,
+        text: str,
+        stop_reason: str,
+    ) -> None:
+        """Keep what was written before a stop, bounded and marked as partial."""
+        value = text.strip()
+        if not value:
+            return
+        self._sessions.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": value[:MAX_ABORTED_CHARS],
+                "stopReason": stop_reason,
+            },
+        )
+
     def _cancelled_result(
         self,
         session_id: str,
@@ -904,17 +921,7 @@ class KernelRuntime:
         partial: str,
     ) -> RunResult:
         """Keep the answer that was being written, then end the run."""
-        text = partial.strip()
-        if text:
-            self._sessions.append(
-                session_id,
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": text[:MAX_ABORTED_CHARS],
-                    "stopReason": "aborted",
-                },
-            )
+        self._commit_partial(session_id, partial, "aborted")
         self._mark(session_id, run_id, CANCELLED, note="cancelled")
         sink(ErrorEvent("cancelled", "the run was cancelled", retryable=True))
         return RunResult(session_id, run_id, "cancelled")
@@ -1019,20 +1026,31 @@ class KernelRuntime:
         if run_section.strip():
             system += "\n\nCurrent run state:\n" + run_section
         sink(StatusEvent("compacting earlier turns", "think"))
-        summary_message = collect(
-            self._model.stream(
-                ModelRequest(
-                    model=self._model_name,
-                    messages=(
-                        Message("system", system),
-                        Message("user", context or "(no earlier messages)"),
+        try:
+            summary_message = collect(
+                _retry_tap(
+                    self._model.stream(
+                        ModelRequest(
+                            model=self._model_name,
+                            messages=(
+                                Message("system", system),
+                                Message(
+                                    "user",
+                                    context or "(no earlier messages)",
+                                ),
+                            ),
+                            max_tokens=self._compaction.max_summary_tokens,
+                            session_id=session_id,
+                            cancel=cancel,
+                            pause=pause,
+                        )
                     ),
-                    max_tokens=self._compaction.max_summary_tokens,
-                    session_id=session_id,
-                    cancel=cancel,
+                    sink,
                 )
             )
-        )
+        except ModelStreamError:
+            _check_pause(pause)
+            raise
         _check_pause(pause)
         summary = bounded_summary(
             summary_message.content, self._compaction
@@ -1083,18 +1101,14 @@ def _tap(
         _check_cancel(cancel)
         _check_pause(pause)
         if isinstance(event, ModelRetryEvent):
-            sink(
-                StatusEvent(
-                    f"model call failed ({event.code}); retrying "
-                    f"{event.attempt}/{event.max_retries} "
-                    f"in {event.delay_s:.1f}s",
-                    "think",
-                )
-            )
+            _retry_status(event, sink)
         if isinstance(event, ModelTextDelta):
             partial.append(event.text)
             sink(TokenEvent(event.text))
         yield event
+    # An adapter that stopped on pause returns without a done event; turn that
+    # into the pause, not into a truncated answer.
+    _check_pause(pause)
 
 
 def _sections_digest(sections: Mapping[str, str]) -> str:
@@ -1108,6 +1122,27 @@ def _sections_digest(sections: Mapping[str, str]) -> str:
         digest.update(sections[name].encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _retry_status(event: ModelRetryEvent, sink: EventSink) -> None:
+    sink(
+        StatusEvent(
+            f"model call failed ({event.code}); retrying "
+            f"{event.attempt}/{event.max_retries} "
+            f"in {event.delay_s:.1f}s",
+            "think",
+        )
+    )
+
+
+def _retry_tap(
+    stream: Iterable[ModelEvent], sink: EventSink
+) -> Iterator[ModelEvent]:
+    """Report a retry in the summary call without streaming its tokens."""
+    for event in stream:
+        if isinstance(event, ModelRetryEvent):
+            _retry_status(event, sink)
+        yield event
 
 
 def _check_cancel(cancel: Event) -> None:

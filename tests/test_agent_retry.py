@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import unittest
 
 from agent_fakes import FakeSessionStore, FixedClock, SequentialIds
@@ -14,6 +15,8 @@ from noteagent.agent.model import (
     ModelRetryEvent,
     ModelStartEvent,
     ModelTextDelta,
+    ModelToolCallEnd,
+    ToolCall,
 )
 from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import UserInput
@@ -85,7 +88,7 @@ class RetryingModelTests(unittest.TestCase):
 
     def test_a_spend_limit_is_not_retried(self) -> None:
         inner = FauxModelClient(
-            _error("insufficient_quota: the account has no credit"), _text()
+            _error("quota exceeded", code="usage_limit"), _text()
         )
         model = RetryingModel(inner, max_retries=2, sleep=lambda _s: None)
 
@@ -94,6 +97,47 @@ class RetryingModelTests(unittest.TestCase):
         self.assertEqual(len(inner.requests), 1)
         self.assertEqual(
             [event for event in events if isinstance(event, ModelRetryEvent)], []
+        )
+        self.assertIsInstance(events[-1], ModelErrorEvent)
+
+    def test_a_429_rate_limit_is_retried(self) -> None:
+        inner = FauxModelClient(_error("HTTP 429 rate limit"), _text())
+        model = RetryingModel(inner, max_retries=2, sleep=lambda _s: None)
+
+        events = list(model.stream(_request()))
+
+        self.assertEqual(len(inner.requests), 2)
+        self.assertEqual(
+            len([event for event in events if isinstance(event, ModelRetryEvent)]),
+            1,
+        )
+
+    def test_a_529_overload_is_retried(self) -> None:
+        inner = FauxModelClient(_error("HTTP 529 overloaded"), _text())
+        model = RetryingModel(inner, max_retries=2, sleep=lambda _s: None)
+
+        events = list(model.stream(_request()))
+
+        self.assertEqual(len(inner.requests), 2)
+        self.assertEqual(
+            len([event for event in events if isinstance(event, ModelRetryEvent)]),
+            1,
+        )
+
+    def test_a_tool_call_delta_is_never_replayed(self) -> None:
+        script = [
+            ModelStartEvent("faux"),
+            ModelToolCallEnd(ToolCall("c1", "wiki_read", "{}")),
+            ModelErrorEvent("model_error", "connection cut", retryable=True),
+        ]
+        inner = FauxModelClient(script)
+        model = RetryingModel(inner, max_retries=2, sleep=lambda _s: None)
+
+        events = list(model.stream(_request()))
+
+        self.assertEqual(len(inner.requests), 1)
+        self.assertTrue(
+            any(isinstance(event, ModelToolCallEnd) for event in events)
         )
         self.assertIsInstance(events[-1], ModelErrorEvent)
 
@@ -135,6 +179,42 @@ class RetryingModelTests(unittest.TestCase):
 
         self.assertEqual(sleeps, [0.25])
 
+    def test_the_default_budget_is_five_retries(self) -> None:
+        inner = FauxModelClient(*[_error() for _ in range(6)])
+        model = RetryingModel(inner, sleep=lambda _s: None)
+
+        events = list(model.stream(_request()))
+
+        self.assertEqual(len(inner.requests), 6)
+        self.assertEqual(
+            len([event for event in events if isinstance(event, ModelRetryEvent)]),
+            5,
+        )
+
+    def test_the_budget_cap_is_ten_retries(self) -> None:
+        inner = FauxModelClient(*[_error() for _ in range(11)])
+        model = RetryingModel(inner, max_retries=99, sleep=lambda _s: None)
+
+        list(model.stream(_request()))
+
+        self.assertEqual(len(inner.requests), 11)
+
+    def test_a_cancel_during_backoff_stops_the_retry(self) -> None:
+        cancel = threading.Event()
+
+        def sleep(_delay: float) -> None:
+            cancel.set()
+
+        inner = FauxModelClient(_error(), _text())
+        request = ModelRequest(model="faux", messages=(), cancel=cancel)
+        model = RetryingModel(inner, max_retries=2, sleep=sleep)
+
+        events = list(model.stream(request))
+
+        self.assertEqual(len(inner.requests), 1)
+        self.assertIsInstance(events[-1], ModelErrorEvent)
+        self.assertEqual(events[-1].code, "cancelled")
+
 
 class RetryInTheLoopTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -164,6 +244,7 @@ class RetryInTheLoopTests(unittest.TestCase):
             any(
                 isinstance(event, StatusEvent)
                 and "retrying 1/1" in event.message
+                and "in 0.5s" in event.message
                 for event in events
             )
         )

@@ -539,6 +539,7 @@
     "send": "Ask",
     "stop": "Stop",
     "aborted": "Stopped before this answer was finished.",
+    "incomplete": "The model stream failed; this is only the part written before it.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {

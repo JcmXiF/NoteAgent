@@ -25,6 +25,7 @@ from noteagent.agent.run_marker import (
     SETTLED_STATES,
     RunMarker,
     infer_terminal,
+    interrupted_marker,
     last_marker,
     marker_entry,
     run_steps,
@@ -158,14 +159,9 @@ def interrupted_run(
     store: SessionStore, session_id: str, run_id: str
 ) -> RunMarker | None:
     """The marker an interrupted run still holds, or ``None``."""
-    marker = last_marker(store.load(session_id).entries)
-    if (
-        marker is None
-        or marker.state != INTERRUPTED
-        or marker.run_id != run_id
-    ):
-        return None
-    return marker
+    return interrupted_marker(
+        store.load(session_id).entries, run_id
+    )
 
 
 def abandon_run(
