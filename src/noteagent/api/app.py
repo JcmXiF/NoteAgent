@@ -22,7 +22,7 @@ from starlette.background import BackgroundTask
 from noteagent import __version__
 from noteagent.acquire.intake.local_file import MAX_LOCAL_FILES
 from noteagent.agent.model import ModelStreamError
-from noteagent.agent.runtime import BusyError, UserInput, busy_message
+from noteagent.agent.runtime import BusyError, RunResume, UserInput, busy_message
 from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
 from noteagent.acquire.types import ProviderNotConfiguredError
@@ -109,6 +109,7 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
+from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
@@ -464,6 +465,12 @@ class SessionQueryBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=100_000)
 
 
+class ResumeRunBody(BaseModel):
+    """Which interrupted run the reader wants to resume or abandon."""
+
+    runId: str = Field(..., min_length=1, max_length=200)
+
+
 class CompactBody(BaseModel):
     """The reader's own instructions for a manual summary."""
 
@@ -786,6 +793,69 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/v1/sessions/{session_id}/resume")
+    def kernel_session_resume(
+        session_id: str, body: ResumeRunBody
+    ) -> StreamingResponse:
+        """Continue the run a crash left interrupted, from its last turn."""
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        if session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        if interrupted_run(store, session_id, body.runId) is None:
+            raise CodedHTTPException(
+                409,
+                f"session {session_id} is not interrupted on run {body.runId}",
+                code="session.notInterrupted",
+                params={"id": session_id, "run": body.runId},
+            )
+        try:
+            runtime = session_runtime(deps, store, layout)
+        except LlmConfigError as err:
+            raise http_error(err, 503) from err
+        return StreamingResponse(
+            iter_run_sse(
+                runtime,
+                RunResume(session_id, body.runId),
+                store=store,
+                waits=session_waits(deps, store),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/v1/sessions/{session_id}/abandon")
+    def kernel_session_abandon(
+        session_id: str, body: ResumeRunBody
+    ) -> dict[str, object]:
+        """Stop waiting on an interrupted run; the transcript is left as it is."""
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        marker, changed = abandon_run(
+            store, session_id, body.runId, clock=deps.clock
+        )
+        if marker is None:
+            raise CodedHTTPException(
+                409,
+                f"session {session_id} is not interrupted on run {body.runId}",
+                code="session.notInterrupted",
+                params={"id": session_id, "run": body.runId},
+            )
+        return {
+            "abandoned": changed,
+            "runId": marker.run_id,
+            "session": session_payload(
+                store,
+                session_id,
+                busy=session_busy(deps, session_id),
+                waits=session_waits(deps, store),
+            ),
+        }
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
     def kernel_session_cancel(session_id: str) -> dict[str, bool]:

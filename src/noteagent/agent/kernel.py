@@ -55,11 +55,14 @@ from noteagent.agent.run_marker import (
     CANCELLED,
     FAILED,
     FINISHED,
+    INTERRUPTED,
     RUNNING,
     WAITING,
     RunFingerprint,
     RunMarker,
+    last_marker,
     marker_entry,
+    missing_tool_calls,
 )
 from noteagent.agent.runtime import (
     BusyError,
@@ -70,6 +73,7 @@ from noteagent.agent.runtime import (
     RunRef,
     RunRequest,
     RunResult,
+    RunResume,
     TraceSink,
     UserInput,
     busy_message,
@@ -208,6 +212,8 @@ class KernelRuntime:
         run_id = self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
+            if isinstance(request, RunResume):
+                return self._run_crash_resume(request, sink, run_id, cancel)
             if isinstance(request, Resume):
                 return self._run_resume(request, sink, run_id, cancel)
             return self._run_user(request, sink, run_id, cancel)
@@ -324,18 +330,92 @@ class KernelRuntime:
             return self._cancelled_result(session_id, run_id, sink, "")
         return self._run_loop(session_id, run_id, sink, cancel)
 
+    def _run_crash_resume(
+        self,
+        request: RunResume,
+        sink: EventSink,
+        run_id: str,
+        cancel: Event,
+    ) -> RunResult:
+        """Continue a run a crash left at its last committed turn.
+
+        An unfinished tool call has no result; it gets one that says the
+        outcome is unknown, and the model is told not to assume it ran. The old
+        marker stays where it is; the new run names it in ``resumes``.
+        """
+        session_id = request.session_id
+        try:
+            _check_cancel(cancel)
+            snapshot = self._sessions.load(session_id)
+            marker = last_marker(snapshot.entries)
+            if (
+                marker is None
+                or marker.state != INTERRUPTED
+                or marker.run_id != request.run_id
+            ):
+                raise ValueError(
+                    f"session {session_id} is not interrupted on "
+                    f"run {request.run_id}"
+                )
+            missing = missing_tool_calls(
+                snapshot.entries, request.run_id
+            )
+            for call_id, name in missing:
+                self._sessions.append(
+                    session_id,
+                    {
+                        "type": "message",
+                        "role": "toolResult",
+                        "toolCallId": call_id,
+                        "name": name,
+                        "content": (
+                            "outcome unknown: the run was interrupted "
+                            "before this result was committed"
+                        ),
+                        "meta": {"interrupted": True},
+                    },
+                )
+            note = (
+                "Resume after an interruption. The tool result(s) above "
+                "have an unknown outcome; do not assume they ran."
+                if missing
+                else (
+                    "Resume after an interruption. Continue from the last "
+                    "committed turn."
+                )
+            )
+            return self._run_loop(
+                session_id,
+                run_id,
+                sink,
+                cancel,
+                resumes=request.run_id,
+                note=note,
+            )
+        except RunCancelled:
+            return self._cancelled_result(session_id, run_id, sink, "")
+
     def _run_loop(
         self,
         session_id: str,
         run_id: str,
         sink: EventSink,
         cancel: Event,
+        *,
+        resumes: str = "",
+        note: str = "",
     ) -> RunResult:
         # What the current model call has streamed but not yet committed. A stop
         # keeps it, so the reader can see where the answer ended.
         partial: list[str] = []
         try:
-            self._mark(session_id, run_id, RUNNING)
+            self._mark(
+                session_id,
+                run_id,
+                RUNNING,
+                resumes=resumes,
+                note=note,
+            )
             sink(StatusEvent("thinking", "think"))
             model_calls = 0
             overflow_retried = False

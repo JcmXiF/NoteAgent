@@ -55,6 +55,19 @@ class Resume:
 
 
 @dataclass(frozen=True, slots=True)
+class RunResume:
+    """A crashed run continues from its last committed turn.
+
+    Not the wait's ``Resume``: there is no job to wait for, only a run marker
+    and a transcript whose unfinished tool calls become ``outcome unknown``.
+    """
+
+    session_id: str
+    run_id: str
+    on_busy: OnBusy = OnBusy.REJECT
+
+
+@dataclass(frozen=True, slots=True)
 class Retry:
     """The last run failed and the caller is asking for it again."""
 
@@ -63,7 +76,7 @@ class Retry:
     reason: str = ""
 
 
-RunRequest: TypeAlias = UserInput | Resume | Retry
+RunRequest: TypeAlias = UserInput | Resume | RunResume | Retry
 
 RunStatus: TypeAlias = Literal["completed", "waiting", "failed", "cancelled"]
 

@@ -262,6 +262,52 @@ def run_steps(
     )
 
 
+def missing_tool_calls(
+    entries: Sequence[Mapping[str, object]], run_id: str
+) -> tuple[tuple[str, str], ...]:
+    """The calls a run started but never got a result for, in call order."""
+    start: int | None = None
+    for index, entry in enumerate(entries):
+        marker = parse_marker(entry)
+        if (
+            marker is not None
+            and marker.run_id == run_id
+            and marker.state == RUNNING
+        ):
+            start = index
+    scope = entries[start + 1 :] if start is not None else entries
+    answered = {
+        entry.get("toolCallId")
+        for entry in scope
+        if entry.get("type") == "message"
+        and entry.get("role") == "toolResult"
+    }
+    missing: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in scope:
+        if entry.get("type") != "message" or entry.get("role") != "assistant":
+            continue
+        calls = entry.get("toolCalls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            call_id = call.get("id")
+            name = call.get("name")
+            if (
+                isinstance(call_id, str)
+                and call_id
+                and call_id not in answered
+                and call_id not in seen
+            ):
+                missing.append(
+                    (call_id, name if isinstance(name, str) else "")
+                )
+                seen.add(call_id)
+    return tuple(missing)
+
+
 def _is_user_turn(entry: Mapping[str, object]) -> bool:
     return entry.get("type") == "message" and entry.get("role") == "user"
 
@@ -287,6 +333,7 @@ __all__ = [
     "last_marker",
     "marker_entry",
     "markers_by_run",
+    "missing_tool_calls",
     "parse_marker",
     "run_steps",
 ]

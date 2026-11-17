@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.agent.run_marker import (
+    ABANDONED,
     INTERRUPTED,
     SETTLED_STATES,
     RunMarker,
@@ -32,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "InterruptedRun",
+    "abandon_run",
     "interrupted_payload",
+    "interrupted_run",
     "interrupted_runs",
     "scan_store",
 ]
@@ -159,6 +162,50 @@ def interrupted_payload(
         "step": run_steps(entries, marker.run_id),
         "lastEntryId": marker.last_entry_id,
     }
+
+
+def interrupted_run(
+    store: SessionStore, session_id: str, run_id: str
+) -> RunMarker | None:
+    """The marker an interrupted run still holds, or ``None``."""
+    marker = last_marker(store.load(session_id).entries)
+    if (
+        marker is None
+        or marker.state != INTERRUPTED
+        or marker.run_id != run_id
+    ):
+        return None
+    return marker
+
+
+def abandon_run(
+    store: SessionStore,
+    session_id: str,
+    run_id: str,
+    *,
+    clock: Clock | None = None,
+) -> tuple[RunMarker | None, bool]:
+    """Stop waiting on an interrupted run; say whether a marker was written.
+
+    A second abandon of the same run is a no-op: the latest marker is already
+    ``abandoned``, so it answers with that marker and ``False``. A run that is
+    not interrupted at all answers ``(None, False)`` and the route refuses it.
+    """
+    marker = last_marker(store.load(session_id).entries)
+    if marker is None or marker.run_id != run_id:
+        return None, False
+    if marker.state == ABANDONED:
+        return marker, False
+    if marker.state != INTERRUPTED:
+        return None, False
+    abandoned = replace(
+        marker,
+        state=ABANDONED,
+        note="abandoned by the reader",
+        created_at=iso_timestamp(clock or SystemClock()),
+    )
+    store.append(session_id, marker_entry(abandoned))
+    return abandoned, True
 
 
 def _record(
