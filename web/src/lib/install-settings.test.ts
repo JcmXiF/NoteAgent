@@ -48,7 +48,14 @@ const SAVED: InstallSettings = {
   },
   rag: {
     enabled: false,
-    embedding: { endpoint: "", model: "Qwen3-Embedding-0.6B" },
+    embedding: {
+      endpoint: "",
+      model: "Qwen3-Embedding-0.6B",
+      queryPrefix: "Q: {query}",
+      batch: 64,
+      concurrency: 1,
+      apiKeySet: false,
+    },
   },
   extractMedia: true,
   locked: [],
@@ -91,9 +98,34 @@ describe("a value's source", () => {
 
 const GENERATION = { temperature: 0.1, maxTokens: 4096, timeoutSeconds: 120 };
 
+const RAG_EMBEDDING = {
+  endpoint: "http://localhost:8080/v1",
+  model: "m",
+  queryPrefix: "Q: {query}",
+  batch: 64,
+  concurrency: 1,
+  apiKeySet: false,
+};
+
+const RAG_DRAFT = {
+  enabled: true,
+  endpoint: "http://localhost:8080/v1",
+  model: "m",
+  queryPrefix: "Q: {query}",
+  batch: "64",
+  concurrency: "1",
+  apiKey: "",
+  clearApiKey: false,
+};
+
 describe("the retrieval form", () => {
   it("does not block turning the switch off behind a half-typed address", () => {
-    const draft = { enabled: false, endpoint: "not a url", model: "" };
+    const draft = {
+      ...RAG_DRAFT,
+      enabled: false,
+      endpoint: "not a url",
+      model: "",
+    };
     expect(ragProblems(draft)).toEqual([]);
     // Text behind the off switch is not a change a save could send.
     expect(ragDirty(draft, SAVED.rag)).toBe(false);
@@ -104,32 +136,77 @@ describe("the retrieval form", () => {
   });
 
   it("needs an address and a model before the switch can be on", () => {
-    expect(ragProblems({ enabled: true, endpoint: "", model: "m" })).toEqual([
-      "settings.invalid.ragEndpoint",
-    ]);
     expect(
-      ragProblems({
-        enabled: true,
-        endpoint: "http://localhost:8080/v1",
-        model: " ",
-      }),
-    ).toEqual(["settings.invalid.ragModel"]);
+      ragProblems({ ...RAG_DRAFT, endpoint: "", model: "m" }),
+    ).toEqual(["settings.invalid.ragEndpoint"]);
+    expect(ragProblems({ ...RAG_DRAFT, model: " " })).toEqual([
+      "settings.invalid.ragModel",
+    ]);
+  });
+
+  it("checks the advanced values only while the switch is on", () => {
+    const draft = {
+      ...RAG_DRAFT,
+      queryPrefix: "no placeholder",
+      batch: "0",
+      concurrency: "9",
+    };
+    expect(ragProblems(draft)).toEqual([
+      "settings.invalid.ragQueryPrefix",
+      "settings.invalid.ragBatch",
+      "settings.invalid.ragConcurrency",
+    ]);
+    expect(ragProblems({ ...draft, enabled: false })).toEqual([]);
+  });
+
+  it("does not hold a save on a number the environment owns", () => {
+    const draft = { ...RAG_DRAFT, batch: "1000" };
+    expect(ragProblems(draft)).toEqual(["settings.invalid.ragBatch"]);
+    expect(ragProblems(draft, ["rag.embedding.batch"])).toEqual([]);
   });
 
   it("sends only the service fields that changed while the switch is on", () => {
-    const saved = {
-      enabled: true,
-      embedding: { endpoint: "http://localhost:8080/v1", model: "m" },
-    };
+    const saved = { enabled: true, embedding: RAG_EMBEDDING };
     expect(
       ragPatch(
-        { enabled: true, endpoint: "http://localhost:8080/v1/", model: "m" },
+        { ...RAG_DRAFT, endpoint: "http://localhost:8080/v1/" },
         saved,
       ),
     ).toBeNull();
     expect(
-      ragPatch({ enabled: true, endpoint: "http://other/v1", model: "m" }, saved),
+      ragPatch({ ...RAG_DRAFT, endpoint: "http://other/v1" }, saved),
     ).toEqual({ rag: { embedding: { endpoint: "http://other/v1" } } });
+  });
+
+  it("sends the advanced values and a key when they changed", () => {
+    const saved = { enabled: true, embedding: RAG_EMBEDDING };
+    expect(
+      ragPatch(
+        {
+          ...RAG_DRAFT,
+          queryPrefix: "",
+          batch: "8",
+          concurrency: "2",
+          apiKey: "secret",
+        },
+        saved,
+      ),
+    ).toEqual({
+      rag: {
+        embedding: {
+          queryPrefix: "",
+          batch: 8,
+          concurrency: 2,
+          apiKey: "secret",
+        },
+      },
+    });
+    expect(
+      ragPatch(
+        { ...RAG_DRAFT, clearApiKey: true },
+        { enabled: true, embedding: { ...RAG_EMBEDDING, apiKeySet: true } },
+      ),
+    ).toEqual({ rag: { embedding: { clearApiKey: true } } });
   });
 });
 

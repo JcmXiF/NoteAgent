@@ -4,7 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { RetrievalSection } from "@/components/settings/RetrievalSection";
-import { installSettings, typeInto } from "@/components/settings/test-fixtures";
+import {
+  installSettings,
+  ragSettings,
+  typeInto,
+} from "@/components/settings/test-fixtures";
 import type { InstallSettings } from "@/lib/install-settings";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
@@ -59,10 +63,20 @@ afterEach(() => {
 
 function install(over: Partial<InstallSettings> = {}): InstallSettings {
   return installSettings({
-    rag: {
-      enabled: false,
-      embedding: { endpoint: "", model: "Qwen3-Embedding-0.6B" },
-    },
+    rag: ragSettings(),
+    ...over,
+  });
+}
+
+function enabledInstall(over: Partial<InstallSettings> = {}): InstallSettings {
+  return install({
+    rag: ragSettings({
+      enabled: true,
+      embedding: {
+        endpoint: "http://localhost:8080/v1",
+        model: "Qwen3-Embedding-0.6B",
+      },
+    }),
     ...over,
   });
 }
@@ -82,6 +96,14 @@ function toggle(): HTMLElement {
 function input(label: string): HTMLInputElement {
   const found = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
   if (!found) throw new Error(`no input: ${label}`);
+  return found;
+}
+
+function textarea(label: string): HTMLTextAreaElement {
+  const found = host.querySelector<HTMLTextAreaElement>(
+    `textarea[aria-label="${label}"]`,
+  );
+  if (!found) throw new Error(`no textarea: ${label}`);
   return found;
 }
 
@@ -144,13 +166,13 @@ describe("the retrieval switch", () => {
 
   it("saves the switch with the service it will call", async () => {
     const next = install({
-      rag: {
+      rag: ragSettings({
         enabled: true,
         embedding: {
           endpoint: "http://localhost:8080/v1",
           model: "Qwen3-Embedding-0.6B",
         },
-      },
+      }),
       revision: 4,
     });
     vi.mocked(saveSettings).mockResolvedValue(next);
@@ -176,13 +198,13 @@ describe("the retrieval switch", () => {
   it("keeps a switch the environment owns read-only", async () => {
     await draw(
       install({
-        rag: {
+        rag: ragSettings({
           enabled: true,
           embedding: {
             endpoint: "http://localhost:8080/v1",
             model: "Qwen3-Embedding-0.6B",
           },
-        },
+        }),
         locked: ["rag.enabled", "rag.embedding.endpoint"],
         sources: { "rag.enabled": "env", "rag.embedding.endpoint": "env" },
       }),
@@ -191,6 +213,129 @@ describe("the retrieval switch", () => {
     expect(toggle().hasAttribute("data-disabled")).toBe(true);
     expect(input("服务地址").disabled).toBe(true);
     expect(host.textContent).toContain("环境变量");
+  });
+});
+
+describe("the advanced embedding settings", () => {
+  it("stays folded until asked", async () => {
+    await draw(enabledInstall());
+
+    expect(host.querySelector('textarea[aria-label="查询前缀"]')).toBeNull();
+
+    await press("高级");
+
+    expect(textarea("查询前缀").value).toBe("Q: {query}");
+    expect(input("嵌入批量").value).toBe("64");
+    expect(input("并发数").value).toBe("1");
+    expect(input("密钥").value).toBe("");
+  });
+
+  it("saves the advanced values and a key", async () => {
+    const next = enabledInstall({ revision: 4 });
+    vi.mocked(saveSettings).mockResolvedValue(next);
+
+    await draw(enabledInstall());
+    await press("高级");
+    act(() => {
+      typeInto(textarea("查询前缀"), "Q: {query} prefix");
+    });
+    act(() => {
+      typeInto(input("嵌入批量"), "8");
+    });
+    act(() => {
+      typeInto(input("并发数"), "2");
+    });
+    act(() => {
+      typeInto(input("密钥"), "secret");
+    });
+    await press("保存");
+
+    expect(saveSettings).toHaveBeenCalledWith({
+      rag: {
+        embedding: {
+          queryPrefix: "Q: {query} prefix",
+          batch: 8,
+          concurrency: 2,
+          apiKey: "secret",
+        },
+      },
+      revision: 3,
+    });
+  });
+
+  it("reports a prefix without the placeholder", async () => {
+    await draw(enabledInstall());
+    await press("高级");
+    act(() => {
+      typeInto(textarea("查询前缀"), "no placeholder");
+    });
+
+    expect(host.textContent).toContain("查询前缀必须包含 {query}。");
+    expect(button("保存").disabled).toBe(true);
+  });
+
+  it("shows a saved key and can clear it", async () => {
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: {
+            endpoint: "http://localhost:8080/v1",
+            model: "Qwen3-Embedding-0.6B",
+            apiKeySet: true,
+          },
+        }),
+      }),
+    );
+    await press("高级");
+
+    expect(host.textContent).toContain("已保存。不填写则保持不变。");
+    await press("清除密钥");
+    expect(host.textContent).toContain("保存后将清除已保存的密钥。");
+    await press("保存");
+
+    expect(saveSettings).toHaveBeenCalledWith({
+      rag: { embedding: { clearApiKey: true } },
+      revision: 3,
+    });
+  });
+
+  it("keeps an advanced field the environment owns read-only", async () => {
+    await draw(
+      enabledInstall({
+        locked: ["rag.embedding.batch"],
+        sources: { "rag.embedding.batch": "env" },
+      }),
+    );
+    await press("高级");
+
+    expect(input("嵌入批量").disabled).toBe(true);
+    expect(host.textContent).toContain("环境变量");
+  });
+
+  it("does not block a save on a locked out-of-range number", async () => {
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: {
+            endpoint: "http://localhost:8080/v1",
+            model: "Qwen3-Embedding-0.6B",
+            batch: 1000,
+          },
+        }),
+        locked: ["rag.embedding.batch"],
+        sources: { "rag.embedding.batch": "env" },
+      }),
+    );
+    await press("高级");
+
+    expect(host.textContent).not.toContain("嵌入批量需为");
+
+    act(() => {
+      typeInto(input("服务地址"), "http://other/v1");
+    });
+    expect(button("保存").disabled).toBe(false);
   });
 });
 

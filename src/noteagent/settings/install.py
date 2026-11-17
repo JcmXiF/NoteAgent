@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -45,6 +45,7 @@ from noteagent.llm.config import (
     capture_process_env,
     process_env_keys,
 )
+from noteagent.rag.config import DEFAULT_BATCH, DEFAULT_CONCURRENCY
 from noteagent.rag.env import parse_boolean
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
@@ -62,9 +63,13 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_BATCH,
+    F_RAG_CONCURRENCY,
     F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_KEY,
     F_RAG_EMBEDDING_MODEL,
     F_RAG_ENABLED,
+    F_RAG_QUERY_PREFIX,
     F_SEARCH_KEY,
     F_SEARCH_MODE,
     F_SEARCH_TIMEOUT,
@@ -243,6 +248,42 @@ def clean_rag_model(value: object) -> str:
     return text
 
 
+def _clean_int_in_range(
+    value: object, field: str, noun: str, *, low: int, high: int
+) -> int:
+    number = _finite(value, field)
+    if not number.is_integer() or not low <= int(number) <= high:
+        raise _invalid(field, f"{noun} is outside {low}..{high}")
+    return int(number)
+
+
+def clean_rag_query_prefix(value: object) -> str:
+    """The instruction before a query. Empty is a real choice: no prefix."""
+    if not isinstance(value, str):
+        raise _invalid(F_RAG_QUERY_PREFIX.id, "query prefix is not text")
+    if len(value) > 2000 or "\x00" in value:
+        raise _invalid(
+            F_RAG_QUERY_PREFIX.id, "query prefix is not usable text"
+        )
+    return value
+
+
+def clean_rag_batch(value: object) -> int:
+    return _clean_int_in_range(
+        value, F_RAG_BATCH.id, "embedding batch", low=1, high=512
+    )
+
+
+def clean_rag_concurrency(value: object) -> int:
+    return _clean_int_in_range(
+        value,
+        F_RAG_CONCURRENCY.id,
+        "embedding concurrency",
+        low=1,
+        high=8,
+    )
+
+
 def clean_model(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid(F_MODEL.id, "model is not text")
@@ -269,13 +310,11 @@ def clean_temperature(value: object) -> str:
 
 
 def clean_max_tokens(value: object) -> str:
-    number = _finite(value, F_MAX_TOKENS.id)
-    if not number.is_integer():
-        raise _invalid(F_MAX_TOKENS.id, "max tokens is not a whole number")
-    whole = int(number)
-    if whole < 1 or whole > 128_000:
-        raise _invalid(F_MAX_TOKENS.id, "max tokens is outside 1..128000")
-    return str(whole)
+    return str(
+        _clean_int_in_range(
+            value, F_MAX_TOKENS.id, "max tokens", low=1, high=128_000
+        )
+    )
 
 
 def clean_llm_timeout(value: object) -> str:
@@ -424,6 +463,11 @@ class _RagPatch:
     enabled: bool | None = None
     endpoint: str | None = None
     model: str | None = None
+    query_prefix: str | None = None
+    batch: int | None = None
+    concurrency: int | None = None
+    #: A replacement key, or ``""`` to remove it. ``None`` leaves it alone.
+    secret: str | None = None
 
 
 def _unchanged(field: Field, new: str, *, normalise: Callable[[str], str] | None = None) -> bool:
@@ -562,9 +606,20 @@ def _validate_rag(patch: _RagPatch, context: _Context) -> None:
     """A switch that is on must name the service it will call.
 
     The values checked are the ones the running core will use, so an endpoint
-    supplied only by the environment still counts.
+    supplied only by the environment still counts. A patch that changes only a
+    number or a key does not re-check the service, so an unrelated edit is not
+    blocked by a state the reader cannot fix from this form.
     """
-    if patch.enabled is None and patch.endpoint is None and patch.model is None:
+    touches_required = any(
+        value is not None
+        for value in (
+            patch.enabled,
+            patch.endpoint,
+            patch.model,
+            patch.query_prefix,
+        )
+    )
+    if not touches_required:
         return
     enabled = (
         patch.enabled
@@ -583,6 +638,11 @@ def _validate_rag(patch: _RagPatch, context: _Context) -> None:
         if patch.model is not None
         else context.effective.rag_embedding_model.text
     )
+    prefix = (
+        patch.query_prefix
+        if patch.query_prefix is not None
+        else context.effective.rag_query_prefix.text
+    )
     if not endpoint:
         raise _invalid(
             F_RAG_EMBEDDING_ENDPOINT.id,
@@ -592,6 +652,11 @@ def _validate_rag(patch: _RagPatch, context: _Context) -> None:
         raise _invalid(
             F_RAG_EMBEDDING_MODEL.id,
             "RAG is on, so an embedding model is required",
+        )
+    if prefix and "{query}" not in prefix:
+        raise _invalid(
+            F_RAG_QUERY_PREFIX.id,
+            "the query prefix must contain the {query} placeholder",
         )
 
 
@@ -607,6 +672,10 @@ def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
     embedding = _mapping(body, "embedding")
     endpoint = None
     model = None
+    query_prefix = None
+    batch = None
+    concurrency = None
+    secret = None
     if embedding is not None:
         if embedding.get("endpoint") is not None:
             endpoint = clean_rag_endpoint(embedding["endpoint"])
@@ -614,8 +683,33 @@ def _read_rag_patch(body: Mapping[str, Any], context: _Context) -> _RagPatch:
         if embedding.get("model") is not None:
             model = clean_rag_model(embedding["model"])
             _check_locked(F_RAG_EMBEDDING_MODEL, model)
+        if embedding.get("queryPrefix") is not None:
+            query_prefix = clean_rag_query_prefix(embedding["queryPrefix"])
+            if query_prefix and "{query}" not in query_prefix:
+                raise _invalid(
+                    F_RAG_QUERY_PREFIX.id,
+                    "the query prefix must contain the {query} placeholder",
+                )
+            _check_locked(F_RAG_QUERY_PREFIX, query_prefix)
+        if embedding.get("batch") is not None:
+            batch = clean_rag_batch(embedding["batch"])
+            _check_locked(F_RAG_BATCH, str(batch))
+        if embedding.get("concurrency") is not None:
+            concurrency = clean_rag_concurrency(embedding["concurrency"])
+            _check_locked(F_RAG_CONCURRENCY, str(concurrency))
+        secret = _read_secret_patch(
+            embedding, F_RAG_EMBEDDING_KEY, context.effective.rag_embedding_key
+        )
 
-    patch = _RagPatch(enabled=enabled, endpoint=endpoint, model=model)
+    patch = _RagPatch(
+        enabled=enabled,
+        endpoint=endpoint,
+        model=model,
+        query_prefix=query_prefix,
+        batch=batch,
+        concurrency=concurrency,
+        secret=secret,
+    )
     _validate_rag(patch, context)
     return patch
 
@@ -743,22 +837,43 @@ def _with_search(config: Config, search: _SearchPatch) -> Config:
     )
 
 
+_T = TypeVar("_T")
+
+
+def _merge(new: _T | None, current: _T) -> _T:
+    """The value a save sent, or what the document already holds."""
+    return current if new is None else new
+
+
 def _with_rag(config: Config, rag: _RagPatch) -> Config:
     current = config.rag
     embedding = current.embedding
-    if rag.endpoint is not None or rag.model is not None:
+    embedding_changed = any(
+        value is not None
+        for value in (
+            rag.endpoint,
+            rag.model,
+            rag.query_prefix,
+            rag.batch,
+            rag.concurrency,
+        )
+    )
+    if embedding_changed:
         embedding = replace(
             embedding,
-            endpoint=(
-                rag.endpoint if rag.endpoint is not None else embedding.endpoint
+            endpoint=_merge(rag.endpoint, embedding.endpoint),
+            model=_merge(rag.model, embedding.model),
+            query_prefix=_merge(
+                rag.query_prefix, embedding.query_prefix
             ),
-            model=rag.model if rag.model is not None else embedding.model,
+            batch=_merge(rag.batch, embedding.batch),
+            concurrency=_merge(rag.concurrency, embedding.concurrency),
         )
     return replace(
         config,
         rag=replace(
             current,
-            enabled=rag.enabled if rag.enabled is not None else current.enabled,
+            enabled=_merge(rag.enabled, current.enabled),
             embedding=embedding,
         ),
     )
@@ -778,7 +893,13 @@ def _mutate(
     return config if media is None else replace(config, extract_media=media)
 
 
-def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _SearchPatch) -> None:
+def _write_secrets(
+    store: ConfigStore,
+    config: Config,
+    llm: _LlmPatch,
+    search: _SearchPatch,
+    rag: _RagPatch,
+) -> None:
     profile = config.active_profile
     if llm.secret is not None:
         if not llm.secret:
@@ -791,6 +912,11 @@ def _write_secrets(store: ConfigStore, config: Config, llm: _LlmPatch, search: _
             store.set_search_key(search.secret)
         else:
             store.delete_search_key()
+    if rag.secret is not None:
+        if rag.secret:
+            store.set_rag_embedding_key(rag.secret)
+        else:
+            store.delete_rag_embedding_key()
 
 
 # --- the screen's answer -----------------------------------------------------
@@ -862,6 +988,14 @@ def install_view(
             "embedding": {
                 "endpoint": context.effective.rag_embedding_endpoint.text,
                 "model": context.effective.rag_embedding_model.text,
+                "queryPrefix": context.effective.rag_query_prefix.text,
+                "batch": _read_int(F_RAG_BATCH, DEFAULT_BATCH, invalid),
+                "concurrency": _read_int(
+                    F_RAG_CONCURRENCY, DEFAULT_CONCURRENCY, invalid
+                ),
+                "apiKeySet": bool(
+                    context.effective.rag_embedding_key.text
+                ),
             },
         },
         "extractMedia": _media_enabled(),
@@ -915,7 +1049,11 @@ def apply_install(
     rag = _read_rag_patch(rag_body, context) if rag_body is not None else _RagPatch()
     media = _read_media(body)
 
-    writes_secret = llm.secret is not None or search.secret is not None
+    writes_secret = (
+        llm.secret is not None
+        or search.secret is not None
+        or rag.secret is not None
+    )
     if writes_secret:
         # The credential store is checked before the document changes, so the
         # common failure (no backend) leaves nothing half-saved. A backend that
@@ -929,7 +1067,7 @@ def apply_install(
         force=writes_secret,
     )
     if writes_secret:
-        _write_secrets(context.store, updated, llm, search)
+        _write_secrets(context.store, updated, llm, search, rag)
     return install_view(path=path, credentials=credentials)
 
 

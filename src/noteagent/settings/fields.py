@@ -13,10 +13,16 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Field:
-    """One editable value and the environment name that can override it."""
+    """One editable value and the environment name that can override it.
+
+    ``empty_is_value`` marks a field whose loader tells "set to empty" apart
+    from "not set"; an empty document value then stays in the environment
+    instead of being removed.
+    """
 
     id: str
     env: str
+    empty_is_value: bool = False
 
 
 F_BASE = Field("llm.baseUrl", "NOTEAGENT_LLM_BASE_URL")
@@ -40,6 +46,18 @@ F_RAG_EMBEDDING_ENDPOINT = Field(
 F_RAG_EMBEDDING_MODEL = Field(
     "rag.embedding.model", "NOTEAGENT_RAG_EMBEDDING_MODEL"
 )
+F_RAG_QUERY_PREFIX = Field(
+    "rag.embedding.queryPrefix",
+    "NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX",
+    empty_is_value=True,
+)
+F_RAG_BATCH = Field("rag.embedding.batch", "NOTEAGENT_RAG_EMBEDDING_BATCH")
+F_RAG_CONCURRENCY = Field(
+    "rag.embedding.concurrency", "NOTEAGENT_RAG_EMBEDDING_CONCURRENCY"
+)
+F_RAG_EMBEDDING_KEY = Field(
+    "rag.embedding.apiKey", "NOTEAGENT_RAG_EMBEDDING_API_KEY"
+)
 
 FIELDS = (
     F_BASE,
@@ -59,6 +77,10 @@ FIELDS = (
     F_RAG_ENABLED,
     F_RAG_EMBEDDING_ENDPOINT,
     F_RAG_EMBEDDING_MODEL,
+    F_RAG_QUERY_PREFIX,
+    F_RAG_BATCH,
+    F_RAG_CONCURRENCY,
+    F_RAG_EMBEDDING_KEY,
 )
 
 MANAGED_ENV_NAMES = frozenset(field.env for field in FIELDS)
@@ -75,9 +97,13 @@ __all__ = [
     "F_MEDIA",
     "F_MODEL",
     "F_PROVIDER",
+    "F_RAG_BATCH",
+    "F_RAG_CONCURRENCY",
     "F_RAG_EMBEDDING_ENDPOINT",
+    "F_RAG_EMBEDDING_KEY",
     "F_RAG_EMBEDDING_MODEL",
     "F_RAG_ENABLED",
+    "F_RAG_QUERY_PREFIX",
     "F_SEARCH_MODE",
     "F_SEARCH_KEY",
     "F_SEARCH_TIMEOUT",

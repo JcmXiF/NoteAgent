@@ -93,6 +93,11 @@ export type SearchSettings = {
 export type RagEmbeddingSettings = {
   endpoint: string;
   model: string;
+  queryPrefix: string;
+  batch: number;
+  concurrency: number;
+  /** A key is stored; the key itself is never sent back. */
+  apiKeySet: boolean;
 };
 
 /** The install-wide hybrid-retrieval switch and the service it calls. */
@@ -150,6 +155,11 @@ export type RagDraft = {
   enabled: boolean;
   endpoint: string;
   model: string;
+  queryPrefix: string;
+  batch: string;
+  concurrency: string;
+  apiKey: string;
+  clearApiKey: boolean;
 };
 
 export type SettingsPatch = {
@@ -490,17 +500,53 @@ export function ragDraftFrom(rag: RagSettings): RagDraft {
     enabled: rag.enabled,
     endpoint: rag.embedding.endpoint,
     model: rag.embedding.model,
+    queryPrefix: rag.embedding.queryPrefix,
+    batch: String(rag.embedding.batch),
+    concurrency: String(rag.embedding.concurrency),
+    apiKey: "",
+    clearApiKey: false,
   };
 }
 
+const RAG_NUMBER_FIELDS = [
+  {
+    key: "batch",
+    min: 1,
+    max: 512,
+    problem: "settings.invalid.ragBatch",
+  },
+  {
+    key: "concurrency",
+    min: 1,
+    max: 8,
+    problem: "settings.invalid.ragConcurrency",
+  },
+] as const;
+
 /** i18n keys for values the core would refuse on a retrieval save. */
-export function ragProblems(draft: RagDraft): string[] {
+export function ragProblems(
+  draft: RagDraft,
+  locked: readonly string[] = [],
+): string[] {
   const problems: string[] = [];
   // The service fields are hidden while the switch is off, so a draft behind
   // the switch must not block turning it off.
   if (!draft.enabled) return problems;
   if (!validBaseUrl(draft.endpoint)) problems.push("settings.invalid.ragEndpoint");
   if (!draft.model.trim()) problems.push("settings.invalid.ragModel");
+  // Empty is a real choice: it sends no instruction prefix.
+  if (draft.queryPrefix && !draft.queryPrefix.includes("{query}")) {
+    problems.push("settings.invalid.ragQueryPrefix");
+  }
+  for (const field of RAG_NUMBER_FIELDS) {
+    // A value the environment owns cannot be corrected here, so it must not
+    // hold an unrelated save hostage.
+    if (isLocked(locked, `rag.embedding.${field.key}`)) continue;
+    if (!integerInRange(draft[field.key], field.min, field.max)) {
+      problems.push(field.problem);
+    }
+  }
+  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
   return problems;
 }
 
@@ -511,7 +557,13 @@ export function ragDirty(draft: RagDraft, saved: RagSettings): boolean {
     draft.enabled !== saved.enabled ||
     (draft.enabled &&
       (trimmedUrl(draft.endpoint) !== saved.embedding.endpoint ||
-        draft.model.trim() !== saved.embedding.model))
+        draft.model.trim() !== saved.embedding.model ||
+        draft.queryPrefix !== saved.embedding.queryPrefix ||
+        RAG_NUMBER_FIELDS.some((field) =>
+          integerDirty(draft[field.key], saved.embedding[field.key]),
+        ) ||
+        Boolean(draft.apiKey.trim()) ||
+        draft.clearApiKey))
   );
 }
 
@@ -527,6 +579,19 @@ export function ragPatch(draft: RagDraft, saved: RagSettings): SettingsPatch | n
     if (draft.model.trim() !== saved.embedding.model) {
       embedding.model = draft.model.trim();
     }
+    if (draft.queryPrefix !== saved.embedding.queryPrefix) {
+      embedding.queryPrefix = draft.queryPrefix;
+    }
+    for (const field of RAG_NUMBER_FIELDS) {
+      if (
+        integerDirty(draft[field.key], saved.embedding[field.key]) &&
+        integerInRange(draft[field.key], field.min, field.max)
+      ) {
+        embedding[field.key] = Number(draft[field.key].trim());
+      }
+    }
+    if (draft.apiKey.trim()) embedding.apiKey = draft.apiKey.trim();
+    else if (draft.clearApiKey) embedding.clearApiKey = true;
     if (Object.keys(embedding).length > 0) rag.embedding = embedding;
   }
   return Object.keys(rag).length > 0 ? { rag } : null;

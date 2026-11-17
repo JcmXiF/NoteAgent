@@ -9,6 +9,7 @@ import {
   type InstallSettings,
   type ValueSource,
 } from "@/lib/install-settings";
+import { cn } from "@/lib/utils";
 
 /**
  * What the running core will actually use, and why.
@@ -23,11 +24,13 @@ function Row({
   value,
   source,
   mono,
+  multiline,
 }: {
   label: string;
   value: string;
   source?: ValueSource;
   mono?: boolean;
+  multiline?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -35,7 +38,15 @@ function Row({
         {label}
         {source ? <SourceBadge source={source} /> : null}
       </dt>
-      <dd className={mono ? "font-mono text-xs break-all" : "text-sm"}>{value}</dd>
+      <dd
+        className={cn(
+          "text-sm",
+          mono && "font-mono text-xs break-all",
+          multiline && "font-mono text-xs break-all whitespace-pre-wrap",
+        )}
+      >
+        {value}
+      </dd>
     </div>
   );
 }
@@ -165,6 +176,30 @@ export function EffectiveConfigSection({ install }: { install: InstallSettings }
             label={t("settings.retrieval.model")}
             value={text(install.rag.embedding.model)}
             source={source("rag.embedding.model")}
+          />
+          <Row
+            label={t("settings.retrieval.queryPrefix")}
+            value={
+              install.rag.embedding.queryPrefix ||
+              t("settings.retrieval.queryPrefixNone")
+            }
+            source={source("rag.embedding.queryPrefix")}
+            multiline
+          />
+          <Row
+            label={t("settings.retrieval.batch")}
+            value={String(install.rag.embedding.batch)}
+            source={source("rag.embedding.batch")}
+          />
+          <Row
+            label={t("settings.retrieval.concurrency")}
+            value={String(install.rag.embedding.concurrency)}
+            source={source("rag.embedding.concurrency")}
+          />
+          <Row
+            label={t("settings.retrieval.apiKey")}
+            value={keyState(install.rag.embedding.apiKeySet)}
+            source={source("rag.embedding.apiKey")}
           />
         </dl>
       </FieldGroup>

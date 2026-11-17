@@ -5,7 +5,33 @@
  * test file. Tests override only what they are about.
  */
 
-import type { InstallSettings, ProfileSettings } from "@/lib/install-settings";
+import type {
+  InstallSettings,
+  ProfileSettings,
+  RagEmbeddingSettings,
+  RagSettings,
+} from "@/lib/install-settings";
+
+export function ragSettings(
+  over: Partial<Omit<RagSettings, "embedding">> & {
+    embedding?: Partial<RagEmbeddingSettings>;
+  } = {},
+): RagSettings {
+  const { embedding, ...rest } = over;
+  return {
+    enabled: false,
+    embedding: {
+      endpoint: "",
+      model: "Qwen3-Embedding-0.6B",
+      queryPrefix: "Q: {query}",
+      batch: 64,
+      concurrency: 1,
+      apiKeySet: false,
+      ...embedding,
+    },
+    ...rest,
+  };
+}
 
 export function profileSettings(over: Partial<ProfileSettings> = {}): ProfileSettings {
   return {
@@ -44,10 +70,7 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
       uiLang: "",
       configured: false,
     },
-    rag: {
-      enabled: false,
-      embedding: { endpoint: "", model: "Qwen3-Embedding-0.6B" },
-    },
+    rag: ragSettings(),
     extractMedia: true,
     locked: [],
     invalid: [],
@@ -63,8 +86,15 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
 }
 
 /** Types into a controlled input the way a reader would. */
-export function typeInto(element: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+export function typeInto(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  const prototype =
+    element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
   setter?.call(element, value);
   element.dispatchEvent(new Event("input", { bubbles: true }));
 }

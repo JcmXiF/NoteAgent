@@ -28,11 +28,18 @@ from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
 from noteagent.project.layout import ProjectLayout
 from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
     DEFAULT_QUERY_PREFIX,
+    load_embedding_config,
 )
 from noteagent.settings.brief import brief_view, save_brief
-from noteagent.settings.credentials import SEARCH_KEY, llm_key
+from noteagent.settings.credentials import (
+    RAG_EMBEDDING_KEY,
+    SEARCH_KEY,
+    llm_key,
+)
 from noteagent.settings.effective import forget_applied
 from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
@@ -534,6 +541,215 @@ class RagSettingsTests(unittest.TestCase):
                 }
             )
             self.assertTrue(saved["rag"]["enabled"])
+
+    def test_advanced_embedding_defaults_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            embedding = view["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], DEFAULT_QUERY_PREFIX)
+            self.assertEqual(embedding["batch"], DEFAULT_BATCH)
+            self.assertEqual(embedding["concurrency"], DEFAULT_CONCURRENCY)
+            self.assertFalse(embedding["apiKeySet"])
+            self.assertNotIn("apiKey", embedding)
+            self.assertEqual(
+                view["sources"]["rag.embedding.queryPrefix"], "default"
+            )
+
+    def test_advanced_embedding_values_save_and_reach_the_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "m",
+                            "queryPrefix": "Q: {query}",
+                            "batch": 8,
+                            "concurrency": 2,
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                document["rag"]["embedding"]["queryPrefix"], "Q: {query}"
+            )
+            self.assertEqual(document["rag"]["embedding"]["batch"], 8)
+            self.assertEqual(document["rag"]["embedding"]["concurrency"], 2)
+
+            embedding = view["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], "Q: {query}")
+            self.assertEqual(embedding["batch"], 8)
+            self.assertEqual(embedding["concurrency"], 2)
+            self.assertEqual(view["sources"]["rag.embedding.batch"], "config")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX"],
+                "Q: {query}",
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_EMBEDDING_BATCH"], "8")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_CONCURRENCY"], "2"
+            )
+
+    def test_an_empty_query_prefix_reaches_the_runtime_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = apply_install({"rag": {"embedding": {"queryPrefix": ""}}})
+
+            self.assertEqual(view["rag"]["embedding"]["queryPrefix"], "")
+            # The loader tells "set to empty" apart from "not set"; the
+            # document's empty prefix must disable the instruction, not restore
+            # the default.
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX"), ""
+            )
+            loaded = load_embedding_config(
+                credential_store=FakeCredentials()
+            )
+            self.assertEqual(loaded.query_prefix, "")
+
+    def test_a_query_prefix_without_the_placeholder_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"embedding": {"queryPrefix": "no placeholder"}}}
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertEqual(
+                caught.exception.params.get("field"),
+                "rag.embedding.queryPrefix",
+            )
+            self.assertFalse(path.exists())
+
+    def test_enabling_refuses_a_prefix_that_was_edited_by_hand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            # The document schema accepts any prefix; the save path is what
+            # enforces the placeholder. A hand-edited file skips that path.
+            path.write_text(
+                dump_config(
+                    parse_config(
+                        {
+                            "schemaVersion": 1,
+                            "rag": {
+                                "embedding": {
+                                    "queryPrefix": "no placeholder"
+                                }
+                            },
+                        }
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {
+                        "rag": {
+                            "enabled": True,
+                            "embedding": {
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "m",
+                            },
+                        }
+                    }
+                )
+
+            self.assertEqual(
+                caught.exception.params.get("field"),
+                "rag.embedding.queryPrefix",
+            )
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(stored["rag"]["enabled"])
+
+    def test_advanced_numbers_out_of_range_are_refused(self) -> None:
+        cases = (
+            ("batch", 0),
+            ("batch", 513),
+            ("concurrency", 0),
+            ("concurrency", 9),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"embedding": {field: value}}})
+                    self.assertEqual(caught.exception.code, "settings.invalid")
+                    self.assertFalse(path.exists())
+
+    def test_the_embedding_key_lives_only_in_the_credential_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            view = apply_install({"rag": {"embedding": {"apiKey": "secret"}}})
+
+            self.assertTrue(view["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn("apiKey", view["rag"]["embedding"])
+            self.assertNotIn("secret", json.dumps(view))
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "secret"
+            )
+            # The runtime reads the key from the environment the save applies.
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_EMBEDDING_API_KEY"), "secret"
+            )
+
+            replaced = apply_install(
+                {"rag": {"embedding": {"apiKey": "second"}}}
+            )
+            self.assertTrue(replaced["rag"]["embedding"]["apiKeySet"])
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "second"
+            )
+
+            cleared = apply_install(
+                {"rag": {"embedding": {"clearApiKey": True}}}
+            )
+            self.assertFalse(cleared["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn(RAG_EMBEDDING_KEY, credentials.values)
+            self.assertNotIn("NOTEAGENT_RAG_EMBEDDING_API_KEY", os.environ)
+
+    def test_an_unavailable_credential_store_refuses_the_embedding_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+            tmp, available=False
+        ) as (path, _credentials):
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"embedding": {"apiKey": "secret"}}})
+
+            self.assertEqual(
+                caught.exception.code, "settings.keychainUnavailable"
+            )
+            self.assertFalse(path.exists())
+            self.assertNotIn("secret", json.dumps(install_view()))
+
+    def test_an_advanced_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_BATCH"] = "8"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["embedding"]["batch"], 8)
+            self.assertEqual(view["sources"]["rag.embedding.batch"], "env")
+            self.assertIn("rag.embedding.batch", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"embedding": {"batch": 16}}})
+            self.assertEqual(caught.exception.code, "settings.locked")
 
 
 class ProbeTests(unittest.TestCase):
@@ -1349,6 +1565,78 @@ class SettingsApiTests(unittest.TestCase):
                 refused.json()["params"]["field"], "rag.embedding.endpoint"
             )
             self.assertTrue(client.get("/api/settings").json()["rag"]["enabled"])
+
+    def test_advanced_rag_settings_and_key_save_through_the_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "m",
+                            "queryPrefix": "Q: {query}",
+                            "batch": 8,
+                            "concurrency": 2,
+                            "apiKey": "secret",
+                        },
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            embedding = body["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], "Q: {query}")
+            self.assertEqual(embedding["batch"], 8)
+            self.assertEqual(embedding["concurrency"], 2)
+            self.assertTrue(embedding["apiKeySet"])
+            self.assertNotIn("apiKey", embedding)
+            self.assertNotIn("secret", saved.text)
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "secret"
+            )
+
+            cleared = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"embedding": {"clearApiKey": True}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertFalse(cleared.json()["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn(RAG_EMBEDDING_KEY, credentials.values)
+
+    def test_bad_advanced_rag_values_are_coded_400s(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            client = TestClient(create_app())
+            cases = (
+                ({"queryPrefix": "no placeholder"}, "rag.embedding.queryPrefix"),
+                ({"batch": 0}, "rag.embedding.batch"),
+                ({"concurrency": 9}, "rag.embedding.concurrency"),
+            )
+            for embedding, field in cases:
+                with self.subTest(field=field):
+                    refused = client.put(
+                        "/api/settings", json={"rag": {"embedding": embedding}}
+                    )
+                    self.assertEqual(refused.status_code, 400, refused.text)
+                    self.assertEqual(
+                        refused.json()["code"], "settings.invalid"
+                    )
+                    self.assertEqual(
+                        refused.json()["params"]["field"], field
+                    )
+            self.assertFalse(path.exists())
 
     def test_a_stale_revision_is_a_409_with_its_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):

@@ -86,9 +86,9 @@ without touching the saved settings.
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
 
-The retrieval switch, the embedding address and the model are also on the settings screen, under
-Retrieval. The remaining RAG variables are read from the environment only, and a value set there
-still wins over the saved document.
+The retrieval switch and the embedding service settings (address, model, query prefix, batch,
+concurrency and key) are also on the settings screen, under Retrieval. The remaining RAG variables
+are read from the environment only, and a value set there still wins over the saved document.
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:

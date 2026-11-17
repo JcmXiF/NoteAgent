@@ -17,7 +17,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from noteagent.llm.config import process_env_keys
-from noteagent.rag.config import DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_QUERY_PREFIX,
+)
 from noteagent.settings.credentials import CredentialStoreUnavailable
 from noteagent.settings.fields import (
     F_BASE,
@@ -29,9 +34,13 @@ from noteagent.settings.fields import (
     F_MEDIA,
     F_MODEL,
     F_PROVIDER,
+    F_RAG_BATCH,
+    F_RAG_CONCURRENCY,
     F_RAG_EMBEDDING_ENDPOINT,
+    F_RAG_EMBEDDING_KEY,
     F_RAG_EMBEDDING_MODEL,
     F_RAG_ENABLED,
+    F_RAG_QUERY_PREFIX,
     F_SEARCH_MODE,
     F_SEARCH_KEY,
     F_SEARCH_TIMEOUT,
@@ -74,6 +83,10 @@ _VALUE_FIELDS: tuple[tuple[Field, str], ...] = (
     (F_RAG_ENABLED, "rag_enabled"),
     (F_RAG_EMBEDDING_ENDPOINT, "rag_embedding_endpoint"),
     (F_RAG_EMBEDDING_MODEL, "rag_embedding_model"),
+    (F_RAG_QUERY_PREFIX, "rag_query_prefix"),
+    (F_RAG_BATCH, "rag_batch"),
+    (F_RAG_CONCURRENCY, "rag_concurrency"),
+    (F_RAG_EMBEDDING_KEY, "rag_embedding_key"),
 )
 
 #: Names this module wrote into the process environment. A value it wrote is
@@ -123,6 +136,10 @@ class Effective:
     rag_enabled: Value
     rag_embedding_endpoint: Value
     rag_embedding_model: Value
+    rag_query_prefix: Value
+    rag_batch: Value
+    rag_concurrency: Value
+    rag_embedding_key: Value
     keychain_available: bool
 
     def sources(self) -> dict[str, str]:
@@ -205,7 +222,12 @@ def resolve(
             lambda: store.get_llm_key(profile.id), store
         )
     stored_search_key, search_available = _read_secret(store.get_search_key, store)
-    keychain_available = keychain_available and search_available
+    stored_rag_key, rag_available = _read_secret(
+        store.get_rag_embedding_key, store
+    )
+    keychain_available = (
+        keychain_available and search_available and rag_available
+    )
 
     generation = config.generation
     search = config.search
@@ -324,6 +346,36 @@ def resolve(
             ),
             DEFAULT_EMBEDDING_MODEL,
         ),
+        "rag_query_prefix": _plain(
+            F_RAG_QUERY_PREFIX.env,
+            config.rag.embedding.query_prefix,
+            DEFAULT_QUERY_PREFIX,
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_batch": _plain(
+            F_RAG_BATCH.env,
+            str(config.rag.embedding.batch),
+            str(DEFAULT_BATCH),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_concurrency": _plain(
+            F_RAG_CONCURRENCY.env,
+            str(config.rag.embedding.concurrency),
+            str(DEFAULT_CONCURRENCY),
+            file_exists=exists,
+            process_keys=keys,
+            environ=source,
+        ),
+        "rag_embedding_key": _secret(
+            F_RAG_EMBEDDING_KEY.env,
+            stored_rag_key,
+            process_keys=keys,
+            environ=source,
+        ),
     }
     return Effective(keychain_available=keychain_available, **values)
 
@@ -352,6 +404,9 @@ def apply(
             continue
         if value.text:
             target[field.env] = value.text
+        elif field.empty_is_value:
+            # The loader distinguishes an empty value from a missing name.
+            target[field.env] = ""
         else:
             target.pop(field.env, None)
         if track:

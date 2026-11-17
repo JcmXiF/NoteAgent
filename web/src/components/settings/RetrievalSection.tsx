@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { Input, inputClass } from "@/components/ui/input";
 import {
   Field,
   FieldGroup,
@@ -29,6 +29,7 @@ import {
   type InstallSettings,
   type RagDraft,
 } from "@/lib/install-settings";
+import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
 const STATE_LABELS: Record<RagIndexState, string> = {
@@ -61,6 +62,8 @@ export function RetrievalSection({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const [status, setStatus] = useState<RagIndexStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -71,6 +74,7 @@ export function RetrievalSection({
   const savedKey = JSON.stringify(install.rag);
   useEffect(() => {
     setDraft(ragDraftFrom(install.rag));
+    setShowKey(false);
   }, [savedKey]);
 
   const refreshStatus = useCallback(async () => {
@@ -96,7 +100,7 @@ export function RetrievalSection({
     void refreshStatus();
   }, [refreshStatus, savedKey, currentProject]);
 
-  const problems = ragProblems(draft);
+  const problems = ragProblems(draft, install.locked);
   const dirty = ragDirty(draft, install.rag);
   useEffect(() => {
     onDirty(dirty);
@@ -142,6 +146,7 @@ export function RetrievalSection({
   };
 
   const toggleLocked = locked("rag.enabled");
+  const keyLocked = locked("rag.embedding.apiKey");
   const stateKey = status
     ? (STATE_LABELS[status.state] ?? "settings.retrieval.statusUnavailable")
     : "";
@@ -180,44 +185,161 @@ export function RetrievalSection({
       </div>
 
       {draft.enabled ? (
-        <FieldGroup title={t("settings.retrieval.groupService")}>
-          <Field
-            label={t("settings.retrieval.endpoint")}
-            hint={t("settings.retrieval.endpointHint")}
-            error={problem("settings.invalid.ragEndpoint")}
-            locked={locked("rag.embedding.endpoint")}
-          >
-            <Input
-              aria-label={t("settings.retrieval.endpoint")}
-              value={draft.endpoint}
-              disabled={locked("rag.embedding.endpoint")}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) => edit({ endpoint: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t("settings.retrieval.model")}
-            hint={t("settings.retrieval.modelHint")}
-            error={problem("settings.invalid.ragModel")}
-            locked={locked("rag.embedding.model")}
-          >
-            <Input
-              aria-label={t("settings.retrieval.model")}
-              value={draft.model}
-              disabled={locked("rag.embedding.model")}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(event) => edit({ model: event.target.value })}
-            />
-          </Field>
-        </FieldGroup>
-      ) : null}
+        <>
+          <FieldGroup title={t("settings.retrieval.groupService")}>
+            <Field
+              label={t("settings.retrieval.endpoint")}
+              hint={t("settings.retrieval.endpointHint")}
+              error={problem("settings.invalid.ragEndpoint")}
+              locked={locked("rag.embedding.endpoint")}
+            >
+              <Input
+                aria-label={t("settings.retrieval.endpoint")}
+                value={draft.endpoint}
+                disabled={locked("rag.embedding.endpoint")}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(event) => edit({ endpoint: event.target.value })}
+              />
+            </Field>
+            <Field
+              label={t("settings.retrieval.model")}
+              hint={t("settings.retrieval.modelHint")}
+              error={problem("settings.invalid.ragModel")}
+              locked={locked("rag.embedding.model")}
+            >
+              <Input
+                aria-label={t("settings.retrieval.model")}
+                value={draft.model}
+                disabled={locked("rag.embedding.model")}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(event) => edit({ model: event.target.value })}
+              />
+            </Field>
+          </FieldGroup>
 
-      {draft.enabled ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {t("settings.retrieval.outbound")}
-        </p>
+          <Button
+            type="button"
+            variant="ghost"
+            className="justify-start px-0"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((open) => !open)}
+          >
+            {t("settings.retrieval.advanced")}
+          </Button>
+
+          {advancedOpen ? (
+            <FieldGroup title={t("settings.retrieval.groupAdvanced")}>
+              <Field
+                label={t("settings.retrieval.queryPrefix")}
+                hint={t("settings.retrieval.queryPrefixHint")}
+                error={problem("settings.invalid.ragQueryPrefix")}
+                locked={locked("rag.embedding.queryPrefix")}
+              >
+                <textarea
+                  aria-label={t("settings.retrieval.queryPrefix")}
+                  className={cn(
+                    inputClass,
+                    "h-auto min-h-24 py-2 font-mono text-xs leading-relaxed",
+                  )}
+                  value={draft.queryPrefix}
+                  disabled={locked("rag.embedding.queryPrefix")}
+                  spellCheck={false}
+                  onChange={(event) =>
+                    edit({ queryPrefix: event.target.value })
+                  }
+                />
+              </Field>
+              <Field
+                label={t("settings.retrieval.batch")}
+                hint={t("settings.retrieval.batchHint")}
+                error={problem("settings.invalid.ragBatch")}
+                locked={locked("rag.embedding.batch")}
+              >
+                <Input
+                  aria-label={t("settings.retrieval.batch")}
+                  value={draft.batch}
+                  inputMode="numeric"
+                  disabled={locked("rag.embedding.batch")}
+                  onChange={(event) => edit({ batch: event.target.value })}
+                />
+              </Field>
+              <Field
+                label={t("settings.retrieval.concurrency")}
+                hint={t("settings.retrieval.concurrencyHint")}
+                error={problem("settings.invalid.ragConcurrency")}
+                locked={locked("rag.embedding.concurrency")}
+              >
+                <Input
+                  aria-label={t("settings.retrieval.concurrency")}
+                  value={draft.concurrency}
+                  inputMode="numeric"
+                  disabled={locked("rag.embedding.concurrency")}
+                  onChange={(event) =>
+                    edit({ concurrency: event.target.value })
+                  }
+                />
+              </Field>
+              <Field
+                label={t("settings.retrieval.apiKey")}
+                hint={
+                  draft.clearApiKey
+                    ? t("settings.retrieval.apiKeyClearing")
+                    : install.rag.embedding.apiKeySet
+                      ? t("settings.retrieval.apiKeyKeep")
+                      : t("settings.retrieval.apiKeyMissing")
+                }
+                error={problem("settings.invalid.secret")}
+                locked={keyLocked}
+              >
+                <div className="flex gap-1">
+                  <Input
+                    type={showKey ? "text" : "password"}
+                    aria-label={t("settings.retrieval.apiKey")}
+                    value={draft.apiKey}
+                    disabled={keyLocked || draft.clearApiKey}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(event) =>
+                      edit({
+                        apiKey: event.target.value,
+                        clearApiKey: false,
+                      })
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowKey((value) => !value)}
+                  >
+                    {showKey ? t("settings.hide") : t("settings.show")}
+                  </Button>
+                </div>
+                {install.rag.embedding.apiKeySet && !keyLocked ? (
+                  <button
+                    type="button"
+                    className="self-start text-xs text-muted-foreground underline-offset-2 hover:underline"
+                    onClick={() =>
+                      edit({
+                        clearApiKey: !draft.clearApiKey,
+                        apiKey: "",
+                      })
+                    }
+                  >
+                    {draft.clearApiKey
+                      ? t("settings.keepKey")
+                      : t("settings.clearKey")}
+                  </button>
+                ) : null}
+              </Field>
+            </FieldGroup>
+          ) : null}
+
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("settings.retrieval.outbound")}
+          </p>
+        </>
       ) : null}
 
       <SaveRow

@@ -246,6 +246,11 @@ class SearchSettingsBody(BaseModel):
 class RagEmbeddingSettingsBody(BaseModel):
     endpoint: str | None = None
     model: str | None = None
+    queryPrefix: str | None = None
+    batch: int | None = None
+    concurrency: int | None = None
+    apiKey: str | None = None
+    clearApiKey: bool = False
 
 
 class RagSettingsBody(BaseModel):
