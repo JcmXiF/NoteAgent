@@ -12,6 +12,12 @@ from dataclasses import dataclass
 
 from noteagent.rag.env import read_boolean, read_integer, read_number
 from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
+from noteagent.settings.credentials import (
+    RAG_RERANK_KEY,
+    CredentialStore,
+    CredentialStoreUnavailable,
+    keyring_store,
+)
 
 __all__ = [
     "DEFAULT_TIMEOUT",
@@ -72,10 +78,17 @@ class RerankConfig:
 
 
 def load_rerank_config(
-    *, environ: Mapping[str, str] | None = None
+    *,
+    environ: Mapping[str, str] | None = None,
+    credential_store: CredentialStore | None = None,
 ) -> RerankConfig:
     """Read rerank settings; the service is off unless explicitly enabled."""
     source = os.environ if environ is None else environ
+    key = (
+        source[ENV_API_KEY].strip()
+        if ENV_API_KEY in source
+        else _stored_key(credential_store)
+    )
     return RerankConfig(
         enabled=read_boolean(
             source, ENV_ENABLED, False, error=RerankConfigError
@@ -92,9 +105,19 @@ def load_rerank_config(
             source, ENV_TOP_N, DEFAULT_TOP_N,
             error=RerankConfigError,
         ),
-        api_key=source.get(ENV_API_KEY, "").strip(),
+        api_key=key,
         timeout_s=read_number(
             source, ENV_TIMEOUT, DEFAULT_TIMEOUT,
             error=RerankConfigError,
         ),
     )
+
+
+def _stored_key(store: CredentialStore | None) -> str:
+    try:
+        chosen = store if store is not None else keyring_store()
+        if not chosen.available():
+            return ""
+        return (chosen.get(RAG_RERANK_KEY) or "").strip()
+    except CredentialStoreUnavailable:
+        return ""

@@ -81,7 +81,7 @@ without touching the saved settings.
 | `NOTEAGENT_RAG_ENABLED` | Turn hybrid retrieval on (`false` by default) |
 | `NOTEAGENT_RAG_EMBEDDING_ENDPOINT`, `NOTEAGENT_RAG_EMBEDDING_MODEL`, `NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX` | The local embedding service; the model defaults to Qwen3-Embedding-0.6B |
 | `NOTEAGENT_RAG_EMBEDDING_BATCH`, `NOTEAGENT_RAG_EMBEDDING_CONCURRENCY`, `NOTEAGENT_RAG_EMBEDDING_RETRIES`, `NOTEAGENT_RAG_EMBEDDING_QUERY_TIMEOUT`, `NOTEAGENT_RAG_EMBEDDING_PAGE_TIMEOUT`, `NOTEAGENT_RAG_EMBEDDING_API_KEY` | Advanced embedding controls; the key may also come from the credential store |
-| `NOTEAGENT_RAG_RERANK_ENABLED`, `NOTEAGENT_RAG_RERANK_ENDPOINT`, `NOTEAGENT_RAG_RERANK_MODEL`, `NOTEAGENT_RAG_RERANK_CANDIDATES`, `NOTEAGENT_RAG_RERANK_TOP_N`, `NOTEAGENT_RAG_RERANK_API_KEY`, `NOTEAGENT_RAG_RERANK_TIMEOUT` | The optional rerank service (off by default) |
+| `NOTEAGENT_RAG_RERANK_ENABLED`, `NOTEAGENT_RAG_RERANK_ENDPOINT`, `NOTEAGENT_RAG_RERANK_MODEL`, `NOTEAGENT_RAG_RERANK_CANDIDATES`, `NOTEAGENT_RAG_RERANK_TOP_N`, `NOTEAGENT_RAG_RERANK_API_KEY`, `NOTEAGENT_RAG_RERANK_TIMEOUT` | The optional rerank service (off by default); its key may also come from the credential store |
 | `NOTEAGENT_HOME` | Where projects and notes live |
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |

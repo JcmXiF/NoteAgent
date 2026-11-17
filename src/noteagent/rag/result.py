@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from noteagent.rag.types import Mode
+
 __all__ = ["RagHit", "RagSearchResult"]
 
 
@@ -27,6 +29,6 @@ class RagSearchResult:
     """The hybrid or lexical result, and why it is lexical when it is."""
 
     hits: tuple[RagHit, ...]
-    mode: str
+    mode: Mode
     degraded: bool = False
     warnings: tuple[str, ...] = ()

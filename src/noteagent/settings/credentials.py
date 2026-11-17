@@ -26,6 +26,9 @@ SEARCH_KEY = "search:external"
 #: The local embedding endpoint's key, when the service asks for one.
 RAG_EMBEDDING_KEY = "rag:embedding"
 
+#: The optional rerank endpoint's key, when the service asks for one.
+RAG_RERANK_KEY = "rag:rerank"
+
 
 def llm_key(profile_id: str) -> str:
     """The credential-store entry for one connection profile."""
@@ -134,6 +137,7 @@ def keyring_store() -> CredentialStore:
 __all__ = [
     "KEYCHAIN_SERVICE",
     "RAG_EMBEDDING_KEY",
+    "RAG_RERANK_KEY",
     "SEARCH_KEY",
     "CredentialStore",
     "CredentialStoreUnavailable",

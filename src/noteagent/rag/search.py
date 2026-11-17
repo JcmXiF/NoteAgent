@@ -17,9 +17,11 @@ from pathlib import Path
 from noteagent.project.layout import ProjectLayout
 from noteagent.rag.bm25 import Bm25Index
 from noteagent.rag.chunker import ChunkLimits
+from noteagent.rag.chunker import KIND_WIKI
 from noteagent.rag.embedding import EmbeddingClient, OpenAIEmbeddingClient
 from noteagent.rag.fusion import FusedHit, fuse
 from noteagent.rag.index import (
+    SCOPE_WIKI,
     STATUS_READY,
     IndexStatus,
     RetrievalIndex,
@@ -75,7 +77,7 @@ class RagSearchBackend:
             layout,
             self._embedder,
             model=settings.embedding.model,
-            scope="wiki",
+            scope=SCOPE_WIKI,
             limits=ChunkLimits(),
             query_prefix=settings.embedding.query_prefix,
         )
@@ -112,10 +114,7 @@ class RagSearchBackend:
             self._bm25 = None
             self._synced = True
             self._last_sync = self._clock()
-            self._last_sync_warnings = tuple(
-                f"{failure.unit_id}: {failure.reason}"
-                for failure in report.failures
-            )
+            self._last_sync_warnings = _failure_warnings(report)
         return report
 
     def search(
@@ -135,7 +134,9 @@ class RagSearchBackend:
 
         try:
             lexical = self._lexical().search(
-                text, limit=DEFAULT_CANDIDATE_LIMIT, kind="wiki"
+                text,
+                limit=DEFAULT_CANDIDATE_LIMIT,
+                kind=KIND_WIKI,
             )
         except Exception as err:  # noqa: BLE001 - fallback is the contract
             return RagSearchResult(
@@ -147,7 +148,7 @@ class RagSearchBackend:
                 text,
                 limit=DEFAULT_CANDIDATE_LIMIT,
                 over_fetch=150,
-                kinds=("wiki",),
+                kinds=(KIND_WIKI,),
             )
         except Exception as err:  # noqa: BLE001 - fallback is the contract
             return RagSearchResult(
@@ -205,10 +206,7 @@ class RagSearchBackend:
         try:
             report = self._sync_if_due()
             self._last_sync_warnings = (
-                tuple(
-                    f"{failure.unit_id}: {failure.reason}"
-                    for failure in report.failures
-                )
+                _failure_warnings(report)
                 if report is not None
                 else ()
             )
@@ -251,6 +249,13 @@ def _rag_hit(hit: FusedHit) -> RagHit:
         excerpt=hit.primary_text,
         match=hit.match_label,
         score=hit.score,
+    )
+
+
+def _failure_warnings(report: SyncReport) -> tuple[str, ...]:
+    return tuple(
+        f"{failure.unit_id}: {failure.reason}"
+        for failure in report.failures
     )
 
 

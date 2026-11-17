@@ -17,7 +17,10 @@ from noteagent.rag.settings import (
     RagConfigError,
     load_rag_settings,
 )
-from noteagent.settings.credentials import RAG_EMBEDDING_KEY
+from noteagent.settings.credentials import (
+    RAG_EMBEDDING_KEY,
+    RAG_RERANK_KEY,
+)
 
 
 class RagSettingsTests(unittest.TestCase):
@@ -72,6 +75,22 @@ class RagSettingsTests(unittest.TestCase):
         )
 
         self.assertEqual(loaded.embedding.api_key, "stored-key")
+
+    def test_the_rerank_key_comes_from_the_credential_store_too(self) -> None:
+        store = FakeCredentials()
+        store.values[RAG_RERANK_KEY] = "rerank-key"
+
+        loaded = load_rag_settings(
+            environ={
+                ENV_ENABLED: "true",
+                ENV_ENDPOINT: "http://embedding/v1",
+                ENV_RERANK_ENABLED: "true",
+                ENV_RERANK_ENDPOINT: "http://rerank/v1",
+            },
+            credential_store=store,
+        )
+
+        self.assertEqual(loaded.rerank.api_key, "rerank-key")
 
     def test_a_bad_boolean_is_refused(self) -> None:
         with self.assertRaises(RagConfigError):

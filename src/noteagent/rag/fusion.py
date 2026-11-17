@@ -7,7 +7,7 @@ fact from BM25, and it is a tier of its own: no amount of RRF score puts a
 merely similar page above one the reader named exactly.
 
 Fusion returns up to fifty page candidates. The search backend shows the first
-twenty when reranking is off; the reranker (ticket 09) consumes the fifty.
+twenty when reranking is off; the optional reranker consumes the fifty.
 """
 
 from __future__ import annotations

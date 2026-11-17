@@ -89,8 +89,9 @@ class EmbeddingConfig:
     """One OpenAI-compatible embedding endpoint and the contract it must keep.
 
     ``retries`` counts attempts after the first request, so three means at most
-    four requests. ``concurrency`` is a caller hint: this client sends its
-    batches in order, and a page-level caller decides whether to overlap pages.
+    four requests. ``concurrency`` is reserved: the pipeline currently embeds
+    pages one at a time, and the field is there for the caller that later
+    overlaps them.
     """
 
     endpoint: str = ""

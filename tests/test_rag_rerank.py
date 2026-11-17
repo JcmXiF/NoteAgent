@@ -8,6 +8,8 @@ import unittest
 
 import httpx
 
+from fakes import FakeCredentials
+
 from noteagent.rag.bm25 import LexicalHit
 from noteagent.rag.faux import FakeReranker
 from noteagent.rag.fusion import FusedHit
@@ -89,7 +91,9 @@ def with_vector(page_id: str, text: str, vector_text: str) -> FusedHit:
 
 class ConfigTests(unittest.TestCase):
     def test_the_default_is_disabled(self) -> None:
-        loaded = load_rerank_config(environ={})
+        loaded = load_rerank_config(
+            environ={}, credential_store=FakeCredentials()
+        )
 
         self.assertFalse(loaded.enabled)
         self.assertEqual(loaded.endpoint, "")
@@ -106,7 +110,8 @@ class ConfigTests(unittest.TestCase):
                 ENV_MODEL: " qwen3-reranker ",
                 ENV_CANDIDATES: "20",
                 ENV_TOP_N: "5",
-            }
+            },
+            credential_store=FakeCredentials(),
         )
 
         self.assertTrue(loaded.enabled)
@@ -117,7 +122,10 @@ class ConfigTests(unittest.TestCase):
 
     def test_a_bad_boolean_is_refused(self) -> None:
         with self.assertRaises(RerankConfigError):
-            load_rerank_config(environ={ENV_ENABLED: "maybe"})
+            load_rerank_config(
+                environ={ENV_ENABLED: "maybe"},
+                credential_store=FakeCredentials(),
+            )
 
     def test_bad_numbers_are_refused(self) -> None:
         for name, value in (
@@ -126,7 +134,10 @@ class ConfigTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 with self.assertRaises(RerankConfigError):
-                    load_rerank_config(environ={name: value})
+                    load_rerank_config(
+                        environ={name: value},
+                        credential_store=FakeCredentials(),
+                    )
 
     def test_top_n_must_be_positive(self) -> None:
         with self.assertRaises(RerankConfigError):

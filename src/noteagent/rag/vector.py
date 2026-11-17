@@ -19,6 +19,7 @@ from pathlib import Path
 
 import lancedb
 
+from noteagent.rag.chunker import KIND_NOTE, KIND_WIKI
 from noteagent.rag.config import EmbeddingError
 from noteagent.rag.embedding import EmbeddingClient
 from noteagent.rag.filters import sql_string
@@ -34,7 +35,7 @@ __all__ = [
 #: The share of the rest-of-page average added to the best chunk's similarity.
 DEFAULT_TAIL_WEIGHT = 0.3
 #: The kinds the stored table may hold; production narrows this to wiki.
-DEFAULT_KINDS = ("wiki", "note")
+DEFAULT_KINDS = (KIND_WIKI, KIND_NOTE)
 
 
 @dataclass(frozen=True, slots=True)

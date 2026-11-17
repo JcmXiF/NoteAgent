@@ -57,5 +57,7 @@ def load_rag_settings(
         embedding=load_embedding_config(
             environ=source, credential_store=credential_store
         ),
-        rerank=load_rerank_config(environ=source),
+        rerank=load_rerank_config(
+            environ=source, credential_store=credential_store
+        ),
     )

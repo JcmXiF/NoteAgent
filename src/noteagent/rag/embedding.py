@@ -22,6 +22,7 @@ from noteagent.rag.config import (
     EmbeddingConfigError,
     EmbeddingError,
 )
+from noteagent.rag.env import endpoint_path
 from noteagent.util.redact import redact
 
 __all__ = [
@@ -146,7 +147,7 @@ class OpenAIEmbeddingClient:
                 "the embedding endpoint is not configured"
             )
         self._config = config
-        self._url = _embeddings_url(endpoint)
+        self._url = endpoint_path(endpoint, "embeddings")
         self._client = client
         self._sleep = sleep or time.sleep
         self._clock = clock or time.monotonic
@@ -449,13 +450,6 @@ def _refuse_bare_string(texts: object) -> None:
         raise TypeError(
             "embed expects a sequence of texts, not one string"
         )
-
-
-def _embeddings_url(endpoint: str) -> str:
-    url = endpoint.rstrip("/")
-    if url.endswith("/embeddings"):
-        return url
-    return f"{url}/embeddings"
 
 
 def _too_long(body: str) -> bool:
