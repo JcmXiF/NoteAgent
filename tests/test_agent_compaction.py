@@ -587,7 +587,8 @@ class KernelCompactionTests(unittest.TestCase):
             sum(1 for entry in entries if entry["type"] == "compaction"),
             2,
         )
-        self.assertEqual(entries[-1]["content"], "final answer")
+        messages = [entry for entry in entries if entry["type"] == "message"]
+        self.assertEqual(messages[-1]["content"], "final answer")
         self.assertTrue(
             any(
                 entry.get("role") == "toolResult"

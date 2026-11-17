@@ -9,7 +9,7 @@ the next round starts from what the log now says.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
@@ -49,6 +49,15 @@ from noteagent.agent.propose import (
     Proposal,
     ProposeError,
     parse_proposal,
+)
+from noteagent.agent.run_marker import (
+    CANCELLED,
+    FAILED,
+    FINISHED,
+    RUNNING,
+    WAITING,
+    RunMarker,
+    marker_entry,
 )
 from noteagent.agent.runtime import (
     BusyError,
@@ -170,6 +179,9 @@ class KernelRuntime:
         #: a final answer or a control action.
         max_turns: int = 50,
         compaction: CompactionLimits | None = None,
+        #: Non-secret project/config digests a run marker records. The kernel
+        #: stays generic: the composition root decides what the project is.
+        fingerprint: Mapping[str, str] | None = None,
     ) -> None:
         self._model = model
         self._trace = trace
@@ -184,6 +196,7 @@ class KernelRuntime:
         self._model_name = model_name
         self._max_turns = max_turns
         self._compaction = compaction or CompactionLimits()
+        self._fingerprint = dict(fingerprint or {})
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
         if isinstance(request, Retry):
@@ -320,6 +333,7 @@ class KernelRuntime:
         # keeps it, so the reader can see where the answer ended.
         partial: list[str] = []
         try:
+            self._mark(session_id, run_id, RUNNING)
             sink(StatusEvent("thinking", "think"))
             model_calls = 0
             overflow_retried = False
@@ -333,6 +347,12 @@ class KernelRuntime:
                     message = (
                         "the run exceeded "
                         f"{self._max_turns} model turns"
+                    )
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note="max_turns_exceeded",
                     )
                     sink(ErrorEvent("max_turns_exceeded", message))
                     return RunResult(
@@ -385,6 +405,12 @@ class KernelRuntime:
                         if compacted:
                             # The prompt is smaller now; ask once more.
                             continue
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note=err.code,
+                    )
                     sink(
                         ErrorEvent(
                             err.code,
@@ -431,6 +457,12 @@ class KernelRuntime:
                 answer = assistant.content.strip()
                 if not answer:
                     message = "the model returned no answer"
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note="model_error",
+                    )
                     sink(ErrorEvent("model_error", message))
                     return RunResult(session_id, run_id, "failed", error=message)
                 entry: dict[str, object] = {
@@ -446,6 +478,7 @@ class KernelRuntime:
                         "cacheReadTokens": assistant.usage.cache_read_tokens,
                     }
                 self._sessions.append(session_id, entry)
+                self._mark(session_id, run_id, FINISHED)
                 sink(
                     DoneEvent(
                         {"id": session_id}, {"id": run_id, "status": "completed"}
@@ -456,10 +489,61 @@ class KernelRuntime:
             return self._cancelled_result(
                 session_id, run_id, sink, "".join(partial)
             )
+        except Exception as err:
+            self._mark(
+                session_id,
+                run_id,
+                FAILED,
+                note=f"{type(err).__name__}: {err}"[:200],
+            )
+            raise
 
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
         """The tools the model may call, with the control action beside them."""
         return (PROPOSE_TOOL,) + self._tools.model_tools()
+
+    def _toolset_name(self) -> str:
+        """A stable name for what this run could do, recorded on its marker."""
+        names = ["propose"]
+        names.extend(tool.name for tool in self._tools.enabled())
+        return "tools:" + ",".join(names)
+
+    def _mark(
+        self,
+        session_id: str,
+        run_id: str,
+        state: str,
+        *,
+        note: str = "",
+        resumes: str = "",
+    ) -> None:
+        """Record where the run stands, without making the marker a condition.
+
+        The transcript is the truth; a marker that cannot be written is a lost
+        recovery hint, not a reason to lose the answer that was just committed.
+        """
+        try:
+            snapshot = self._sessions.load(session_id)
+            last = snapshot.entries[-1].get("id") if snapshot.entries else ""
+            marker = RunMarker(
+                run_id=run_id,
+                state=state,
+                last_entry_id=last if isinstance(last, str) else "",
+                model=self._model_name,
+                toolset=self._toolset_name(),
+                config_hash=self._fingerprint.get("configHash", ""),
+                project_root=self._fingerprint.get("projectRoot", ""),
+                wiki_generation=self._fingerprint.get("wikiGeneration", ""),
+                source_fingerprint=self._fingerprint.get(
+                    "sourceFingerprint", ""
+                ),
+                resumes=resumes,
+                note=note,
+                created_at=iso_timestamp(self._clock),
+            )
+            self._sessions.append(session_id, marker_entry(marker))
+        except Exception:
+            logger.exception("the run marker could not be written")
 
     def _read_proposal(
         self, session_id: str, call: ToolCall
@@ -521,6 +605,7 @@ class KernelRuntime:
                 },
             )
         wait = self._record_wait(session_id, proposal)
+        self._mark(session_id, run_id, WAITING)
         sink(WaitEvent(wait))
         sink(
             DoneEvent(
@@ -676,6 +761,7 @@ class KernelRuntime:
         """End the run because the summary call could not finish."""
         if err.code == "cancelled":
             raise RunCancelled("run cancelled") from err
+        self._mark(session_id, run_id, FAILED, note=err.code)
         sink(
             ErrorEvent(
                 "compaction_failed",
@@ -704,6 +790,7 @@ class KernelRuntime:
                     "stopReason": "aborted",
                 },
             )
+        self._mark(session_id, run_id, CANCELLED, note="cancelled")
         sink(ErrorEvent("cancelled", "the run was cancelled", retryable=True))
         return RunResult(session_id, run_id, "cancelled")
 

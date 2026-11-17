@@ -78,7 +78,11 @@ class SessionQueryTests(unittest.TestCase):
         )
         self.assertEqual(done["session"]["messages"][-1]["content"], "答案")
         self.assertEqual(
-            [entry["role"] for entry in store.load("s1").entries],
+            [
+                entry["role"]
+                for entry in store.load("s1").entries
+                if entry.get("type") == "message"
+            ],
             ["user", "assistant"],
         )
 
@@ -104,7 +108,11 @@ class SessionQueryTests(unittest.TestCase):
         self.assertEqual(events[-1][1]["code"], "model_error")
         self.assertTrue(events[-1][1]["retryable"])
         self.assertEqual(
-            [entry["role"] for entry in store.load("s1").entries],
+            [
+                entry["role"]
+                for entry in store.load("s1").entries
+                if entry.get("type") == "message"
+            ],
             ["user"],
         )
 
@@ -236,7 +244,11 @@ class WikiToolApiTests(unittest.TestCase):
         self.assertEqual(step["cards"][0]["path"], "wiki/concepts/entropy.md")
         entries = self.store.load("s1").entries
         self.assertEqual(
-            [entry["role"] for entry in entries],
+            [
+                entry["role"]
+                for entry in entries
+                if entry.get("type") == "message"
+            ],
             ["user", "assistant", "toolResult", "assistant"],
         )
 

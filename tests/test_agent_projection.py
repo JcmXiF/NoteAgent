@@ -432,5 +432,62 @@ class GoldenSessionTests(unittest.TestCase):
         )
 
 
+class RunMarkerProjectionTests(unittest.TestCase):
+    def test_a_resume_note_reaches_the_model_as_a_system_message(self) -> None:
+        entries = [
+            _entry("e1", "message", role="user", content="问题"),
+            _entry(
+                "e2",
+                "run_marker",
+                runId="run-1",
+                state="running",
+                resumes="run-0",
+                note="从上次中断处继续。",
+            ),
+            _assistant("e3", "答案"),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(projection.diagnostics, ())
+        self.assertEqual(
+            [(message.role, message.content) for message in projection.messages],
+            [
+                ("user", "问题"),
+                ("system", "从上次中断处继续。"),
+                ("assistant", "答案"),
+            ],
+        )
+        self.assertEqual(
+            [(item.role, item.content) for item in projection.transcript],
+            [("user", "问题"), ("assistant", "答案")],
+        )
+
+    def test_a_terminal_marker_is_silent(self) -> None:
+        entries = [
+            _entry("e1", "message", role="user", content="问题"),
+            _assistant("e2", "答案"),
+            _entry(
+                "e3",
+                "run_marker",
+                runId="run-1",
+                state="finished",
+                note="model_error",
+            ),
+        ]
+
+        projection = project(entries)
+
+        self.assertEqual(projection.diagnostics, ())
+        self.assertEqual(
+            [message.role for message in projection.messages],
+            ["user", "assistant"],
+        )
+        self.assertEqual(
+            [item.content for item in projection.transcript],
+            ["问题", "答案"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

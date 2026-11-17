@@ -1,0 +1,191 @@
+"""The run marker: what it records, and what the transcript says without one."""
+
+from __future__ import annotations
+
+import unittest
+
+from noteagent.agent.run_marker import (
+    CANCELLED,
+    FINISHED,
+    INTERRUPTED,
+    RUNNING,
+    WAITING,
+    RunMarker,
+    infer_terminal,
+    latest_markers,
+    marker_entry,
+    parse_marker,
+)
+
+
+def _user(entry_id: str = "e-u", content: str = "什么是熵？") -> dict[str, object]:
+    return {
+        "type": "message",
+        "id": entry_id,
+        "role": "user",
+        "content": content,
+    }
+
+
+def _assistant(
+    entry_id: str = "e-a",
+    *,
+    content: str = "熵衡量不确定性。",
+    tool_calls: list[dict[str, object]] | None = None,
+    stop_reason: str = "stop",
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "type": "message",
+        "id": entry_id,
+        "role": "assistant",
+        "content": content,
+        "stopReason": stop_reason,
+    }
+    if tool_calls is not None:
+        entry["toolCalls"] = tool_calls
+    return entry
+
+
+def _tool_result(entry_id: str = "e-t") -> dict[str, object]:
+    return {
+        "type": "message",
+        "id": entry_id,
+        "role": "toolResult",
+        "toolCallId": "c1",
+        "name": "wiki_read",
+        "content": "[[concepts/entropy]] — 熵",
+    }
+
+
+def _wait(entry_id: str = "e-w", kind: str = "wait_proposed") -> dict[str, object]:
+    return {
+        "type": kind,
+        "id": entry_id,
+        "waitId": "w1",
+        "job": "plan",
+        "interface": "source",
+    }
+
+
+class MarkerEntryTests(unittest.TestCase):
+    def test_a_marker_round_trips_and_keeps_no_content(self) -> None:
+        marker = RunMarker(
+            run_id="run-1",
+            state=RUNNING,
+            last_entry_id="e-u",
+            model="faux",
+            toolset="tools:abc",
+            config_hash="cfg",
+            project_root="/project",
+            wiki_generation="wiki-gen",
+            source_fingerprint="src-gen",
+            resumes="run-0",
+            note="resume from the previous run",
+            created_at="2026-11-18T09:00:00Z",
+        )
+
+        entry = marker_entry(marker)
+
+        self.assertEqual(entry["type"], "run_marker")
+        self.assertEqual(entry["runId"], "run-1")
+        self.assertEqual(entry["state"], RUNNING)
+        self.assertEqual(entry["lastEntryId"], "e-u")
+        self.assertNotIn("content", entry)
+
+        parsed = parse_marker({**entry, "id": "e-m", "ts": "..."})
+
+        assert parsed is not None
+        self.assertEqual(parsed.run_id, "run-1")
+        self.assertEqual(parsed.state, RUNNING)
+        self.assertEqual(parsed.last_entry_id, "e-u")
+        self.assertEqual(parsed.model, "faux")
+        self.assertEqual(parsed.toolset, "tools:abc")
+        self.assertEqual(parsed.config_hash, "cfg")
+        self.assertEqual(parsed.project_root, "/project")
+        self.assertEqual(parsed.wiki_generation, "wiki-gen")
+        self.assertEqual(parsed.source_fingerprint, "src-gen")
+        self.assertEqual(parsed.resumes, "run-0")
+        self.assertEqual(parsed.note, "resume from the previous run")
+        self.assertEqual(parsed.entry_id, "e-m")
+
+    def test_a_malformed_marker_is_ignored(self) -> None:
+        self.assertIsNone(parse_marker({"type": "run_marker"}))
+        self.assertIsNone(parse_marker({"type": "run_marker", "runId": "run-1"}))
+        self.assertIsNone(parse_marker({"type": "message", "runId": "run-1"}))
+
+    def test_the_latest_marker_per_run_wins(self) -> None:
+        entries = [
+            marker_entry(RunMarker("run-1", RUNNING)),
+            marker_entry(RunMarker("run-2", RUNNING)),
+            marker_entry(RunMarker("run-1", FINISHED)),
+        ]
+
+        markers = latest_markers(entries)
+
+        self.assertEqual(markers["run-1"].state, FINISHED)
+        self.assertEqual(markers["run-2"].state, RUNNING)
+
+
+class TerminalInferenceTests(unittest.TestCase):
+    def test_a_final_answer_is_finished(self) -> None:
+        inferred = infer_terminal([_user(), _assistant()])
+
+        self.assertEqual(inferred.state, FINISHED)
+        self.assertEqual(inferred.last_entry_id, "e-a")
+
+    def test_a_tool_call_without_its_result_is_interrupted(self) -> None:
+        inferred = infer_terminal(
+            [_user(), _assistant(tool_calls=[{"id": "c1", "name": "wiki_read"}])]
+        )
+
+        self.assertEqual(inferred.state, INTERRUPTED)
+        self.assertEqual(inferred.last_entry_id, "e-a")
+
+    def test_a_tool_result_is_interrupted_until_the_next_turn(self) -> None:
+        inferred = infer_terminal(
+            [
+                _user(),
+                _assistant(tool_calls=[{"id": "c1", "name": "wiki_read"}]),
+                _tool_result(),
+            ]
+        )
+
+        self.assertEqual(inferred.state, INTERRUPTED)
+        self.assertEqual(inferred.last_entry_id, "e-t")
+
+    def test_a_wait_is_waiting(self) -> None:
+        inferred = infer_terminal([_user(), _wait()])
+
+        self.assertEqual(inferred.state, WAITING)
+        self.assertEqual(inferred.last_entry_id, "e-w")
+
+    def test_an_aborted_answer_is_cancelled(self) -> None:
+        inferred = infer_terminal([_user(), _assistant(stop_reason="aborted")])
+
+        self.assertEqual(inferred.state, CANCELLED)
+
+    def test_a_terminal_marker_is_trusted(self) -> None:
+        inferred = infer_terminal(
+            [
+                _user(),
+                _assistant(),
+                marker_entry(RunMarker("run-1", FINISHED, last_entry_id="e-a")),
+            ]
+        )
+
+        self.assertEqual(inferred.state, FINISHED)
+        self.assertEqual(inferred.last_entry_id, "e-a")
+
+    def test_a_question_without_an_answer_is_interrupted(self) -> None:
+        inferred = infer_terminal([_user()])
+
+        self.assertEqual(inferred.state, INTERRUPTED)
+
+    def test_an_empty_session_is_interrupted(self) -> None:
+        inferred = infer_terminal([])
+
+        self.assertEqual(inferred.state, INTERRUPTED)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -29,6 +29,17 @@ from noteagent.agent.model import (
 )
 from noteagent.agent.tools import ToolRegistry, ToolResult, ToolSpec
 
+
+def _messages(entries):
+    """The turns in a session log, without the run markers beside them."""
+    return [entry for entry in entries if entry.get("type") == "message"]
+
+
+def _last_message(entries):
+    messages = _messages(entries)
+    return messages[-1] if messages else {}
+
+
 PLAN_PAYLOAD = {
     "intent": "熵",
     "candidates": [
@@ -115,12 +126,12 @@ def wiki_read_and_answer(run: CaseRun) -> None:
     entries = api.entries(session)
     run.equal(
         "the log holds the question, the tool pair and the answer",
-        [entry.get("role") for entry in entries],
+        [entry.get("role") for entry in _messages(entries)],
         ["user", "assistant", "toolResult", "assistant"],
     )
     run.check(
         "the tool result carries the page to the model",
-        "熵衡量不确定性" in str(entries[2].get("content") or ""),
+        "熵衡量不确定性" in str(_messages(entries)[2].get("content") or ""),
         "the page body never reached the model",
     )
     trace = api.trace(session)
@@ -351,7 +362,7 @@ def mixed_propose_rejected(run: CaseRun) -> None:
     )
     run.equal(
         "the answer is the last entry",
-        entries[-1].get("content"),
+        _last_message(entries).get("content"),
         "这次没有启动作业。",
     )
     run.equal("the session is not waiting", api.get_session(session)["wait"], None)
@@ -489,7 +500,7 @@ def compaction_threshold(run: CaseRun) -> None:
     )
     run.equal(
         "the answer is the last entry",
-        entries[-1].get("content"),
+        _last_message(entries).get("content"),
         "现在总结如下。",
     )
 
@@ -570,7 +581,7 @@ def tool_error_recovers(run: CaseRun) -> None:
     )
     run.equal(
         "the answer is the last entry",
-        entries[-1].get("content"),
+        _last_message(entries).get("content"),
         "第一次失败，第二次读到了熵。",
     )
 
@@ -643,11 +654,11 @@ def cancel_keeps_partial(run: CaseRun) -> None:
     entries = api.entries(session)
     run.equal(
         "the log keeps the question and the aborted answer",
-        [entry.get("role") for entry in entries],
+        [entry.get("role") for entry in _messages(entries)],
         ["user", "assistant"],
     )
-    run.equal("the partial is what was streamed", entries[-1].get("content"), "部分")
-    run.equal("the partial is marked aborted", entries[-1].get("stopReason"), "aborted")
+    run.equal("the partial is what was streamed", _last_message(entries).get("content"), "部分")
+    run.equal("the partial is marked aborted", _last_message(entries).get("stopReason"), "aborted")
     run.equal("the session is idle again", api.get_session(session)["state"]["busy"], False)
 
 
@@ -708,7 +719,7 @@ def old_chats_migrate(run: CaseRun) -> None:
     entries = api.entries("c-1")
     run.equal(
         "the new store holds the messages",
-        [entry.get("role") for entry in entries],
+        [entry.get("role") for entry in _messages(entries)],
         ["user", "assistant"],
     )
     run.equal(

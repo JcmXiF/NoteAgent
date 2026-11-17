@@ -27,6 +27,7 @@ from noteagent.llm.config import load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
@@ -225,6 +226,11 @@ def session_runtime(
     model = deps.model
     if model is None:
         model = OpenAIModelClient(load_llm_config())
+    fingerprint = (
+        project_fingerprint(layout, config=deps.settings or {})
+        if layout is not None
+        else {}
+    )
     return KernelRuntime(
         model=model,
         sessions=store,
@@ -237,6 +243,8 @@ def session_runtime(
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.
         trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
+        # Non-secret digests a resume can compare; the kernel only records them.
+        fingerprint=fingerprint,
     )
 
 

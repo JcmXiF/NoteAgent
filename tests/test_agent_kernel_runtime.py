@@ -80,7 +80,12 @@ class KernelRuntimeTests(unittest.TestCase):
         )
         self.store.create("s1")
 
-    def runtime(self, model, tools: ToolRegistry | None = None) -> KernelRuntime:
+    def runtime(
+        self,
+        model,
+        tools: ToolRegistry | None = None,
+        fingerprint: dict[str, str] | None = None,
+    ) -> KernelRuntime:
         return KernelRuntime(
             model=model,
             sessions=self.store,
@@ -88,6 +93,7 @@ class KernelRuntimeTests(unittest.TestCase):
             clock=FixedClock(),
             ids=SequentialIds(),
             model_name="faux",
+            fingerprint=fingerprint,
         )
 
     def test_a_question_streams_the_answer_and_commits_it(self) -> None:
@@ -116,12 +122,111 @@ class KernelRuntimeTests(unittest.TestCase):
             [entry["role"] for entry in loaded.entries if entry["type"] == "message"],
             ["user", "assistant"],
         )
-        self.assertEqual(loaded.entries[-1]["content"], "熵衡量不确定性")
+        messages = [
+            entry for entry in loaded.entries if entry["type"] == "message"
+        ]
+        self.assertEqual(messages[-1]["content"], "熵衡量不确定性")
         self.assertEqual(loaded.title, "什么是熵？")
 
         request = model.requests[0]
         self.assertEqual(request.messages[0], Message("system", "You are NoteAgent."))
         self.assertEqual(request.messages[1].content, "什么是熵？")
+
+    def test_a_finished_run_writes_start_and_finish_markers(self) -> None:
+        model = FauxModelClient.text("答案")
+        runtime = self.runtime(
+            model,
+            fingerprint={
+                "projectRoot": "/project",
+                "wikiGeneration": "wiki-gen",
+                "sourceFingerprint": "src-gen",
+                "configHash": "cfg",
+            },
+        )
+
+        result = runtime.execute(UserInput("s1", "问题"), lambda _event: None)
+
+        self.assertEqual(result.status, "completed")
+        entries = self.store.load("s1").entries
+        markers = [entry for entry in entries if entry["type"] == "run_marker"]
+        self.assertEqual([marker["state"] for marker in markers], ["running", "finished"])
+        self.assertEqual(len({marker["runId"] for marker in markers}), 1)
+        user = next(
+            entry
+            for entry in entries
+            if entry["type"] == "message" and entry["role"] == "user"
+        )
+        assistant = next(
+            entry
+            for entry in entries
+            if entry["type"] == "message" and entry["role"] == "assistant"
+        )
+        self.assertEqual(markers[0]["lastEntryId"], user["id"])
+        self.assertEqual(markers[1]["lastEntryId"], assistant["id"])
+        self.assertEqual(markers[0]["model"], "faux")
+        self.assertTrue(markers[0]["toolset"].startswith("tools:"))
+        self.assertEqual(markers[0]["projectRoot"], "/project")
+        self.assertEqual(markers[0]["wikiGeneration"], "wiki-gen")
+        self.assertEqual(markers[0]["sourceFingerprint"], "src-gen")
+        self.assertEqual(markers[0]["configHash"], "cfg")
+
+    def test_a_proposal_writes_a_waiting_marker(self) -> None:
+        model = FauxModelClient.tool_call(
+            "p1", "propose", '{"job":"plan","interface":"source"}'
+        )
+
+        result = self.runtime(model).execute(
+            UserInput("s1", "安排一下"), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "waiting")
+        entries = self.store.load("s1").entries
+        markers = [entry for entry in entries if entry["type"] == "run_marker"]
+        self.assertEqual([marker["state"] for marker in markers], ["running", "waiting"])
+        wait = next(entry for entry in entries if entry["type"] == "wait_proposed")
+        self.assertEqual(markers[-1]["lastEntryId"], wait["id"])
+
+    def test_a_model_error_writes_a_failed_marker(self) -> None:
+        model = FauxModelClient(
+            [
+                ModelStartEvent("faux"),
+                ModelErrorEvent("model_error", "the model refused", retryable=True),
+            ]
+        )
+
+        result = self.runtime(model).execute(UserInput("s1", "问题"), lambda _event: None)
+
+        self.assertEqual(result.status, "failed")
+        markers = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+        self.assertEqual([marker["state"] for marker in markers], ["running", "failed"])
+        self.assertIn("model_error", markers[-1]["note"])
+
+    def test_a_cancelled_run_writes_a_cancelled_marker(self) -> None:
+        model = GatedModel("部分")
+        first_token = threading.Event()
+
+        def sink(event) -> None:
+            if isinstance(event, TokenEvent) and event.text == "部分":
+                first_token.set()
+
+        runtime = self.runtime(model)
+        results, thread = self._start(runtime, sink)
+        self.assertTrue(first_token.wait(2), "the first piece was never streamed")
+        runtime.cancel("s1")
+        model.release.set()
+        self._join(thread)
+
+        self.assertEqual(results[0].status, "cancelled")
+        markers = [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+        self.assertEqual([marker["state"] for marker in markers], ["running", "cancelled"])
 
     def test_a_tool_round_is_committed_and_the_answer_follows_it(self) -> None:
         first = FauxModelClient.tool_call(
@@ -379,13 +484,24 @@ class KernelRuntimeTests(unittest.TestCase):
 
         entries = self.store.load("s1").entries
         self.assertEqual(
-            [entry["type"] for entry in entries], ["message", "message", "wait_proposed"]
+            [
+                entry["type"]
+                for entry in entries
+                if entry["type"] != "run_marker"
+            ],
+            ["message", "message", "wait_proposed"],
         )
-        self.assertEqual(entries[1]["content"], "我来安排。")
-        self.assertEqual(entries[1]["stopReason"], "propose")
-        self.assertEqual(entries[2]["id"], result.wait_id)
-        self.assertEqual(entries[2]["job"], "plan")
-        self.assertEqual(entries[2]["intent"], "plan entropy")
+        messages = [
+            entry for entry in entries if entry["type"] == "message"
+        ]
+        wait_entry = next(
+            entry for entry in entries if entry["type"] == "wait_proposed"
+        )
+        self.assertEqual(messages[1]["content"], "我来安排。")
+        self.assertEqual(messages[1]["stopReason"], "propose")
+        self.assertEqual(wait_entry["id"], result.wait_id)
+        self.assertEqual(wait_entry["job"], "plan")
+        self.assertEqual(wait_entry["intent"], "plan entropy")
 
         wait = runtime.wait_state("s1")
         assert wait is not None
@@ -638,7 +754,11 @@ class KernelRuntimeTests(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         entries = self.store.load("s1").entries
         self.assertEqual(
-            [entry["type"] for entry in entries],
+            [
+                entry["type"]
+                for entry in entries
+                if entry["type"] != "run_marker"
+            ],
             [
                 "wait_proposed",
                 "wait_entered",
@@ -647,8 +767,11 @@ class KernelRuntimeTests(unittest.TestCase):
                 "message",
             ],
         )
-        self.assertEqual(entries[-1]["role"], "assistant")
-        self.assertEqual(entries[-1]["content"], "规划完成，接下来可以编译。")
+        messages = [
+            entry for entry in entries if entry["type"] == "message"
+        ]
+        self.assertEqual(messages[-1]["role"], "assistant")
+        self.assertEqual(messages[-1]["content"], "规划完成，接下来可以编译。")
 
         messages = model.requests[0].messages
         self.assertIn("last job result", messages[0].content)

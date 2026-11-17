@@ -53,6 +53,7 @@ _KNOWN_TYPES = frozenset(
         "model_change",
         "reset",
         "resume_started",
+        "run_marker",
         "session",
         "session_info",
         "system_section",

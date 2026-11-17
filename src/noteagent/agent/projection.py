@@ -30,6 +30,7 @@ _SILENT_TYPES = frozenset(
         "model_change",
         "reset",
         "resume_started",
+        "run_marker",
         "session",
         "session_info",
         "thinking_level_change",
@@ -150,6 +151,22 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
                 pieces.append(
                     _Piece(entry_id, Message("system", _job_result_text(entry)))
                 )
+            continue
+        if kind == "run_marker":
+            # A marker is a pointer, not a turn. A resume leaves one note the
+            # model must read; every other marker is silent.
+            if in_context:
+                note = entry.get("note")
+                resumes = entry.get("resumes")
+                if (
+                    isinstance(note, str)
+                    and note.strip()
+                    and isinstance(resumes, str)
+                    and resumes
+                ):
+                    pieces.append(
+                        _Piece(entry_id, Message("system", note.strip()))
+                    )
             continue
         if kind == "message":
             # The transcript is the reader's whole log, so it keeps the turns
