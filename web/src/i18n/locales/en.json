@@ -260,9 +260,38 @@
     "attention": "Needs you",
     "selection": "Chosen passages",
     "plan": "Pages to write",
+    "pipeline": "Pipeline",
     "compile": "Written",
     "readFailed": "Could not read what has been selected",
     "saveFailed": "Could not save what has been selected"
+  },
+  "pipeline": {
+    "intentLabel": "What should this run write?",
+    "intentPlaceholder": "One sentence is enough",
+    "start": "Start",
+    "cancel": "Stop",
+    "empty": "No run yet. Give it an intent to start one.",
+    "startFailed": "The pipeline could not be started.",
+    "loadFailed": "The pipeline's state could not be read.",
+    "cancelFailed": "The run could not be stopped.",
+    "status": {
+      "running": "Running",
+      "awaiting_confirmation": "Waiting for your confirmation",
+      "compiling": "Writing pages",
+      "succeeded": "Finished",
+      "failed": "Failed",
+      "cancelled": "Stopped",
+      "interrupted": "Interrupted"
+    },
+    "stage": {
+      "starting": "Starting",
+      "acquire": "Collecting material",
+      "frame": "Choosing passages",
+      "plan": "Planning pages",
+      "confirm": "Waiting for confirmation",
+      "compile": "Writing pages",
+      "done": "Done"
+    }
   },
   "plan": {
     "title": "Pages to write",
@@ -1333,8 +1362,16 @@
       "job": {
         "busy": "Another job is already running. Wait for it to finish."
       },
+      "pipeline": {
+        "busy": "Another pipeline run is already active. Wait for it to finish.",
+        "projectBusy": "Another process is writing this project. Close it and try again.",
+        "notFound": "That pipeline run is no longer there.",
+        "invalid": "The pipeline was given incomplete settings."
+      },
       "compaction_failed": "The earlier conversation could not be summarized. Try again.",
       "context_overflow": "The conversation is too long for the model's window.",
+      "project.notConfigured": "No wiki project is open.",
+      "session.invalid": "This session's data cannot be read.",
       "session": {
         "exists": "That session already exists.",
         "notFound": "That session is no longer there.",

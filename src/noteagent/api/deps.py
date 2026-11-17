@@ -8,7 +8,7 @@ nothing here silently falls back to a fake.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
@@ -18,6 +18,7 @@ from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
+from noteagent.pipeline.service import PipelineRegistry, PipelineService, PipelineStage
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,16 @@ class AppDeps:
     jobs: JobClient | None = None
     #: One collaboration job at a time, across every session.
     job_gate: JobGate = field(default_factory=JobGate)
+    #: The project's pipeline, when a test hands one in; otherwise it is built
+    #: from the active project on each request.
+    pipeline: PipelineService | None = None
+    #: The stages a run walks. Empty in the skeleton; later tickets fill them.
+    pipeline_stages: Sequence[PipelineStage] = ()
+    #: The active run of each project, shared by every request in this process.
+    pipeline_registry: PipelineRegistry = field(default_factory=PipelineRegistry)
+    #: How a run is taken off the request thread. A test passes a synchronous
+    #: launcher so a whole run finishes before the response is read.
+    pipeline_spawn: Callable[[Callable[[], None]], None] | None = None
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

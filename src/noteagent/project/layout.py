@@ -112,6 +112,20 @@ class ProjectLayout:
         return self.meta / "deep-search.json"
 
     @property
+    def pipeline(self) -> Path:
+        """The pipeline's own state: runs and the staging area, per project."""
+        return self.meta / "pipeline"
+
+    @property
+    def pipeline_runs(self) -> Path:
+        return self.pipeline / "runs"
+
+    @property
+    def project_lock(self) -> Path:
+        """Who is writing this project; one core holds it at a time."""
+        return self.meta / "project.lock"
+
+    @property
     def snapshots(self) -> Path:
         return self.meta / "snapshots"
 

@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronRight, Hammer, ListChecks, PanelRightClose, Sparkles } from "lucide-react";
+import { AlertCircle, ChevronRight, Hammer, ListChecks, PanelRightClose, Play, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { CollectionList } from "@/components/source/CollectionList";
 import { PlanBoard } from "@/components/plan/PlanBoard";
 import { CompilePanel } from "@/components/plan/CompilePanel";
 import { AttentionInbox } from "@/components/plan/AttentionInbox";
+import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
 import { shortcut } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
@@ -22,6 +23,7 @@ import { useSectionCounts } from "@/stores/right-sections";
 const SECTION_BODY: Record<RightSectionId, () => React.ReactNode> = {
   attention: () => <AttentionInbox />,
   selection: () => <CollectionList />,
+  pipeline: () => <PipelineRunPanel />,
   plan: () => <PlanBoard />,
   compile: () => <CompilePanel />,
 };
@@ -36,6 +38,7 @@ const SECTION_BODY: Record<RightSectionId, () => React.ReactNode> = {
 const SECTION_LOOK: Record<RightSectionId, { icon: typeof AlertCircle; tone?: string; hint?: string }> = {
   attention: { icon: AlertCircle, tone: "text-warning", hint: "attention.hint" },
   selection: { icon: ListChecks },
+  pipeline: { icon: Play },
   plan: { icon: Sparkles },
   compile: { icon: Hammer },
 };

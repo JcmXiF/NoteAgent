@@ -260,9 +260,38 @@
     "attention": "需要处理",
     "selection": "选中的段落",
     "plan": "要写的页面",
+    "pipeline": "流水线",
     "compile": "写入结果",
     "readFailed": "无法读取已选内容",
     "saveFailed": "选中的内容保存失败"
+  },
+  "pipeline": {
+    "intentLabel": "这次流水线要写什么？",
+    "intentPlaceholder": "一句话就够",
+    "start": "启动",
+    "cancel": "停止",
+    "empty": "还没有运行。给它一个意图就能开始。",
+    "startFailed": "流水线没能启动。",
+    "loadFailed": "读不到流水线的状态。",
+    "cancelFailed": "没能停止这次运行。",
+    "status": {
+      "running": "运行中",
+      "awaiting_confirmation": "等确认",
+      "compiling": "写入中",
+      "succeeded": "已完成",
+      "failed": "失败",
+      "cancelled": "已停止",
+      "interrupted": "已中断"
+    },
+    "stage": {
+      "starting": "准备",
+      "acquire": "收集资料",
+      "frame": "画框",
+      "plan": "规划",
+      "confirm": "等确认",
+      "compile": "写入",
+      "done": "完成"
+    }
   },
   "plan": {
     "title": "要写的页面",
@@ -1333,8 +1362,16 @@
       "job": {
         "busy": "另一个作业正在运行，请等它结束。"
       },
+      "pipeline": {
+        "busy": "另一个流水线正在运行，请等它结束。",
+        "projectBusy": "另一个进程正在写这个项目，请关掉它再试。",
+        "notFound": "这次流水线运行已经不在了。",
+        "invalid": "流水线的参数不完整。"
+      },
       "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
       "context_overflow": "对话太长，超出了模型窗口。",
+      "project.notConfigured": "还没有打开任何 wiki 项目。",
+      "session.invalid": "这个会话的数据读不出来。",
       "session": {
         "exists": "这个会话已经存在。",
         "notFound": "这个会话已经不在了。",
