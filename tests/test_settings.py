@@ -27,11 +27,16 @@ from noteagent.acquire.search_config import (
 from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.config import (
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_QUERY_PREFIX,
+)
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.credentials import SEARCH_KEY, llm_key
 from noteagent.settings.effective import forget_applied
 from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
+from noteagent.settings.store import dump_config, parse_config
 from noteagent.settings.install import (
     _tool_check_tools,
     apply_install,
@@ -1596,3 +1601,62 @@ class ToolProbeTests(unittest.TestCase):
             if tool["function"]["name"] == "search"
         ]
         self.assertEqual(_tool_check_tools(), live)
+
+
+class RagDocumentTests(unittest.TestCase):
+    def test_rag_is_off_and_uses_the_local_defaults(self) -> None:
+        config = parse_config({"schemaVersion": 1})
+
+        self.assertFalse(config.rag.enabled)
+        self.assertEqual(
+            config.rag.embedding.model, DEFAULT_EMBEDDING_MODEL
+        )
+        self.assertEqual(
+            config.rag.embedding.query_prefix, DEFAULT_QUERY_PREFIX
+        )
+        self.assertEqual(config.rag.embedding.batch, 64)
+        self.assertEqual(config.rag.embedding.concurrency, 1)
+        self.assertFalse(config.rag.rerank.enabled)
+        self.assertEqual(config.rag.rerank.candidates, 50)
+        self.assertEqual(config.rag.rerank.top_n, 10)
+
+    def test_the_rag_section_round_trips(self) -> None:
+        rag = {
+            "enabled": True,
+            "embedding": {
+                "endpoint": "http://localhost:8080/v1",
+                "model": "qwen3-embedding:0.6b",
+                "queryPrefix": "Q: {query}",
+                "batch": 8,
+                "concurrency": 2,
+            },
+            "rerank": {
+                "enabled": True,
+                "endpoint": "http://localhost:8081/v1",
+                "model": "qwen3-reranker",
+                "candidates": 20,
+                "topN": 5,
+            },
+        }
+
+        config = parse_config({"schemaVersion": 1, "rag": rag})
+        stored = json.loads(dump_config(config))
+
+        self.assertTrue(config.rag.enabled)
+        self.assertEqual(config.rag.embedding.batch, 8)
+        self.assertEqual(config.rag.rerank.top_n, 5)
+        self.assertEqual(stored["rag"], rag)
+
+    def test_bad_rag_values_are_refused(self) -> None:
+        cases = (
+            {"rag": {"enabled": "yes"}},
+            {"rag": {"embedding": {"batch": 0}}},
+            {"rag": {"embedding": {"concurrency": 0}}},
+            {"rag": {"embedding": {"endpoint": "not-a-url"}}},
+            {"rag": {"rerank": {"candidates": 10, "topN": 11}}},
+            {"rag": {"embedding": {"apiKey": "secret"}}},
+        )
+        for rag in cases:
+            with self.subTest(rag=rag):
+                with self.assertRaises(Refusal):
+                    parse_config({"schemaVersion": 1, **rag})
