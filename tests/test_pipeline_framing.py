@@ -15,8 +15,9 @@ from noteagent.ingest.clips import (
     load_clip_store,
     save_clip_store,
 )
+from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import Framing, frame_blocks
-from noteagent.pipeline.materials import Materials
+from noteagent.pipeline.materials import MaterialLog, MaterialTransition, Materials
 from noteagent.project.init import init_project
 
 MAX = MAX_BLOCKS_PER_COLLECTION
@@ -138,9 +139,11 @@ class FramingTests(unittest.TestCase):
             )
             framing = Framing(layout, materials=materials)
 
-            framed = framing.frame_run("pr-1")
+            summary = framing.frame_run("pr-1")
 
-            self.assertEqual(framed, 1)
+            self.assertEqual(summary.framed, 1)
+            self.assertEqual(summary.model_calls, 0)
+            self.assertEqual(summary.fallbacks, 0)
             store = load_clip_store(layout)
             frames = [
                 collection
@@ -154,6 +157,73 @@ class FramingTests(unittest.TestCase):
             self.assertEqual(
                 materials.states()[state.material].state, "framed"
             )
+
+    def test_a_long_model_frame_is_split_at_the_collection_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = self._materials(layout)
+            body = "".join(
+                f'<p data-na-block="b{index}">{index}</p>'
+                for index in range(250)
+            )
+            state = materials.stage(
+                _capture("https://example.com/long", body),
+                run_id="pr-1",
+            )
+            ids = '["' + '","'.join(f"b{i}" for i in range(250)) + '"]'
+            model = ModelFraming(
+                ask=lambda messages: '{"frames": [' + ids + "]}"
+            )
+
+            summary = Framing(
+                layout, materials=materials, model=model
+            ).frame_run("pr-1")
+
+            self.assertEqual(summary.framed, 1)
+            store = load_clip_store(layout)
+            frames = [
+                collection
+                for collection in store.collections
+                if collection.source_key == state.material
+            ]
+            self.assertEqual(
+                [len(collection.block_ids) for collection in frames],
+                [200, 50],
+            )
+
+    def test_a_human_edit_survives_a_later_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = self._materials(layout)
+            capture = _capture(
+                "https://example.com/entropy",
+                '<h2 data-na-block="h1">定义</h2>'
+                '<p data-na-block="p1">熵是不确定性的度量。</p>',
+            )
+            state = materials.stage(capture, run_id="pr-1")
+            MaterialLog(layout.materials_log).append(
+                MaterialTransition(
+                    at="2026-11-10T09:05:00Z",
+                    material=state.material,
+                    state="framed",
+                    run_id="pr-1",
+                    source="human",
+                )
+            )
+            materials.stage(capture, run_id="pr-2")
+            calls: list[object] = []
+
+            def ask(messages):
+                calls.append(list(messages))
+                return '{"frames": [["h1"]]}'
+
+            summary = Framing(
+                layout, materials=materials, model=ModelFraming(ask=ask)
+            ).frame_run("pr-2")
+
+            self.assertEqual(summary.framed, 0)
+            self.assertEqual(summary.model_calls, 0)
+            self.assertEqual(calls, [])
 
     def test_new_frames_clear_the_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

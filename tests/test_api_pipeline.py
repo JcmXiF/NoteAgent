@@ -24,6 +24,7 @@ from noteagent.ingest.clips import (
 )
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.captures import CaptureInbox
+from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import FrameStage, Framing
 from noteagent.pipeline.lock import ProjectLock
 from noteagent.pipeline.materials import MaterialLog, Materials
@@ -45,12 +46,13 @@ except ImportError:  # pragma: no cover
     AppDeps = None  # type: ignore[misc, assignment]
 
 
-def _deps(*, stages=(), spawn=None) -> AppDeps:
+def _deps(*, stages=(), spawn=None, frame_model=None) -> AppDeps:
     return AppDeps(
         clock=FixedClock(),
         ids=SequentialIds(),
         pipeline_stages=tuple(stages),
         pipeline_spawn=spawn,
+        pipeline_frame_model=frame_model,
     )
 
 
@@ -64,6 +66,27 @@ def _capture(url: str = "https://example.com/entropy") -> Capture:
         url=url,
         title="熵",
         markdown="熵是不确定性的度量。",
+        html=html,
+        capture_method="test",
+        fidelity="ok",
+        reasons=(),
+    )
+
+
+_LONG = "熵是不确定性的度量，它衡量一个随机变量的平均信息量。"
+
+
+def _two_block_capture(url: str) -> Capture:
+    html = (
+        "<html><body><article>"
+        '<h2 data-na-block="b1">定义</h2>'
+        f'<p data-na-block="b2">{_LONG}</p>'
+        "</article></body></html>"
+    )
+    return Capture(
+        url=url,
+        title="熵",
+        markdown=_LONG,
         html=html,
         capture_method="test",
         fidelity="ok",
@@ -327,10 +350,140 @@ class PipelineStartTests(unittest.TestCase):
                 clips = client.get("/api/projects/demo/clips").json()
 
             self.assertEqual(run["detail"]["framedMaterials"], 4)
+            self.assertEqual(run["detail"]["frameUsage"]["modelCalls"], 0)
+            self.assertEqual(run["detail"]["frameUsage"]["fallbacks"], 0)
             self.assertTrue(all(item["state"] == "framed" for item in materials))
             self.assertEqual(len(clips["collections"]), 4)
             self.assertEqual(clips["collections"][0]["blockIds"], ["b1"])
             self.assertEqual(clips["collections"][0]["blocks"], [])
+
+    def test_the_model_frames_with_expansions_and_reports_its_use(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            script = ['{"expand": ["b2"]}', '{"frames": [["b1"], ["b2"]]}']
+            calls: list[list[tuple[str, str]]] = []
+
+            def complete(messages):
+                calls.append(list(messages))
+                return script[len(calls) - 1]
+
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _two_block_capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage()],
+                            spawn=lambda work: work(),
+                            frame_model=ModelFraming(ask=complete),
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+                clips = client.get("/api/projects/demo/clips").json()
+
+            self.assertEqual(run["detail"]["frameUsage"]["modelCalls"], 2)
+            self.assertEqual(run["detail"]["frameUsage"]["charsRead"], len(_LONG))
+            self.assertEqual(run["detail"]["frameUsage"]["fallbacks"], 0)
+            self.assertEqual(len(clips["collections"]), 2)
+            self.assertEqual(materials[0]["state"], "framed")
+            self.assertEqual(materials[0]["source"], "model")
+            opening = calls[0][1][1]
+            self.assertIn("b2", opening)
+            self.assertNotIn(_LONG, opening)
+            expansion = calls[1][-1][1]
+            self.assertIn(_LONG, expansion)
+
+    def test_a_spent_budget_still_frames_from_what_was_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            script = ['{"expand": ["b2"]}', '{"frames": [["b1"]]}']
+            calls: list[list[tuple[str, str]]] = []
+
+            def ask(messages):
+                calls.append(list(messages))
+                return script[min(len(calls) - 1, len(script) - 1)]
+
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _two_block_capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage()],
+                            spawn=lambda work: work(),
+                            frame_model=ModelFraming(ask=ask, rounds=1),
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                clips = client.get("/api/projects/demo/clips").json()
+
+            self.assertEqual(run["detail"]["frameUsage"]["modelCalls"], 2)
+            self.assertEqual(run["detail"]["frameUsage"]["charsRead"], len(_LONG))
+            self.assertEqual(run["detail"]["frameUsage"]["fallbacks"], 0)
+            self.assertEqual(clips["collections"][0]["blockIds"], ["b1"])
+
+    def test_a_model_that_cannot_answer_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(1)
+
+            def complete(messages):
+                return "not json at all"
+
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _two_block_capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage()],
+                            spawn=lambda work: work(),
+                            frame_model=ModelFraming(ask=complete),
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+
+            self.assertEqual(run["detail"]["frameUsage"]["fallbacks"], 1)
+            self.assertEqual(materials[0]["state"], "framed")
+            self.assertEqual(materials[0]["source"], "system")
+            self.assertEqual(
+                run["detail"]["frameUsage"]["modelCalls"], 1
+            )
 
     def test_a_person_edited_frame_is_recorded_and_left_alone(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -389,9 +542,20 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(human[-1].state, "framed")
             materials = Materials(layout, clock=FixedClock())
             self.assertEqual(materials.states()[material].source, "human")
-            self.assertEqual(
-                Framing(layout, materials=materials).frame_run(run_id), 0
-            )
+            model_calls: list[object] = []
+
+            def complete(messages):
+                model_calls.append(list(messages))
+                return '{"frames": [["b1"]]}'
+
+            summary = Framing(
+                layout,
+                materials=materials,
+                model=ModelFraming(ask=complete),
+            ).frame_run(run_id)
+            self.assertEqual(summary.framed, 0)
+            self.assertEqual(summary.model_calls, 0)
+            self.assertEqual(model_calls, [])
 
     def test_a_materials_blocks_can_be_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

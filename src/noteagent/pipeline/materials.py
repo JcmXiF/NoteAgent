@@ -108,8 +108,10 @@ class MaterialState:
     updated_at: str
     detail: Mapping[str, object] = field(default_factory=dict)
     #: Who made the last change: ``system`` for a stage, ``human`` for a person.
-    #: A material a person edited is not re-framed by a later run.
     source: str = ""
+    #: Whether a person ever drew its frames. Re-staging writes a later
+    #: ``system`` transition, so the latest source alone would forget the edit.
+    human_edited: bool = False
 
     @property
     def title(self) -> str:
@@ -129,6 +131,7 @@ class MaterialState:
             "kind": kind if isinstance(kind, str) else "",
             "fidelity": fidelity if isinstance(fidelity, str) else "",
             "source": self.source,
+            "humanEdited": self.human_edited,
         }
 
 
@@ -174,7 +177,10 @@ class MaterialLog:
 
     def states(self) -> dict[str, MaterialState]:
         latest: dict[str, MaterialState] = {}
+        human: set[str] = set()
         for entry in self.transitions():
+            if entry.source == "human":
+                human.add(entry.material)
             latest[entry.material] = MaterialState(
                 material=entry.material,
                 state=entry.state,
@@ -182,6 +188,7 @@ class MaterialLog:
                 updated_at=entry.at,
                 detail=dict(entry.detail),
                 source=entry.source,
+                human_edited=entry.material in human,
             )
         return latest
 
@@ -240,6 +247,9 @@ class MaterialLog:
                     updated_at=last.at,
                     detail=detail,
                     source=last.source,
+                    human_edited=any(
+                        entry.source == "human" for entry in entries
+                    ),
                 )
             )
         items.sort(key=lambda state: state.material)

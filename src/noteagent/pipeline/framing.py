@@ -19,18 +19,14 @@ from noteagent.ingest.clips import (
     load_clip_store,
     save_clip_store,
 )
+from noteagent.pipeline.frame_model import MAX_FRAMES, ModelFrames, ModelFraming
 from noteagent.pipeline.materials import MaterialState, Materials
-from noteagent.pipeline.stage import StageContext
+from noteagent.pipeline.stage import FrameSummary, StageContext
 from noteagent.project.layout import ProjectLayout
 
 #: A heading opens a frame; everything after it belongs to that frame until the
 #: next heading.
 HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
-
-#: How many frames one material is given. A document with more headings is
-#: gathered into this many groups, then cut by the block cap; the cap wins when
-#: both cannot hold.
-MAX_FRAMES_PER_MATERIAL = 8
 
 #: The id prefix that marks a collection made by framing rather than by a person.
 FRAME_PREFIX = "frame-"
@@ -65,12 +61,12 @@ def frame_blocks(blocks: Sequence[Mapping[str, object]]) -> list[list[str]]:
         # No headings and no pages: the cap below is the only structure there is.
         groups = [ids]
 
-    if len(groups) > MAX_FRAMES_PER_MATERIAL:
+    if len(groups) > MAX_FRAMES:
         flat = [block_id for group in groups for block_id in group]
-        base, extra = divmod(len(flat), MAX_FRAMES_PER_MATERIAL)
+        base, extra = divmod(len(flat), MAX_FRAMES)
         groups = []
         offset = 0
-        for index in range(MAX_FRAMES_PER_MATERIAL):
+        for index in range(MAX_FRAMES):
             size = base + (1 if index < extra else 0)
             groups.append(flat[offset : offset + size])
             offset += size
@@ -101,19 +97,26 @@ def is_frame(collection: ClipCollection) -> bool:
 class Framing:
     """Turns a run's staged materials into selections of their blocks."""
 
-    def __init__(self, layout: ProjectLayout, *, materials: Materials) -> None:
+    def __init__(
+        self,
+        layout: ProjectLayout,
+        *,
+        materials: Materials,
+        model: ModelFraming | None = None,
+    ) -> None:
         self._layout = layout
         self._materials = materials
+        self._model = model
 
-    def frame_run(self, run_id: str) -> int:
-        """Frame the run's staged materials; answers how many were framed."""
+    def frame_run(self, run_id: str) -> FrameSummary:
+        """Frame the run's staged materials; answers how many and what it cost."""
         all_states = self._materials.for_run(run_id)
         # A material a person edited keeps the frames they gave it. Auto framing
         # is the default, not a thing that overwrites a decision.
         human_owned = {
             state.material
             for state in self._materials.states().values()
-            if state.source == "human"
+            if state.human_edited
         }
         states = [
             state
@@ -135,12 +138,42 @@ class Framing:
         ]
 
         changed = False
-        pending: list[tuple[MaterialState, int]] = []
+        pending: list[_Pending] = []
+        model_calls = 0
+        chars_read = 0
+        fallbacks = 0
+        omitted = 0
         for state in states:
             blocks = self._materials.blocks(state.material, run_id=run_id)
             if blocks is None:
                 continue
-            frames = frame_blocks(blocks)
+            result = (
+                self._model.frames(
+                    material=state.material,
+                    title=state.title,
+                    kind=str(state.detail.get("kind") or ""),
+                    blocks=blocks,
+                )
+                if self._model is not None
+                else None
+            )
+            if result is not None:
+                model_calls += result.calls
+                chars_read += result.chars
+                omitted += result.omitted
+            if result is not None and result.frames:
+                # A frame the model gave still has to fit one collection.
+                frames = _split_long_frames(
+                    [list(frame) for frame in result.frames]
+                )
+                source = "model"
+            else:
+                # A model that could not or would not return frames leaves the
+                # deterministic split to do it, with no error and no hole.
+                frames = frame_blocks(blocks)
+                source = "system"
+                if self._model is not None:
+                    fallbacks += 1
             if not frames:
                 continue
             existing = [
@@ -160,7 +193,7 @@ class Framing:
                     is_frame(collection) and collection.source_key == state.material
                 )
             ] + new
-            pending.append((state, len(new)))
+            pending.append(_Pending(state, len(new), source, result))
 
         final = (
             kept if len(kept) <= MAX_COLLECTIONS else _fit(kept, MAX_COLLECTIONS)
@@ -169,19 +202,21 @@ class Framing:
             collection.source_key for collection in final if is_frame(collection)
         }
         framed = 0
-        for state, count in pending:
+        for entry in pending:
             # A material whose frames did not fit is not marked framed: its
             # selection list would claim frames that are not there.
-            if state.material not in surviving:
+            if entry.state.material not in surviving:
                 continue
             self._materials.mark(
-                state.material,
+                entry.state.material,
                 "framed",
                 run_id=run_id,
+                source=entry.source,
                 detail={
-                    "frames": count,
-                    "title": state.title,
-                    "kind": state.detail.get("kind", ""),
+                    "frames": entry.count,
+                    "title": entry.state.title,
+                    "kind": entry.state.detail.get("kind", ""),
+                    "usage": _usage(entry.result),
                 },
             )
             framed += 1
@@ -192,7 +227,13 @@ class Framing:
             # a statement about material that is no longer the material.
             updated = replace(updated, topic_map=None, decisions=())
         save_clip_store(self._layout, updated)
-        return framed
+        return FrameSummary(
+            framed=framed,
+            model_calls=model_calls,
+            chars_read=chars_read,
+            fallbacks=fallbacks,
+            omitted=omitted,
+        )
 
     def _collection(
         self, state: MaterialState, frame: Sequence[str], index: int
@@ -213,10 +254,43 @@ class FrameStage:
     name: str = "frame"
 
     def __call__(self, context: StageContext) -> None:
-        framed = context.frame_materials()
+        summary = context.frame_materials()
         detail = dict(context.run.detail)
-        detail["framedMaterials"] = framed
+        detail["framedMaterials"] = summary.framed
+        detail["frameUsage"] = summary.usage()
         context.update(detail=detail)
+
+
+@dataclass(frozen=True, slots=True)
+class _Pending:
+    """One material's frames, waiting to learn whether they fit the store."""
+
+    state: MaterialState
+    count: int
+    source: str
+    result: ModelFrames | None
+
+
+def _usage(result: ModelFrames | None) -> dict[str, object]:
+    if result is None:
+        return {"calls": 0, "chars": 0, "omitted": 0, "failed": False}
+    return {
+        "calls": result.calls,
+        "chars": result.chars,
+        "omitted": result.omitted,
+        "failed": result.failed,
+    }
+
+
+def _split_long_frames(frames: Sequence[Sequence[str]]) -> list[list[str]]:
+    """Cut a model's frame at the collection cap; a frame is a selection."""
+    out: list[list[str]] = []
+    for frame in frames:
+        for offset in range(0, len(frame), MAX_BLOCKS_PER_COLLECTION):
+            chunk = list(frame[offset : offset + MAX_BLOCKS_PER_COLLECTION])
+            if chunk:
+                out.append(chunk)
+    return out
 
 
 def _frames_differ(
@@ -248,7 +322,7 @@ __all__ = [
     "FrameStage",
     "Framing",
     "HEADING_TAGS",
-    "MAX_FRAMES_PER_MATERIAL",
+    "MAX_FRAMES",
     "frame_blocks",
     "frame_id",
     "is_frame",

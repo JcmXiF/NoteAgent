@@ -248,6 +248,20 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
             PostCheck("query-fallback", "clamp"),
         ),
     ),
+    ModelCall(
+        # The framing loop: openings first, then whichever full texts the model
+        # asks for. Its answer is checked against the ids the request showed and
+        # bounded by the frame cap.
+        name="pipeline-frames",
+        source="pipeline/frame_model.py",
+        given=frozenset({"material-openings", "expansions", "instructions"}),
+        checks=(
+            PostCheck("known-block-ids", "gate", frozenset({"material-openings"})),
+            PostCheck("cap-frames", "clamp"),
+            # An empty or unusable answer is filled by the deterministic split.
+            PostCheck("fallback-to-deterministic", "clamp"),
+        ),
+    ),
 )
 
 

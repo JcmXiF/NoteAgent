@@ -22,6 +22,25 @@ class PipelineCancelled(RuntimeError):
     """A stage noticed the run was cancelled."""
 
 
+@dataclass(frozen=True, slots=True)
+class FrameSummary:
+    """How framing went: materials framed, and what it cost."""
+
+    framed: int = 0
+    model_calls: int = 0
+    chars_read: int = 0
+    fallbacks: int = 0
+    omitted: int = 0
+
+    def usage(self) -> dict[str, object]:
+        return {
+            "modelCalls": self.model_calls,
+            "charsRead": self.chars_read,
+            "fallbacks": self.fallbacks,
+            "omittedFrames": self.omitted,
+        }
+
+
 @dataclass(slots=True)
 class StageContext:
     """What a stage may read and change while it runs."""
@@ -33,7 +52,7 @@ class StageContext:
     #: Stage one capture as a material of this run, through the single writer.
     stage_material: Callable[[Capture], MaterialState]
     #: Turn this run's staged materials into frames, through the single writer.
-    frame_materials: Callable[[], int]
+    frame_materials: Callable[[], FrameSummary]
 
     def update(self, **changes: object) -> PipelineRun:
         """Write one change to the run and carry on with the fresh copy."""
@@ -55,6 +74,7 @@ class PipelineStage(Protocol):
 
 
 __all__ = [
+    "FrameSummary",
     "PipelineCancelled",
     "PipelineStage",
     "StageContext",

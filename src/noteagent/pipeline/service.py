@@ -17,6 +17,7 @@ from typing import TypeVar
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.pipeline.captures import CaptureInbox, LoginWall
+from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
@@ -30,7 +31,12 @@ from noteagent.pipeline.run import (
     QueryMode,
     StartedBy,
 )
-from noteagent.pipeline.stage import PipelineCancelled, PipelineStage, StageContext
+from noteagent.pipeline.stage import (
+    FrameSummary,
+    PipelineCancelled,
+    PipelineStage,
+    StageContext,
+)
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.layout import ProjectLayout
 
@@ -104,6 +110,7 @@ class PipelineService:
         lock: ProjectLock | None = None,
         spawn: Callable[[Callable[[], None]], None] | None = None,
         keep_runs: int = DEFAULT_KEEP_RUNS,
+        frame_model: ModelFraming | None = None,
     ) -> None:
         self._layout = layout
         self._clock = clock
@@ -118,7 +125,9 @@ class PipelineService:
         self._spawn = spawn or _spawn_thread
         self._store = PipelineRunStore(layout)
         self._materials = Materials(layout, clock=clock)
-        self._framing = Framing(layout, materials=self._materials)
+        self._framing = Framing(
+            layout, materials=self._materials, model=frame_model
+        )
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
 
@@ -212,7 +221,7 @@ class PipelineService:
     ) -> list[dict[str, object]] | None:
         return self._materials.blocks(material, run_id=run_id)
 
-    def frame_materials(self, run_id: str) -> int:
+    def frame_materials(self, run_id: str) -> FrameSummary:
         """Frame the run's staged materials, serialized with every other write."""
         with self._registry.writer(self._project_key):
             return self._framing.frame_run(run_id)

@@ -18,6 +18,11 @@ from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore, WaitStore
 from noteagent.agent.tools import ToolRegistry
+from noteagent.pipeline.frame_model import (
+    DEFAULT_CHARS as DEFAULT_FRAME_CHARS,
+    DEFAULT_ROUNDS as DEFAULT_FRAME_ROUNDS,
+    ModelFraming,
+)
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
@@ -53,6 +58,12 @@ class AppDeps:
     pipeline_spawn: Callable[[Callable[[], None]], None] | None = None
     #: How many runs of un-promoted staging are kept before the oldest is pruned.
     pipeline_keep_runs: int = DEFAULT_KEEP_RUNS
+    #: The bounded model loop that frames a material; ``None`` in a test that
+    #: wants the deterministic split, the production model in a real core.
+    pipeline_frame_model: ModelFraming | None = None
+    #: The disclosure budget a production frame model is built with.
+    pipeline_frame_rounds: int = DEFAULT_FRAME_ROUNDS
+    pipeline_frame_chars: int = DEFAULT_FRAME_CHARS
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.
