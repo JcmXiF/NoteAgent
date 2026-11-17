@@ -26,6 +26,9 @@ RunStatus: TypeAlias = Literal[
 #: A run still owns its project: a second one is refused rather than queued.
 ACTIVE_STATUSES = frozenset({"running", "awaiting_confirmation", "compiling"})
 
+#: A run in one of these has finished; nothing else will happen to it.
+TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "interrupted"})
+
 #: What a restart closes. A run waiting for its human is paused, not running:
 #: the plan it shows is still the plan that was made, so it survives the restart.
 INTERRUPTIBLE_STATUSES = frozenset({"running", "compiling"})
@@ -188,6 +191,7 @@ __all__ = [
     "RUN_STATUSES",
     "STAGES",
     "STARTED_BY",
+    "TERMINAL_STATUSES",
     "is_run_id",
     "run_from_dict",
     "run_to_dict",

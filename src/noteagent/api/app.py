@@ -78,6 +78,7 @@ from noteagent.api.pipeline import (
     pipeline_service_for,
     prepare_active_project,
 )
+from noteagent.api.pipeline_events import iter_pipeline_events
 from noteagent.pipeline.confirm import NothingToWrite, confirmation_payload
 from noteagent.pipeline.lock import ProjectBusy
 from noteagent.pipeline.run import run_to_dict
@@ -716,6 +717,22 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         if run is None:
             raise _pipeline_not_found(run_id)
         return run_to_dict(run)
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/events")
+    def pipeline_run_events(run_id: str) -> StreamingResponse:
+        """The run's stage, plan, material and result events as they happen."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return StreamingResponse(
+            iter_pipeline_events(service, run_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/v1/pipeline/runs/{run_id}/materials")
     def pipeline_run_materials(run_id: str) -> dict[str, object]:
