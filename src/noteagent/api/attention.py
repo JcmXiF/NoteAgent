@@ -13,6 +13,7 @@ from typing import Any
 
 from noteagent.ingest.ingest_recovery import recovery_payload
 from noteagent.ingest.revision_inbox import revision_inbox_payload
+from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.doctor import doctor_payload, doctor_project
 from noteagent.project.layout import ProjectLayout
 
@@ -27,12 +28,14 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
     """Everything waiting on the reader, and how much of it there is."""
     revision = revision_inbox_payload(layout)
     recovery = recovery_payload(layout)
+    capture = CaptureInbox(layout.capture_inbox).payload()
     doctor: dict[str, Any] | None = None
     if check:
         doctor = doctor_payload(doctor_project(layout), limit=DOCTOR_LIMIT)
 
     revision_count = int(revision.get("openCount") or 0)
     recovery_count = int(recovery.get("openCount") or 0)
+    capture_count = int(capture.get("openCount") or 0)
     # An orphan page and a page from an older project layout are what a healthy
     # project looks like, so they are not things to do.
     doctor_count = 0
@@ -42,11 +45,13 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
     return {
         "revision": revision,
         "recovery": recovery,
+        "capture": capture,
         "doctor": doctor,
         "counts": {
             "revision": revision_count,
             "recovery": recovery_count,
+            "capture": capture_count,
             "doctor": doctor_count,
         },
-        "total": revision_count + recovery_count + doctor_count,
+        "total": revision_count + recovery_count + capture_count + doctor_count,
     }

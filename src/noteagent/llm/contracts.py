@@ -236,6 +236,18 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
             PostCheck("summary-bounded", "clamp"),
         ),
     ),
+    ModelCall(
+        # One search query rewritten from the intent. The answer is a query, not
+        # a statement about the project; it is bounded, and an empty answer falls
+        # back to the intent.
+        name="pipeline-query-rewrite",
+        source="acquire/query.py",
+        given=frozenset({"intent"}),
+        checks=(
+            PostCheck("query-bounded", "clamp"),
+            PostCheck("query-fallback", "clamp"),
+        ),
+    ),
 )
 
 

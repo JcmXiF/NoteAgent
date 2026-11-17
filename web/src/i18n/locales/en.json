@@ -301,6 +301,17 @@
       "compiled": "Compiled",
       "changed": "Changed",
       "dropped": "Dropped"
+    },
+    "query": {
+      "label": "Query",
+      "precise": "Keywords",
+      "model": "Model"
+    },
+    "materialMode": {
+      "label": "Material",
+      "auto": "Automatic",
+      "manual": "Manual",
+      "manualHint": "In manual mode, pick cards in Sources."
     }
   },
   "plan": {
@@ -719,6 +730,8 @@
     "updateFailed": "Could not update this item",
     "revisions": "Sources that changed",
     "recovery": "Compiles left unfinished",
+    "capture": "Needs sign-in",
+    "openCapture": "Open",
     "check": "Found by the check",
     "recheck": "Check again",
     "more": "{{count}} more",
@@ -1378,6 +1391,7 @@
         "notFound": "That pipeline run is no longer there.",
         "invalid": "The pipeline was given incomplete settings."
       },
+      "capture.notFound": "That sign-in page is no longer in the queue.",
       "compaction_failed": "The earlier conversation could not be summarized. Try again.",
       "context_overflow": "The conversation is too long for the model's window.",
       "project.notConfigured": "No wiki project is open.",

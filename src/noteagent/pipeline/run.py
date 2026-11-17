@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 RunStatus: TypeAlias = Literal[
@@ -75,6 +75,9 @@ class PipelineRun:
     stage: str = "starting"
     plan_revision: int = 0
     error: str = ""
+    #: What the stages have done so far: what was acquired, what was skipped and
+    #: why. It is the run's own record, not a second log.
+    detail: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def active(self) -> bool:
@@ -97,6 +100,7 @@ def run_to_dict(run: PipelineRun) -> dict[str, object]:
         "updatedAt": run.updated_at,
         "planRevision": run.plan_revision,
         "error": run.error,
+        "detail": dict(run.detail),
     }
 
 
@@ -120,6 +124,8 @@ def run_from_dict(raw: Mapping[str, object]) -> PipelineRun:
     stage = _text(raw.get("stage")) or "starting"
     if stage not in STAGES:
         raise ValueError(f"unknown pipeline stage: {stage!r}")
+    raw_detail = raw.get("detail")
+    detail = dict(raw_detail) if isinstance(raw_detail, Mapping) else {}
     return PipelineRun(
         id=run_id,
         intent=intent,
@@ -133,6 +139,7 @@ def run_from_dict(raw: Mapping[str, object]) -> PipelineRun:
         stage=stage,
         plan_revision=_count(raw.get("planRevision")),
         error=_text(raw.get("error")),
+        detail=detail,
     )
 
 

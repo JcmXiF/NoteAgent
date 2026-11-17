@@ -301,6 +301,17 @@
       "compiled": "已编译",
       "changed": "有变更",
       "dropped": "已丢弃"
+    },
+    "query": {
+      "label": "查询",
+      "precise": "精准关键词",
+      "model": "模型优化"
+    },
+    "materialMode": {
+      "label": "资料",
+      "auto": "自动收下",
+      "manual": "手动选卡",
+      "manualHint": "手动模式下请在资料面逐张选卡。"
     }
   },
   "plan": {
@@ -719,6 +730,8 @@
     "updateFailed": "这一项更新失败",
     "revisions": "资料变了",
     "recovery": "编译没做完",
+    "capture": "待登录捕获",
+    "openCapture": "打开",
     "check": "检查发现",
     "recheck": "重新检查",
     "more": "还有 {{count}} 项",
@@ -1378,6 +1391,7 @@
         "notFound": "这次流水线运行已经不在了。",
         "invalid": "流水线的参数不完整。"
       },
+      "capture.notFound": "这个待登录捕获已经不在了。",
       "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
       "context_overflow": "对话太长，超出了模型窗口。",
       "project.notConfigured": "还没有打开任何 wiki 项目。",

@@ -75,7 +75,7 @@ from noteagent.api.pages import (
 from noteagent.api.pipeline import pipeline_service, prepare_active_project
 from noteagent.pipeline.lock import ProjectBusy
 from noteagent.pipeline.run import run_to_dict
-from noteagent.pipeline.service import PipelineBusy
+from noteagent.pipeline.service import PipelineBusy, PipelineService
 from noteagent.api.projects import (
     create_project,
     delete_project,
@@ -216,6 +216,12 @@ class ProjectConfirmBody(BaseModel):
 class ProjectResetBody(BaseModel):
     confirmName: str = ""
     dryRun: bool = False
+
+
+class CaptureDismissBody(BaseModel):
+    """One page in the sign-in queue the reader is done with."""
+
+    id: str = Field(..., min_length=1, max_length=80)
 
 
 class PipelineStartBody(BaseModel):
@@ -1213,6 +1219,33 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def project_attention(name: str, check: bool = True) -> dict[str, object]:
         """Everything waiting on the reader, counted in one place."""
         return attention_payload(require_project_layout(name), check=check)
+
+    @app.post("/api/projects/{name}/capture-inbox/dismiss")
+    def project_capture_dismiss(
+        name: str, body: CaptureDismissBody
+    ) -> dict[str, object]:
+        """Put one sign-in page away; it comes back only if it is met again."""
+        layout = require_project_layout(name)
+        service = PipelineService(
+            layout,
+            clock=deps.clock,
+            ids=deps.ids,
+            registry=deps.pipeline_registry,
+            keep_runs=deps.pipeline_keep_runs,
+        )
+        try:
+            changed = service.dismiss_capture(body.id)
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        if not changed:
+            raise CodedHTTPException(
+                404,
+                f"no capture inbox item: {body.id}",
+                code="capture.notFound",
+            )
+        return service.capture_payload()
 
     @app.post("/api/projects/{name}/acquire/search")
     def project_acquire_search(name: str, body: AcquireSearchBody) -> dict[str, object]:

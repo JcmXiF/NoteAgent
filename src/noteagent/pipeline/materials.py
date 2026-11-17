@@ -26,6 +26,7 @@ from noteagent.acquire.adapters.image_source import ImageSourceAdapter
 from noteagent.acquire.adapters.office_source import OfficeSourceAdapter
 from noteagent.acquire.adapters.pdf_source import PdfSourceAdapter
 from noteagent.acquire.derive import blocks_payload
+from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.types import Capture
 from noteagent.acquire.write_raw import capture_kind, raw_relative_for_capture, render_capture_source
 from noteagent.agent.clock import Clock, iso_timestamp
@@ -267,7 +268,7 @@ class StagingArea:
     ) -> StagedMaterial:
         if not is_run_id(run_id):
             raise ValueError(f"not a pipeline run id: {run_id!r}")
-        if capture.fidelity == "failed":
+        if capture.fidelity == FIDELITY_FAILED:
             raise ValueError("a capture that failed the quality gate is not material")
         kind = capture_kind(capture)
         material = raw_relative_for_capture(capture)

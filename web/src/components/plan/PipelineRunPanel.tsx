@@ -10,6 +10,8 @@ import {
   fetchPipelineRuns,
   startPipelineRun,
   type PipelineMaterial,
+  type PipelineMaterialMode,
+  type PipelineQueryMode,
   type PipelineRun,
   type PipelineRunStatus,
 } from "@/lib/api/pipeline";
@@ -34,6 +36,8 @@ export function PipelineRunPanel() {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [materials, setMaterials] = useState<PipelineMaterial[]>([]);
   const [draft, setDraft] = useState("");
+  const [queryMode, setQueryMode] = useState<PipelineQueryMode>("precise");
+  const [materialMode, setMaterialMode] = useState<PipelineMaterialMode>("auto");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,11 +77,15 @@ export function PipelineRunPanel() {
 
   const start = async () => {
     const intent = draft.trim();
-    if (!intent || busy) return;
+    if (!intent || busy || materialMode !== "auto") return;
     setBusy(true);
     setError(null);
     try {
-      const run = await startPipelineRun({ intent });
+      const run = await startPipelineRun({
+        intent,
+        queryMode,
+        materialMode,
+      });
       setRuns((current) => [run, ...current]);
       setDraft("");
       void load();
@@ -128,12 +136,48 @@ export function PipelineRunPanel() {
         <Button
           type="submit"
           size="sm"
-          disabled={!draft.trim() || busy}
+          disabled={!draft.trim() || busy || materialMode === "manual"}
         >
           {busy ? <Loader2 className="animate-spin" /> : <Play />}
           {t("pipeline.start")}
         </Button>
       </form>
+
+      <div className="flex items-center gap-1 text-[10px]">
+        <span className="shrink-0 text-muted-foreground">
+          {t("pipeline.query.label")}
+        </span>
+        <ModeButton
+          active={queryMode === "precise"}
+          onClick={() => setQueryMode("precise")}
+          label={t("pipeline.query.precise")}
+        />
+        <ModeButton
+          active={queryMode === "model"}
+          onClick={() => setQueryMode("model")}
+          label={t("pipeline.query.model")}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-1 text-[10px]">
+        <span className="shrink-0 text-muted-foreground">
+          {t("pipeline.materialMode.label")}
+        </span>
+        <ModeButton
+          active={materialMode === "auto"}
+          onClick={() => setMaterialMode("auto")}
+          label={t("pipeline.materialMode.auto")}
+        />
+        <ModeButton
+          active={materialMode === "manual"}
+          onClick={() => setMaterialMode("manual")}
+          label={t("pipeline.materialMode.manual")}
+        />
+      </div>
+      {materialMode === "manual" ? (
+        <p className="text-[10px] text-muted-foreground">
+          {t("pipeline.materialMode.manualHint")}
+        </p>
+      ) : null}
 
       {error ? (
         <p className="text-[11px] text-destructive">{error}</p>
@@ -200,5 +244,28 @@ export function PipelineRunPanel() {
         </p>
       )}
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+      aria-pressed={active}
+      className="h-6 px-1.5 text-[10px]"
+      onClick={onClick}
+    >
+      {label}
+    </Button>
   );
 }

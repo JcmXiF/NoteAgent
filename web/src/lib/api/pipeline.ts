@@ -28,6 +28,8 @@ export type PipelineRun = {
   updatedAt: string;
   planRevision: number;
   error: string;
+  /** What the stages have done so far: acquired, skipped and why. */
+  detail: Record<string, unknown>;
 };
 
 export type PipelineStartInput = {

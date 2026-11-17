@@ -15,7 +15,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
-from noteagent.acquire.types import Capture
+from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.pipeline.acquire import AcquireStage
+from noteagent.pipeline.captures import CaptureInbox
 from noteagent.pipeline.lock import ProjectLock
 from noteagent.pipeline.materials import Materials
 from noteagent.pipeline.run import PipelineRun
@@ -45,14 +47,14 @@ def _deps(*, stages=(), spawn=None) -> AppDeps:
     )
 
 
-def _capture() -> Capture:
+def _capture(url: str = "https://example.com/entropy") -> Capture:
     html = (
         "<html><head><title>熵</title></head><body><article>"
         '<p data-na-block="b1">熵是不确定性的度量。</p>'
         "</article></body></html>"
     )
     return Capture(
-        url="https://example.com/entropy",
+        url=url,
         title="熵",
         markdown="熵是不确定性的度量。",
         html=html,
@@ -60,6 +62,20 @@ def _capture() -> Capture:
         fidelity="ok",
         reasons=(),
     )
+
+
+def _cards(count: int) -> list[CandidateCard]:
+    return [
+        CandidateCard(
+            title=f"Page {index}",
+            url=f"https://example.com/page-{index}",
+            site="example.com",
+            snippet="",
+            why="search",
+            via="web_search",
+        )
+        for index in range(count)
+    ]
 
 
 class _BlockingStage:
@@ -248,6 +264,106 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(items[0]["state"], "staged")
                 self.assertEqual(items[0]["title"], "熵")
                 self.assertTrue(items[0]["material"].startswith("raw/web/"))
+
+    def test_an_auto_run_stages_the_materials_it_acquired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(5)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(_deps(stages=[stage], spawn=lambda work: work()))
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                self.assertEqual(started.status_code, 201, started.text)
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+
+            self.assertEqual(run["status"], "succeeded")
+            self.assertEqual(run["detail"]["acquired"], 4)
+            self.assertEqual(len(materials), 4)
+
+    def test_a_sign_in_wall_waits_in_the_attention_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(5)
+
+            def fetch(url: str, query: str) -> Capture:
+                if url == cards[0].url:
+                    return Capture(
+                        url=url,
+                        title="Page 0",
+                        markdown="",
+                        html="",
+                        capture_method="test",
+                        fidelity="failed",
+                        reasons=("http_forbidden",),
+                        http_status=403,
+                    )
+                return _capture(url)
+
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=fetch,
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(_deps(stages=[stage], spawn=lambda work: work()))
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                self.assertEqual(started.status_code, 201, started.text)
+                attention = client.get(
+                    "/api/projects/demo/attention?check=false"
+                ).json()
+
+            self.assertEqual(attention["capture"]["openCount"], 1)
+            self.assertEqual(
+                attention["capture"]["items"][0]["url"], cards[0].url
+            )
+            self.assertEqual(attention["counts"]["capture"], 1)
+
+    def test_a_queued_sign_in_page_can_be_dismissed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            item = CaptureInbox(layout.capture_inbox).add(
+                url="https://example.com/paid",
+                title="Paid",
+                reason="http_forbidden",
+                http_status=403,
+                run_id="pr-1",
+                at="2026-11-10T09:00:00Z",
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(create_app(_deps(spawn=lambda work: work())))
+                response = client.post(
+                    "/api/projects/demo/capture-inbox/dismiss",
+                    json={"id": item["id"]},
+                )
+                again = client.post(
+                    "/api/projects/demo/capture-inbox/dismiss",
+                    json={"id": item["id"]},
+                )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["openCount"], 0)
+                self.assertEqual(again.status_code, 404, again.text)
+                self.assertEqual(again.json()["code"], "capture.notFound")
 
     def test_materials_for_an_unknown_run_are_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

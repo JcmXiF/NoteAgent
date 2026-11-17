@@ -42,8 +42,9 @@ class AppDeps:
     #: The project's pipeline, when a test hands one in; otherwise it is built
     #: from the active project on each request.
     pipeline: PipelineService | None = None
-    #: The stages a run walks. Empty in the skeleton; later tickets fill them.
-    pipeline_stages: Sequence[PipelineStage] = ()
+    #: The stages a run walks. ``None`` composes the production stages; an
+    #: explicit empty sequence is a run that does nothing (a test seam).
+    pipeline_stages: Sequence[PipelineStage] | None = None
     #: The active run of each project, shared by every request in this process.
     pipeline_registry: PipelineRegistry = field(default_factory=PipelineRegistry)
     #: How a run is taken off the request thread. A test passes a synchronous

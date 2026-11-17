@@ -32,6 +32,7 @@ const running: PipelineRun = {
   updatedAt: "2026-11-10T09:00:01Z",
   planRevision: 0,
   error: "",
+  detail: {},
 };
 
 describe("PipelineRunPanel", () => {
@@ -97,6 +98,31 @@ describe("PipelineRunPanel", () => {
     expect(vi.mocked(startPipelineRun).mock.calls[0][0].intent).toBe(
       "写一篇熵的笔记",
     );
+  });
+
+  it("starts with the query mode the reader chose", async () => {
+    vi.mocked(startPipelineRun).mockResolvedValue(running);
+    await render();
+
+    await act(async () => {
+      button(i18n.t("pipeline.query.model")).click();
+    });
+    const input = container.querySelector("input") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "写一篇熵的笔记");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      button(i18n.t("pipeline.start")).click();
+    });
+
+    const call = vi.mocked(startPipelineRun).mock.calls[0][0];
+    expect(call.queryMode).toBe("model");
+    expect(call.materialMode).toBe("auto");
   });
 
   it("lists the materials the run collected", async () => {

@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from threading import Event, Lock
 from typing import Protocol, runtime_checkable
 
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
+from noteagent.pipeline.captures import CaptureInbox, LoginWall
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
 from noteagent.pipeline.run import (
@@ -54,6 +55,8 @@ class StageContext:
     layout: ProjectLayout
     cancel: Event
     _save: Callable[[PipelineRun], PipelineRun]
+    #: Stage one capture as a material of this run, through the single writer.
+    stage_material: Callable[[Capture], MaterialState]
 
     def update(self, **changes: object) -> PipelineRun:
         """Write one change to the run and carry on with the fresh copy."""
@@ -135,12 +138,8 @@ class PipelineService:
         self._layout = layout
         self._clock = clock
         self._ids = ids
-        self._stages = tuple(stages)
-        for stage in self._stages:
-            # A stage the run file cannot read back would make a run vanish from
-            # the store, so a mistyped name is refused where it is wired.
-            if stage.name not in STAGES:
-                raise ValueError(f"unknown pipeline stage: {stage.name!r}")
+        self._stages = ()
+        self.use_stages(stages)
         if keep_runs < 1:
             raise ValueError("a pipeline keeps at least one run's staging")
         self._keep_runs = keep_runs
@@ -149,6 +148,7 @@ class PipelineService:
         self._spawn = spawn or _spawn_thread
         self._store = PipelineRunStore(layout)
         self._materials = Materials(layout, clock=clock)
+        self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
 
     def start(
@@ -170,6 +170,12 @@ class PipelineService:
             raise ValueError(f"unknown queryMode: {query_mode!r}")
         if material_mode not in MATERIAL_MODES:
             raise ValueError(f"unknown materialMode: {material_mode!r}")
+        if material_mode != "auto":
+            # Manual material mode is the source workbench, where the person
+            # picks cards; a run that acquired anyway would decide for them.
+            raise ValueError(
+                "manual material mode is used from the source workbench, not a pipeline run"
+            )
 
         # A paused run has no worker to hold the in-memory claim, so the store
         # answers too. The registry still arbitrates two starts that arrive
@@ -214,11 +220,45 @@ class PipelineService:
     def active(self) -> list[PipelineRun]:
         return self._store.active()
 
+    def use_stages(self, stages: Sequence[PipelineStage]) -> None:
+        """Wire the stages, before a run starts; a mistyped name is refused."""
+        checked = tuple(stages)
+        for stage in checked:
+            # A stage the run file cannot read back would make a run vanish from
+            # the store, so a mistyped name is refused where it is wired.
+            if stage.name not in STAGES:
+                raise ValueError(f"unknown pipeline stage: {stage.name!r}")
+        self._stages = checked
+
     def materials(self) -> Materials:
         return self._materials
 
     def materials_for_run(self, run_id: str) -> list[MaterialState]:
         return self._materials.for_run(run_id)
+
+    def capture_payload(self) -> dict[str, object]:
+        return self._captures.payload()
+
+    def record_capture(self, wall: LoginWall) -> None:
+        """Put one sign-in page on the queue, serialized with every other write."""
+        with self._registry.writer(self._project_key):
+            self._captures.add(
+                url=wall.url,
+                title=wall.title,
+                reason=wall.reason,
+                http_status=wall.http_status,
+                run_id=wall.run_id,
+                at=iso_timestamp(self._clock),
+            )
+
+    def dismiss_capture(self, item_id: str) -> bool:
+        """Drop one queued page; a run in another process keeps its project."""
+        self._lock.acquire(f"capture:{item_id}")
+        try:
+            with self._registry.writer(self._project_key):
+                return self._captures.dismiss(item_id)
+        finally:
+            self._lock.release(f"capture:{item_id}")
 
     def stage_material(
         self,
@@ -291,6 +331,31 @@ class PipelineService:
         finally:
             self._lock.release("startup-sweep")
 
+    def _record_login_walls(self, run: PipelineRun) -> None:
+        """Queue the pages a stage met behind a sign-in, once per wall."""
+        raw = run.detail.get("loginWallItems")
+        if not isinstance(raw, list):
+            return
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                self.record_capture(
+                    LoginWall(
+                        url=str(item.get("url") or ""),
+                        title=str(item.get("title") or ""),
+                        reason=str(item.get("reason") or ""),
+                        http_status=(
+                            item.get("http_status")
+                            if isinstance(item.get("http_status"), int)
+                            else None
+                        ),
+                        run_id=str(item.get("run_id") or run.id),
+                    )
+                )
+            except (OSError, ValueError):
+                logger.exception("a sign-in page could not be queued")
+
     def _save(self, run: PipelineRun) -> PipelineRun:
         current = replace(run, updated_at=iso_timestamp(self._clock))
         with self._registry.writer(self._project_key):
@@ -312,9 +377,17 @@ class PipelineService:
                     layout=self._layout,
                     cancel=cancel,
                     _save=self._save,
+                    stage_material=lambda capture: self.stage_material(
+                        capture, run_id=current.id
+                    ),
                 )
-                stage(context)
-                current = context.run
+                try:
+                    stage(context)
+                finally:
+                    # A stage that raises has usually written what it found to the
+                    # run already; keep that detail on the failure.
+                    current = context.run
+                    self._record_login_walls(current)
                 # A stage that pauses the run (or fails it) ends this worker; the
                 # run is not walked any further.
                 if current.status != "running":
