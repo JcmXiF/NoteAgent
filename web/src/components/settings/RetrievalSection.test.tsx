@@ -16,12 +16,15 @@ vi.mock("@/lib/api/settings", () => ({
   saveSettings: vi.fn(),
   fetchRagStatus: vi.fn(),
   rebuildRagIndex: vi.fn(),
+  probeRagEmbedding: vi.fn(),
 }));
 
 import {
   fetchRagStatus,
+  probeRagEmbedding,
   rebuildRagIndex,
   saveSettings,
+  type RagProbeResult,
   type RagRebuildReport,
 } from "@/lib/api/settings";
 
@@ -336,6 +339,124 @@ describe("the advanced embedding settings", () => {
       typeInto(input("服务地址"), "http://other/v1");
     });
     expect(button("保存").disabled).toBe(false);
+  });
+});
+
+describe("the embedding test", () => {
+  it("embeds the draft without saving it", async () => {
+    vi.mocked(probeRagEmbedding).mockResolvedValue({
+      ok: true,
+      dim: 1024,
+      durationSeconds: 0.25,
+    });
+
+    await draw(enabledInstall());
+    await press("测试连接");
+
+    expect(probeRagEmbedding).toHaveBeenCalledWith({
+      endpoint: "http://localhost:8080/v1",
+      model: "Qwen3-Embedding-0.6B",
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("1024 维");
+    expect(host.textContent).toContain("0.25");
+  });
+
+  it("sends a draft key and never saves it", async () => {
+    vi.mocked(probeRagEmbedding).mockResolvedValue({
+      ok: true,
+      dim: 1024,
+      durationSeconds: 0.1,
+    });
+
+    await draw(enabledInstall());
+    await press("高级");
+    act(() => {
+      typeInto(input("密钥"), "secret");
+    });
+    await press("测试连接");
+
+    expect(probeRagEmbedding).toHaveBeenCalledWith({
+      endpoint: "http://localhost:8080/v1",
+      model: "Qwen3-Embedding-0.6B",
+      apiKey: "secret",
+    });
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("probes with the key the draft would save", async () => {
+    vi.mocked(probeRagEmbedding).mockResolvedValue({
+      ok: true,
+      dim: 1024,
+      durationSeconds: 0.1,
+    });
+
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: {
+            endpoint: "http://localhost:8080/v1",
+            model: "Qwen3-Embedding-0.6B",
+            apiKeySet: true,
+          },
+        }),
+      }),
+    );
+    await press("高级");
+    await press("清除密钥");
+    await press("测试连接");
+
+    expect(probeRagEmbedding).toHaveBeenCalledWith({
+      endpoint: "http://localhost:8080/v1",
+      model: "Qwen3-Embedding-0.6B",
+      clearApiKey: true,
+    });
+  });
+
+  it("shows the test in progress", async () => {
+    let finish!: (result: RagProbeResult) => void;
+    const pending = new Promise<RagProbeResult>((resolve) => {
+      finish = resolve;
+    });
+    vi.mocked(probeRagEmbedding).mockReturnValue(pending);
+
+    await draw(enabledInstall());
+    await press("测试连接");
+
+    expect(button("正在测试…").disabled).toBe(true);
+    expect(host.querySelector(".animate-spin")).not.toBeNull();
+
+    await act(async () => {
+      finish({ ok: true, dim: 1024, durationSeconds: 0.1 });
+      await pending;
+    });
+
+    expect(host.querySelector(".animate-spin")).toBeNull();
+    expect(host.textContent).toContain("连接成功");
+  });
+
+  it("cannot test an incomplete service", async () => {
+    await draw(
+      enabledInstall({
+        rag: ragSettings({
+          enabled: true,
+          embedding: { endpoint: "", model: "m" },
+        }),
+      }),
+    );
+
+    expect(button("测试连接").disabled).toBe(true);
+  });
+
+  it("says when the test failed", async () => {
+    vi.mocked(probeRagEmbedding).mockRejectedValue(new Error("no route"));
+
+    await draw(enabledInstall());
+    await press("测试连接");
+
+    expect(host.textContent).toContain("这次测试没有成功");
+    expect(button("测试连接").disabled).toBe(false);
   });
 });
 

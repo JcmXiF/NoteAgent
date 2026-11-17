@@ -550,6 +550,33 @@ export function ragProblems(
   return problems;
 }
 
+/** A trial needs an address and a model; a key is optional for local services. */
+export function ragCanProbe(draft: RagDraft): boolean {
+  return (
+    validBaseUrl(draft.endpoint) &&
+    Boolean(draft.model.trim()) &&
+    validSecret(draft.apiKey)
+  );
+}
+
+export type RagProbePatch = {
+  endpoint: string;
+  model: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
+/** The draft a trial call sends. A blank key means "use the stored one". */
+export function ragProbePatch(draft: RagDraft): RagProbePatch {
+  const patch: RagProbePatch = {
+    endpoint: trimmedUrl(draft.endpoint),
+    model: draft.model.trim(),
+  };
+  if (draft.apiKey.trim()) patch.apiKey = draft.apiKey.trim();
+  else if (draft.clearApiKey) patch.clearApiKey = true;
+  return patch;
+}
+
 export function ragDirty(draft: RagDraft, saved: RagSettings): boolean {
   // The service fields are hidden while the switch is off, and a save while it
   // is off sends only the switch: draft text behind it is not a change.

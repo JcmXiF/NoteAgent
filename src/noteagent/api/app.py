@@ -129,6 +129,7 @@ from noteagent.settings.install import (
     install_view,
     list_models,
     probe_llm,
+    probe_rag_embedding,
     probe_search,
 )
 from noteagent.settings.profiles import (
@@ -256,6 +257,13 @@ class RagEmbeddingSettingsBody(BaseModel):
 class RagSettingsBody(BaseModel):
     enabled: bool | None = None
     embedding: RagEmbeddingSettingsBody | None = None
+
+
+class RagProbeBody(BaseModel):
+    endpoint: str | None = None
+    model: str | None = None
+    apiKey: str | None = None
+    clearApiKey: bool = False
 
 
 class InstallSettingsBody(BaseModel):
@@ -873,6 +881,10 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/settings/rag/rebuild")
     def settings_rag_rebuild() -> dict[str, object]:
         return rag_rebuild_payload()
+
+    @app.post("/api/settings/rag/probe")
+    def settings_rag_probe(body: RagProbeBody) -> dict[str, object]:
+        return probe_rag_embedding(body.model_dump(exclude_unset=True))
 
     @app.get("/api/projects")
     def projects() -> dict[str, object]:

@@ -12,6 +12,7 @@ import type {
   ProfileCreatePatch,
   ProfileUpdatePatch,
   ProviderId,
+  RagProbePatch,
   SettingsPatch,
 } from "@/lib/install-settings";
 
@@ -119,6 +120,19 @@ export function fetchRagStatus(): Promise<RagIndexStatus> {
 
 export function rebuildRagIndex(): Promise<RagRebuildReport> {
   return postJson<RagRebuildReport>("/settings/rag/rebuild", {});
+}
+
+/** One trial embedding with the draft; nothing is saved or indexed. */
+export type RagProbeResult = {
+  ok: true;
+  dim: number;
+  durationSeconds: number;
+};
+
+export function probeRagEmbedding(
+  patch: RagProbePatch,
+): Promise<RagProbeResult> {
+  return postJson<RagProbeResult>("/settings/rag/probe", patch);
 }
 
 /** The explicit check: tool calling, then native search when it is in use. */

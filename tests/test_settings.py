@@ -30,10 +30,13 @@ from noteagent.project.layout import ProjectLayout
 from noteagent.rag.config import (
     DEFAULT_BATCH,
     DEFAULT_CONCURRENCY,
+    DEFAULT_DIM,
     DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
     DEFAULT_QUERY_PREFIX,
     load_embedding_config,
 )
+from noteagent.rag.embedding import EmbeddingError
+from noteagent.rag.faux import FakeEmbedder
 from noteagent.settings.brief import brief_view, save_brief
 from noteagent.settings.credentials import (
     RAG_EMBEDDING_KEY,
@@ -1688,6 +1691,260 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(view["llm"]["model"], "outside")
             self.assertEqual(view["sources"]["llm.model"], "env")
             self.assertIn("llm.model", view["locked"])
+
+
+@unittest.skipIf(TestClient is None, "fastapi not installed")
+class RagProbeApiTests(unittest.TestCase):
+    """The test button's request: the draft, the key, and what came back."""
+
+    def test_a_working_draft_answers_dim_and_time_without_saving(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                        "apiKey": "secret",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["dim"], DEFAULT_DIM)
+            self.assertGreaterEqual(body["durationSeconds"], 0)
+            self.assertNotIn("secret", response.text)
+            self.assertEqual(captured[0].api_key, "secret")
+            self.assertFalse(path.exists())
+
+    def test_the_stored_key_is_used_when_the_draft_has_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            # The key belongs to the saved address; the probe of that address
+            # may use it.
+            apply_install(
+                {
+                    "rag": {
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "fake-model",
+                        }
+                    }
+                }
+            )
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(captured[0].api_key, "stored")
+
+    def test_a_stored_key_is_not_sent_to_another_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {
+                    "rag": {
+                        "embedding": {
+                            "endpoint": "https://saved.example/v1",
+                            "model": "m",
+                            "apiKey": "stored",
+                        }
+                    }
+                }
+            )
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                client = TestClient(create_app())
+                refused = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://other.example/v1",
+                        "model": "m",
+                    },
+                )
+                same_host = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://saved.example/v1/other",
+                        "model": "m",
+                    },
+                )
+                with_key = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://other.example/v1",
+                        "model": "m",
+                        "apiKey": "draft",
+                    },
+                )
+
+            self.assertEqual(refused.status_code, 409, refused.text)
+            self.assertEqual(
+                refused.json()["code"], "settings.probeKeyRequired"
+            )
+            self.assertEqual(same_host.status_code, 200, same_host.text)
+            self.assertEqual(with_key.status_code, 200, with_key.text)
+            self.assertEqual(
+                [config.api_key for config in captured], ["stored", "draft"]
+            )
+
+    def test_clearing_the_key_probes_without_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://saved.example/v1",
+                        "model": "m",
+                        "clearApiKey": True,
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(captured[0].api_key, "")
+
+    def test_failures_are_coded_and_do_not_echo_the_key(self) -> None:
+        cases = (
+            (
+                "embedding request failed: timed out",
+                "settings.ragProbeUnreachable",
+            ),
+            ("embedding HTTP 401: no", "settings.ragProbeRejected"),
+            (
+                "the embedding endpoint did not answer JSON",
+                "settings.ragProbeFailed",
+            ),
+        )
+        for message, code in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ):
+                    with patch(
+                        "noteagent.settings.install.OpenAIEmbeddingClient",
+                        lambda _config: _RaisingEmbedder(message),
+                    ):
+                        response = TestClient(create_app()).post(
+                            "/api/settings/rag/probe",
+                            json={
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "fake-model",
+                                "apiKey": "secret",
+                            },
+                        )
+
+                    self.assertEqual(response.status_code, 502, response.text)
+                    self.assertEqual(response.json()["code"], code)
+                    self.assertNotIn("secret", response.text)
+
+    def test_a_different_dimension_is_its_own_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient",
+                lambda _config: _ShortEmbedder(),
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 502, response.text)
+            self.assertEqual(
+                response.json()["code"], "settings.ragProbeDimension"
+            )
+
+    def test_an_incomplete_draft_is_refused_before_calling_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            # A stored key must not turn a missing address into a key error.
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient",
+                side_effect=AssertionError("must not call the service"),
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={"endpoint": "", "model": "fake-model"},
+                )
+
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(response.json()["code"], "settings.invalid")
+            self.assertEqual(
+                response.json()["params"]["field"],
+                "rag.embedding.endpoint",
+            )
+
+
+class _RaisingEmbedder:
+    """An embedding client whose one call fails with a given message."""
+
+    def __init__(self, message: str) -> None:
+        self.dim = DEFAULT_DIM
+        self.message = message
+
+    def embed(self, texts, *, query: bool = False):
+        raise EmbeddingError(self.message)
+
+
+class _ShortEmbedder:
+    """An embedding client that answers with the wrong width."""
+
+    dim = DEFAULT_DIM
+
+    def embed(self, texts, *, query: bool = False):
+        return [(0.0,) * 8]
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")

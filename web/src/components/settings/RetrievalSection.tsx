@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, inputClass } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import {
 } from "@/components/settings/fields";
 import {
   fetchRagStatus,
+  probeRagEmbedding,
   rebuildRagIndex,
   saveSettings,
   type RagIndexState,
@@ -22,9 +24,11 @@ import { errorMessage } from "@/lib/api/client";
 import i18n from "@/i18n";
 import {
   isLocked,
+  ragCanProbe,
   ragDirty,
   ragDraftFrom,
   ragPatch,
+  ragProbePatch,
   ragProblems,
   type InstallSettings,
   type RagDraft,
@@ -60,6 +64,7 @@ export function RetrievalSection({
   const currentProject = useWorkspaceStore((state) => state.current);
   const [draft, setDraft] = useState<RagDraft>(() => ragDraftFrom(install.rag));
   const [saving, setSaving] = useState(false);
+  const [probing, setProbing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -127,6 +132,25 @@ export function RetrievalSection({
       setError(errorMessage(err, t("settings.saveFailed")));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const trial = async () => {
+    setProbing(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await probeRagEmbedding(ragProbePatch(draft));
+      setMessage(
+        t("settings.retrieval.testOk", {
+          dim: result.dim,
+          seconds: result.durationSeconds.toFixed(2),
+        }),
+      );
+    } catch (err) {
+      setError(errorMessage(err, t("settings.retrieval.testFailed")));
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -350,9 +374,26 @@ export function RetrievalSection({
         error={error}
       >
         {draft.enabled ? (
-          <span className="text-xs text-muted-foreground">
-            {t("settings.retrieval.takesEffect")}
-          </span>
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!ragCanProbe(draft) || probing || saving}
+              onClick={() => void trial()}
+            >
+              {probing ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  {t("settings.testing")}
+                </>
+              ) : (
+                t("settings.test")
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {t("settings.retrieval.takesEffect")}
+            </span>
+          </>
         ) : null}
       </SaveRow>
 

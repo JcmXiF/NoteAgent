@@ -18,6 +18,7 @@ import math
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -45,7 +46,14 @@ from noteagent.llm.config import (
     capture_process_env,
     process_env_keys,
 )
-from noteagent.rag.config import DEFAULT_BATCH, DEFAULT_CONCURRENCY
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_DIM,
+    DEFAULT_QUERY_PREFIX,
+    EmbeddingConfig,
+)
+from noteagent.rag.embedding import EmbeddingError, OpenAIEmbeddingClient
 from noteagent.rag.env import parse_boolean
 from noteagent.settings import effective as effective_mod
 from noteagent.settings.credentials import (
@@ -96,6 +104,10 @@ from noteagent.util.refusal import CodedError, Refusal
 _PROBE_TIMEOUT = 20.0
 _PROBE_QUERY = "example"
 
+#: The trial embedding asks one short text and waits less than an index run.
+_RAG_PROBE_TEXT = "noteagent embedding probe"
+_RAG_PROBE_TIMEOUT = 10.0
+
 #: Model discovery is a suggestion, so it waits less than a real request.
 _MODELS_TIMEOUT = 15.0
 _MODELS_LIMIT = 200
@@ -123,6 +135,7 @@ __all__ = [
     "install_view",
     "list_models",
     "probe_llm",
+    "probe_rag_embedding",
     "probe_search",
     "settings_store",
 ]
@@ -1339,6 +1352,124 @@ def probe_search(
     except SearchError as err:
         raise _probe_refusal(str(err), search=True) from err
     return len(run.cards)
+
+
+# --- RAG trial embedding -----------------------------------------------------
+
+
+def _rag_probe_refusal(message: str) -> Refusal:
+    """Why the trial embedding failed, in the words the screen can say."""
+    found = _HTTP_STATUS.search(message)
+    status_text = found.group(1) if found else ""
+    params = {"status": status_text} if status_text else {}
+    lowered = message.casefold()
+    if "dimension" in lowered:
+        return Refusal(
+            "settings.ragProbeDimension",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    if status_text in {"401", "403"}:
+        return Refusal(
+            "settings.ragProbeRejected",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    if (
+        "request failed" in message
+        or "exceeded its" in message
+        or "timed out" in lowered
+        or "connect" in lowered
+    ):
+        return Refusal(
+            "settings.ragProbeUnreachable",
+            message[:300],
+            params=params,
+            status=502,
+        )
+    return Refusal(
+        "settings.ragProbeFailed", message[:300], params=params, status=502
+    )
+
+
+def probe_rag_embedding(
+    body: Mapping[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    credentials: CredentialStore | None = None,
+    client_factory: Callable[[EmbeddingConfig], Any] | None = None,
+) -> dict[str, object]:
+    """Embed one fixed text with the draft, without saving or indexing."""
+    context = _context(path, credentials)
+    body = body or {}
+    endpoint = (
+        _use(F_RAG_EMBEDDING_ENDPOINT, clean_rag_endpoint(body["endpoint"]))
+        if body.get("endpoint") is not None
+        else context.effective.rag_embedding_endpoint.text
+    )
+    model = (
+        _use(F_RAG_EMBEDDING_MODEL, clean_rag_model(body["model"]))
+        if body.get("model") is not None
+        else context.effective.rag_embedding_model.text
+    )
+    if body.get("clearApiKey"):
+        key = ""
+    elif body.get("apiKey"):
+        key = _use(
+            F_RAG_EMBEDDING_KEY,
+            clean_secret(body["apiKey"], F_RAG_EMBEDDING_KEY.id),
+        )
+    else:
+        key = context.effective.rag_embedding_key.text
+    if not endpoint:
+        raise _invalid(
+            F_RAG_EMBEDDING_ENDPOINT.id,
+            "an embedding endpoint is required to test the service",
+        )
+    if not model:
+        raise _invalid(
+            F_RAG_EMBEDDING_MODEL.id,
+            "an embedding model is required to test the service",
+        )
+    if not body.get("apiKey") and not body.get("clearApiKey"):
+        # A stored key belongs to the address it was saved for. A draft that
+        # moves the address must bring its own key.
+        _key_fits_origin(
+            key,
+            context.effective.rag_embedding_endpoint.text,
+            endpoint,
+        )
+    config = EmbeddingConfig(
+        endpoint=endpoint,
+        model=model,
+        query_prefix=DEFAULT_QUERY_PREFIX,
+        dim=DEFAULT_DIM,
+        api_key=key,
+        retries=0,
+        query_timeout_s=_RAG_PROBE_TIMEOUT,
+        page_timeout_s=_RAG_PROBE_TIMEOUT,
+    )
+    client = (client_factory or OpenAIEmbeddingClient)(config)
+    started = time.perf_counter()
+    try:
+        vectors = client.embed([_RAG_PROBE_TEXT])
+    except EmbeddingError as err:
+        raise _rag_probe_refusal(str(err)) from err
+    elapsed = time.perf_counter() - started
+    if len(vectors) != 1 or len(vectors[0]) != config.dim:
+        got = len(vectors[0]) if vectors else 0
+        raise Refusal(
+            "settings.ragProbeDimension",
+            f"the service returned {got} dimensions, expected {config.dim}",
+            status=502,
+        )
+    return {
+        "ok": True,
+        "dim": config.dim,
+        "durationSeconds": round(elapsed, 3),
+    }
 
 
 # --- deep check --------------------------------------------------------------
