@@ -255,10 +255,10 @@ class FrameStage:
 
     def __call__(self, context: StageContext) -> None:
         summary = context.frame_materials()
-        detail = dict(context.run.detail)
-        detail["framedMaterials"] = summary.framed
-        detail["frameUsage"] = summary.usage()
-        context.update(detail=detail)
+        context.add_detail(
+            framedMaterials=summary.framed,
+            frameUsage=summary.usage(),
+        )
 
 
 @dataclass(frozen=True, slots=True)

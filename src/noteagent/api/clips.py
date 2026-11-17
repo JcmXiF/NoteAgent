@@ -68,9 +68,11 @@ def put_clips_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, 
             layout=layout,
         )
         store = replace(store, topic_map=parsed.to_dict())
-    if _collections_changed(disk.collections, store.collections):
-        # A plan answers the frames it was made against. Once the reader changes
-        # them, the plan is a statement about material that is no longer there.
+    if disk.intent != store.intent or _collections_changed(
+        disk.collections, store.collections
+    ):
+        # A plan answers the intent and frames it was made against. Once either
+        # changes, the plan is a statement about a question nobody asked.
         store = replace(store, topic_map=None, decisions=())
     save_clip_store(layout, store)
     _mark_human_frames(layout, disk.collections, store.collections)

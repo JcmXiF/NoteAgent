@@ -7,6 +7,7 @@ the rest of the pipeline tickets will use too.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import time
@@ -19,19 +20,23 @@ from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
+    GateDecision,
     collection_to_dict,
     save_clip_store,
 )
+from noteagent.ingest.topic_map import map_clips
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import FrameStage, Framing
 from noteagent.pipeline.lock import ProjectLock
 from noteagent.pipeline.materials import MaterialLog, Materials
+from noteagent.pipeline.planning import PlanStage
 from noteagent.pipeline.run import PipelineRun
 from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.init import init_project
+from noteagent.util.cancel import JobCancelled
 
 try:
     from fastapi.testclient import TestClient
@@ -46,13 +51,14 @@ except ImportError:  # pragma: no cover
     AppDeps = None  # type: ignore[misc, assignment]
 
 
-def _deps(*, stages=(), spawn=None, frame_model=None) -> AppDeps:
+def _deps(*, stages=(), spawn=None, frame_model=None, planner=None) -> AppDeps:
     return AppDeps(
         clock=FixedClock(),
         ids=SequentialIds(),
         pipeline_stages=tuple(stages),
         pipeline_spawn=spawn,
         pipeline_frame_model=frame_model,
+        pipeline_planner=planner,
     )
 
 
@@ -92,6 +98,50 @@ def _two_block_capture(url: str) -> Capture:
         fidelity="ok",
         reasons=(),
     )
+
+
+def _scripted_plan(*, slug: str = "entropy", coverage: str = "write"):
+    """The real mapping pass, over a scripted model answer and staged material.
+
+    ``default_planner`` only adds ``verify_sources=False`` to this call, so the
+    test drives the same parse, gates and plan construction as production.
+    """
+    calls: list[dict[str, object]] = []
+
+    def plan(layout, store, cancel):
+        calls.append(
+            {"intent": store.intent, "collections": len(store.collections)}
+        )
+        collection = store.collections[0]
+        payload = {
+            "intent": store.intent,
+            "candidates": [
+                {
+                    "slug": slug,
+                    "title": "熵",
+                    "coverage": coverage,
+                    "wikiPath": f"wiki/{slug}.md",
+                    "collectionIds": [collection.id],
+                    "outline": [
+                        {
+                            "id": "s1",
+                            "title": "定义",
+                            "collectionId": collection.id,
+                            "blockIds": list(collection.block_ids[:1]),
+                        }
+                    ],
+                }
+            ],
+        }
+        return map_clips(
+            layout,
+            store=store,
+            verify_sources=False,
+            map_text=json.dumps(payload),
+            cancel=cancel,
+        )
+
+    return plan, calls
 
 
 def _cards(count: int) -> list[CandidateCard]:
@@ -484,6 +534,227 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(
                 run["detail"]["frameUsage"]["modelCalls"], 1
             )
+
+    def test_the_plan_stage_plans_the_run_and_records_a_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            plan, calls = _scripted_plan()
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage(), PlanStage()],
+                            spawn=lambda work: work(),
+                            planner=plan,
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run_id = started.json()["id"]
+                run = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
+                clips = client.get("/api/projects/demo/clips").json()
+                materials = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/materials"
+                ).json()["materials"]
+
+            self.assertEqual(run["status"], "succeeded")
+            self.assertEqual(run["planRevision"], 1)
+            self.assertEqual(run["detail"]["planPages"], 1)
+            self.assertEqual(run["detail"]["planCarried"], 0)
+            self.assertEqual(materials[0]["state"], "planned")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0]["intent"], "熵")
+            self.assertEqual(calls[0]["collections"], 1)
+            self.assertEqual(
+                clips["topicMap"]["candidates"][0]["slug"], "entropy"
+            )
+            # A page nobody answered keeps the model's suggestion.
+            self.assertEqual(
+                clips["topicMap"]["candidates"][0]["coverage"], "write"
+            )
+            self.assertEqual(clips["decisions"], [])
+
+    def test_a_person_answer_survives_the_automatic_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            layout = init_project(repo / "projects" / "demo")
+            save_clip_store(
+                layout,
+                ClipStore(
+                    intent="",
+                    collections=(),
+                    choices=(GateDecision("entropy", "skip", ("s1",)),),
+                ),
+            )
+            plan, _calls = _scripted_plan(coverage="write")
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage(), PlanStage()],
+                            spawn=lambda work: work(),
+                            planner=plan,
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run = client.get(
+                    f"/api/v1/pipeline/runs/{started.json()['id']}"
+                ).json()
+                clips = client.get("/api/projects/demo/clips").json()
+
+            self.assertEqual(run["detail"]["planCarried"], 1)
+            self.assertEqual(
+                clips["choices"],
+                [{"slug": "entropy", "action": "skip", "sectionIds": ["s1"]}],
+            )
+            # The new plan is a proposal; the gate answers a person confirmed
+            # belong to the plan they confirmed, not to this revision.
+            self.assertEqual(clips["decisions"], [])
+
+    def test_an_empty_plan_fails_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+
+            def plan(layout, store, cancel):
+                # The real parse of a model answer that names no page at all.
+                return map_clips(
+                    layout,
+                    store=store,
+                    verify_sources=False,
+                    map_text=json.dumps(
+                        {"intent": store.intent, "candidates": []}
+                    ),
+                    cancel=cancel,
+                )
+
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage(), PlanStage()],
+                            spawn=lambda work: work(),
+                            planner=plan,
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run = client.get(
+                    f"/api/v1/pipeline/runs/{started.json()['id']}"
+                ).json()
+
+            self.assertEqual(run["status"], "failed")
+            self.assertIn("missing primary", run["error"])
+
+    def test_a_cancelled_plan_marks_the_run_cancelled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+
+            def plan(layout, store, cancel):
+                # What the shared planning job raises when the reader stops it.
+                raise JobCancelled()
+
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage(), PlanStage()],
+                            spawn=lambda work: work(),
+                            planner=plan,
+                        )
+                    )
+                )
+                started = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run = client.get(
+                    f"/api/v1/pipeline/runs/{started.json()['id']}"
+                ).json()
+
+            self.assertEqual(run["status"], "cancelled")
+            self.assertEqual(run["error"], "")
+
+    def test_a_changed_intent_clears_the_plan_and_the_next_run_replans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_project(repo / "projects" / "demo")
+            plan, calls = _scripted_plan()
+            cards = _cards(1)
+            stage = AcquireStage(
+                search=lambda query: cards,
+                fetch=lambda url, query: _capture(url),
+            )
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                projects_mod.use_project("demo")
+                client = TestClient(
+                    create_app(
+                        _deps(
+                            stages=[stage, FrameStage(), PlanStage()],
+                            spawn=lambda work: work(),
+                            planner=plan,
+                        )
+                    )
+                )
+                first = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                self.assertEqual(first.status_code, 201, first.text)
+                clips = client.get("/api/projects/demo/clips").json()
+                changed = client.put(
+                    "/api/projects/demo/clips",
+                    json={
+                        "intent": "另一个问题",
+                        "collections": clips["collections"],
+                        "topicMap": clips["topicMap"],
+                        "decisions": clips["decisions"],
+                        "choices": clips["choices"],
+                    },
+                )
+                self.assertIsNone(changed.json()["topicMap"])
+                second = client.post(
+                    "/api/v1/pipeline/runs", json={"intent": "熵"}
+                )
+                run = client.get(
+                    f"/api/v1/pipeline/runs/{second.json()['id']}"
+                ).json()
+                replanned = client.get("/api/projects/demo/clips").json()
+
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(run["planRevision"], 1)
+            self.assertIsNotNone(replanned["topicMap"])
 
     def test_a_person_edited_frame_is_recorded_and_left_alone(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -20,6 +20,7 @@ from noteagent.api.projects import get_active_layout
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.frame_model import default_frame_model
 from noteagent.pipeline.framing import FrameStage
+from noteagent.pipeline.planning import PlanStage, default_planner
 from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.stage import PipelineStage
 from noteagent.project.config import ProjectNotConfiguredError
@@ -38,11 +39,15 @@ def pipeline_service(deps: AppDeps) -> PipelineService:
     # A test that wires its own stages gets the deterministic split unless it
     # hands in a model too; a real core frames with the model.
     frame_model = deps.pipeline_frame_model
-    if frame_model is None and deps.pipeline_stages is None:
-        frame_model = default_frame_model(
-            rounds=deps.pipeline_frame_rounds,
-            chars=deps.pipeline_frame_chars,
-        )
+    planner = deps.pipeline_planner
+    if deps.pipeline_stages is None:
+        if frame_model is None:
+            frame_model = default_frame_model(
+                rounds=deps.pipeline_frame_rounds,
+                chars=deps.pipeline_frame_chars,
+            )
+        if planner is None:
+            planner = default_planner
     # The service exists before its stages do: a default stage writes the
     # sign-in queue through the same single writer the service owns.
     service = PipelineService(
@@ -53,6 +58,7 @@ def pipeline_service(deps: AppDeps) -> PipelineService:
         spawn=deps.pipeline_spawn,
         keep_runs=deps.pipeline_keep_runs,
         frame_model=frame_model,
+        planner=planner,
     )
     if deps.pipeline_stages is None:
         service.use_stages(default_stages(layout, clock=deps.clock))
@@ -100,6 +106,7 @@ def default_stages(layout: ProjectLayout, *, clock: Clock) -> Sequence[PipelineS
             rewrite=rewrite_query,
         ),
         FrameStage(),
+        PlanStage(),
     )
 
 

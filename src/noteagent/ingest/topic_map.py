@@ -474,6 +474,7 @@ def map_clips(
     on_status: Callable[..., None] | None = None,
     run_logger: RunLogger | None = None,
     cancel: threading.Event | None = None,
+    verify_sources: bool = True,
 ) -> TopicMap:
     """
     Build a topic map from persisted clips. ``map_text`` injects fake LLM JSON.
@@ -481,13 +482,18 @@ def map_clips(
     ``targets`` names the pages the pass is about, when the caller has them. They
     are given to the model and the answer is bound to them — the constraint travels
     with the request instead of being applied to the answer afterwards.
+
+    ``verify_sources`` is turned off by the pipeline, whose material is still in
+    staging: it has already read the blocks it is handing over, and the file is
+    not under ``raw/`` until the compile promotes it.
     """
     logger = run_logger or RunLogger.disabled()
     check_cancelled(cancel)
     clip_store = store if store is not None else load_clip_store(layout)
     if not clip_store.collections:
         raise Refusal("plan.noSelection", "no clip collections to map")
-    require_durable_sources(layout, clip_store.collections)
+    if verify_sources:
+        require_durable_sources(layout, clip_store.collections)
     goal = clip_store.intent.strip() if intent is None else intent.strip()
 
     def status(message: str, **kwargs) -> None:

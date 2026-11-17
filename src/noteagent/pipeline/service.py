@@ -21,6 +21,7 @@ from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS, MaterialState, Materials
+from noteagent.pipeline.planning import PlanError, PlanFn, Planning
 from noteagent.pipeline.run import (
     MATERIAL_MODES,
     QUERY_MODES,
@@ -35,10 +36,12 @@ from noteagent.pipeline.stage import (
     FrameSummary,
     PipelineCancelled,
     PipelineStage,
+    PlanSummary,
     StageContext,
 )
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.layout import ProjectLayout
+from noteagent.util.cancel import JobCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,7 @@ class PipelineService:
         spawn: Callable[[Callable[[], None]], None] | None = None,
         keep_runs: int = DEFAULT_KEEP_RUNS,
         frame_model: ModelFraming | None = None,
+        planner: PlanFn | None = None,
     ) -> None:
         self._layout = layout
         self._clock = clock
@@ -127,6 +131,9 @@ class PipelineService:
         self._materials = Materials(layout, clock=clock)
         self._framing = Framing(
             layout, materials=self._materials, model=frame_model
+        )
+        self._planning = Planning(
+            layout, materials=self._materials, planner=planner
         )
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
@@ -225,6 +232,16 @@ class PipelineService:
         """Frame the run's staged materials, serialized with every other write."""
         with self._registry.writer(self._project_key):
             return self._framing.frame_run(run_id)
+
+    def plan_materials(
+        self, run_id: str, cancel: Event | None = None
+    ) -> PlanSummary:
+        """Plan the run's frames, serialized with every other write."""
+        run = self._store.get(run_id)
+        if run is None:
+            raise PlanError(f"no pipeline run: {run_id}")
+        with self._registry.writer(self._project_key):
+            return self._planning.plan_run(run, cancel=cancel)
 
     def write_clips(self, work: Callable[[], _T]) -> _T:
         """Run a selection write under the project's lock and single writer."""
@@ -380,6 +397,9 @@ class PipelineService:
                         capture, run_id=current.id
                     ),
                     frame_materials=lambda: self.frame_materials(current.id),
+                    plan_materials=lambda: self.plan_materials(
+                        current.id, cancel
+                    ),
                 )
                 try:
                     stage(context)
@@ -395,7 +415,9 @@ class PipelineService:
             if cancel.is_set():
                 raise PipelineCancelled("the run was cancelled")
             self._save(replace(current, status="succeeded", stage="done"))
-        except PipelineCancelled:
+        except (PipelineCancelled, JobCancelled):
+            # A stop during planning surfaces from the shared job as
+            # JobCancelled; either way the reader cancelled the run.
             self._save(replace(current, status="cancelled", error=""))
         except Exception as err:  # noqa: BLE001 - a failed run is a result
             logger.exception("pipeline run %s failed", current.id)

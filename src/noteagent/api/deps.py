@@ -24,6 +24,7 @@ from noteagent.pipeline.frame_model import (
     ModelFraming,
 )
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
+from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
 
@@ -64,6 +65,9 @@ class AppDeps:
     #: The disclosure budget a production frame model is built with.
     pipeline_frame_rounds: int = DEFAULT_FRAME_ROUNDS
     pipeline_frame_chars: int = DEFAULT_FRAME_CHARS
+    #: The planner a run calls. A test that wires its own stages hands in a
+    #: scripted planner; ``None`` leaves the plan stage unwired.
+    pipeline_planner: PlanFn | None = None
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.
