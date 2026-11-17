@@ -311,9 +311,15 @@ class VectorTests(unittest.TestCase):
 
     def test_a_non_finite_value_is_refused(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            return response_for(
-                json.loads(request.content)["input"],
-                vectors=[[math.nan, 1.0]],
+            # Raw JSON text: a newer httpx refuses to serialize NaN through
+            # the ``json=`` shortcut, but the endpoint can still send it.
+            return httpx.Response(
+                200,
+                content=(
+                    '{"data": [{"index": 0, '
+                    '"embedding": [NaN, 1.0]}]}'
+                ),
+                headers={"content-type": "application/json"},
             )
 
         with self.assertRaises(EmbeddingError):
