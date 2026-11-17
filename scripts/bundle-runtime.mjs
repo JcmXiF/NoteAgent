@@ -45,6 +45,8 @@ const REQUIREMENTS = [
   "pypdfium2>=4.30",
   "python-docx>=1.1",
   "python-pptx>=1.0",
+  "lancedb>=0.41,<0.42",
+  "pyarrow>=26.0",
   "keyring>=24.0",
   "fastapi>=0.115",
   "pydantic>=2.0",
@@ -221,6 +223,7 @@ async function main() {
   const probe = [
     "import fastapi, uvicorn, httpx, trafilatura, pypdfium2, lxml",
     "import docx, pptx, yaml, charset_normalizer, pydantic, starlette",
+    "import lancedb, pyarrow",
     // The credential store is imported lazily at run time, so this checks both
     // that the package travelled and that a real backend answers: the null
     // backend would accept a key and store nowhere.
@@ -228,7 +231,7 @@ async function main() {
     "print('imports ok')",
   ].join("; ");
   run(path.join(pythonRoot, "python.exe"), ["-c", probe]);
-  run(path.join(pythonRoot, "python.exe"), ["-c", "import noteagent, noteagent.api; print('source on path')"]);
+  run(path.join(pythonRoot, "python.exe"), ["-c", "import noteagent, noteagent.api, noteagent.rag.index; print('source on path')"]);
 
   report();
 }

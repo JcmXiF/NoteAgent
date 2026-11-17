@@ -1434,6 +1434,10 @@
       "llm": {
         "notConfigured": "No model service is configured yet. Open Settings and enter the connection details."
       },
+      "rag": {
+        "embeddingNotConfigured": "No embedding service is configured for the search index. Open Settings and enter its address and model.",
+        "embeddingFailed": "The embedding service did not return usable vectors; search may fall back to lexical matches."
+      },
       "provider": {
         "notConfigured": "No web search is set up yet. Open Settings, choose a search service and add its key.",
         "misconfigured": "The web search settings are incomplete. Check them.",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import (
@@ -23,6 +24,7 @@ from noteagent.agent.tools import (
 )
 from noteagent.ingest.frontmatter import parse_page, unquote_scalar
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.result import RagSearchResult
 from noteagent.wiki.links import (
     is_wiki_content_page,
     resolve_wikilink,
@@ -30,6 +32,9 @@ from noteagent.wiki.links import (
     wiki_slug_maps,
 )
 from noteagent.wiki.local_search import query_needles, rank_text
+
+if TYPE_CHECKING:
+    from noteagent.rag.search import RagSearchBackend
 
 WIKI_READ = "wiki_read"
 SEARCH = "search"
@@ -95,9 +100,16 @@ class WikiToolLimits:
 
 
 def wiki_tools(
-    layout: ProjectLayout, *, limits: WikiToolLimits | None = None
+    layout: ProjectLayout,
+    *,
+    limits: WikiToolLimits | None = None,
+    rag: "RagSearchBackend | None" = None,
 ) -> ToolRegistry:
-    """The registry the chat loop offers for one project."""
+    """The registry the chat loop offers for one project.
+
+    ``rag`` swaps the ``search`` backend only; the tool's name, schema and
+    description do not change, so an old session keeps the same contract.
+    """
     bounds = limits or WikiToolLimits()
     return ToolRegistry(
         [
@@ -126,7 +138,7 @@ def wiki_tools(
                     max_chars_per_item=bounds.excerpt_chars,
                     max_chars_total=bounds.max_result_chars,
                 ),
-                handler=_search_handler(layout, bounds),
+                handler=_search_handler(layout, bounds, rag),
                 argument_hint="query",
             ),
         ]
@@ -190,85 +202,176 @@ class _Hit:
     excerpt: str
 
 
-def _search_handler(layout: ProjectLayout, limits: WikiToolLimits):
+def _search_handler(
+    layout: ProjectLayout,
+    limits: WikiToolLimits,
+    rag: "RagSearchBackend | None",
+):
     def search(arguments: Mapping[str, object], context: ToolContext) -> ToolResult:
         query = str(arguments["query"]).strip()
         if not query:
             raise ValueError("search query must not be empty")
-        slug_to_rel, _bare = wiki_slug_maps(layout)
-        needles = query_needles(query)
-        ranked: list[_Hit] = []
-        skipped = 0
-        for slug, relative in slug_to_rel.items():
-            _check_cancel(context)
-            page = _title_and_body(layout, relative)
-            if page is None:
-                # One unreadable page must not fail the whole search, but the
-                # model should know the result is not the whole wiki.
-                skipped += 1
-                continue
-            title, body = page
-            score, match, excerpt = rank_text(needles, slug, title, body)
-            if score <= 0:
-                continue
-            ranked.append(_Hit(score, slug, match, excerpt))
-        ranked.sort(key=lambda hit: (-hit.score, hit.slug.casefold()))
-
-        if not ranked:
-            meta: dict[str, object] = {
-                "title": query,
-                "target": query,
-                "query": query,
-                "missing": True,
-            }
-            diagnostics = _skipped_diagnostic(skipped)
-            return ToolResult(
-                f"no wiki pages matched {query}", meta, diagnostics
-            )
-
-        hits = ranked[: max(0, limits.max_hits)]
-        omitted = len(ranked) - len(hits)
-        lines: list[str] = []
-        diagnostics = list(_skipped_diagnostic(skipped))
-        clipped = False
-        for hit in hits:
-            shown, cut = _clip(hit.excerpt, limits.excerpt_chars)
-            clipped = clipped or cut
-            lines.append(f"[[{hit.slug}]] — matched {hit.match or 'body'}")
-            if shown:
-                lines.append(f"  excerpt: {shown}")
-        if omitted:
-            lines.append(f"{omitted} more matches omitted")
-            diagnostics.append(
-                Diagnostic(
-                    "warning",
-                    "truncated",
-                    f"{omitted} search hits were omitted",
+        hybrid = None
+        if rag is not None:
+            try:
+                hybrid = rag.search(query)
+            except Exception as err:  # noqa: BLE001 - fallback is the contract
+                hybrid = RagSearchResult(
+                    (),
+                    "lexical",
+                    True,
+                    (f"retrieval failed: {err}",),
                 )
-            )
-        if clipped:
+        if hybrid is not None and (
+            not hybrid.degraded or hybrid.hits
+        ):
+            return _rag_result(query, hybrid, limits)
+        result = _lexical_search(layout, limits, query, context)
+        if hybrid is None:
+            return result
+        meta = dict(result.meta)
+        meta["mode"] = hybrid.mode
+        meta["degraded"] = True
+        diagnostics = list(result.diagnostics)
+        for warning in hybrid.warnings:
             diagnostics.append(
-                Diagnostic(
-                    "warning",
-                    "truncated",
-                    f"an excerpt was cut to {limits.excerpt_chars} characters",
-                )
+                Diagnostic("warning", "rag_fallback", warning)
             )
-        meta = {
+        return ToolResult(result.content, meta, tuple(diagnostics))
+
+    return search
+
+
+def _lexical_search(
+    layout: ProjectLayout,
+    limits: WikiToolLimits,
+    query: str,
+    context: ToolContext,
+) -> ToolResult:
+    slug_to_rel, _bare = wiki_slug_maps(layout)
+    needles = query_needles(query)
+    ranked: list[_Hit] = []
+    skipped = 0
+    for slug, relative in slug_to_rel.items():
+        _check_cancel(context)
+        page = _title_and_body(layout, relative)
+        if page is None:
+            # One unreadable page must not fail the whole search, but the
+            # model should know the result is not the whole wiki.
+            skipped += 1
+            continue
+        title, body = page
+        score, match, excerpt = rank_text(needles, slug, title, body)
+        if score <= 0:
+            continue
+        ranked.append(_Hit(score, slug, match, excerpt))
+    ranked.sort(key=lambda hit: (-hit.score, hit.slug.casefold()))
+    return _render_search(
+        query,
+        ranked,
+        limits,
+        extra=_skipped_diagnostic(skipped),
+    )
+
+
+def _rag_result(
+    query: str, result: RagSearchResult, limits: WikiToolLimits
+) -> ToolResult:
+    hits = [
+        _Hit(hit.score, hit.slug, hit.match, hit.excerpt)
+        for hit in result.hits
+    ]
+    return _render_search(
+        query,
+        hits,
+        limits,
+        mode=result.mode,
+        degraded=result.degraded,
+        warnings=result.warnings,
+        default_match="semantic",
+    )
+
+
+def _render_search(
+    query: str,
+    hits: list[_Hit],
+    limits: WikiToolLimits,
+    *,
+    mode: str | None = None,
+    degraded: bool | None = None,
+    warnings: tuple[str, ...] = (),
+    extra: tuple[Diagnostic, ...] = (),
+    default_match: str = "body",
+) -> ToolResult:
+    diagnostics: list[Diagnostic] = list(extra)
+    diagnostics.extend(
+        Diagnostic("warning", "rag_degraded", warning)
+        for warning in warnings
+    )
+    if not hits:
+        meta: dict[str, object] = {
             "title": query,
             "target": query,
             "query": query,
-            "scope": "wiki",
-            "hits": len(hits),
+            "missing": True,
         }
-        if omitted:
-            meta["omitted"] = "budget"
-            meta["truncated"] = True
-        if clipped:
-            meta["truncated"] = True
-        return ToolResult("\n".join(lines), meta, tuple(diagnostics))
+        if mode is not None:
+            meta["scope"] = "wiki"
+            meta["hits"] = 0
+            meta["mode"] = mode
+            meta["degraded"] = bool(degraded)
+        return ToolResult(
+            f"no wiki pages matched {query}",
+            meta,
+            tuple(diagnostics),
+        )
 
-    return search
+    selected = hits[: max(0, limits.max_hits)]
+    omitted = len(hits) - len(selected)
+    lines: list[str] = []
+    clipped = False
+    for hit in selected:
+        shown, cut = _clip(hit.excerpt, limits.excerpt_chars)
+        clipped = clipped or cut
+        lines.append(
+            f"[[{hit.slug}]] — matched "
+            f"{hit.match or default_match}"
+        )
+        if shown:
+            lines.append(f"  excerpt: {shown}")
+    if omitted:
+        lines.append(f"{omitted} more matches omitted")
+        diagnostics.append(
+            Diagnostic(
+                "warning",
+                "truncated",
+                f"{omitted} search hits were omitted",
+            )
+        )
+    if clipped:
+        diagnostics.append(
+            Diagnostic(
+                "warning",
+                "truncated",
+                f"an excerpt was cut to {limits.excerpt_chars} characters",
+            )
+        )
+    meta = {
+        "title": query,
+        "target": query,
+        "query": query,
+        "scope": "wiki",
+        "hits": len(selected),
+    }
+    if mode is not None:
+        meta["mode"] = mode
+        meta["degraded"] = bool(degraded)
+    if omitted:
+        meta["omitted"] = "budget"
+        meta["truncated"] = True
+    if clipped:
+        meta["truncated"] = True
+    return ToolResult("\n".join(lines), meta, tuple(diagnostics))
 
 
 def _skipped_diagnostic(skipped: int) -> tuple[Diagnostic, ...]:

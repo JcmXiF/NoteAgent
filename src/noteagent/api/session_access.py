@@ -141,7 +141,47 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     if layout is None:
         # A test that injected its own store and no tools asked for a bare run.
         return ToolRegistry()
-    return wiki_tools(layout)
+    return wiki_tools(layout, rag=_rag_backend(layout))
+
+
+class _UnavailableRag:
+    """A backend that only knows why it cannot answer."""
+
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+
+    def search(self, query: str):
+        from noteagent.rag.result import RagSearchResult
+
+        return RagSearchResult(
+            (), "lexical", True, (self._reason,)
+        )
+
+
+def _rag_backend(layout: ProjectLayout):
+    """The cached hybrid backend, or a degraded one when it cannot be built.
+
+    Imported lazily so a run with RAG off never loads the index engine.
+    """
+    try:
+        from noteagent.rag.settings import load_rag_settings
+
+        settings = load_rag_settings()
+    except Exception as err:  # noqa: BLE001 - a bad config must not stop chat
+        return _UnavailableRag(f"rag settings: {err}")
+    if not settings.enabled:
+        return None
+    try:
+        from noteagent.rag.search import get_backend
+
+        backend = get_backend(layout, settings)
+    except Exception as err:  # noqa: BLE001 - a bad config must not stop chat
+        return _UnavailableRag(f"rag unavailable: {err}")
+    if backend is None:
+        return _UnavailableRag(
+            "rag unavailable: configure the embedding service"
+        )
+    return backend
 
 
 def session_runtime(

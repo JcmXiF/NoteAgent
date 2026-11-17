@@ -13,6 +13,11 @@ from pathlib import Path
 
 from noteagent.agent.tools import ToolContext
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.config import EmbeddingConfig
+from noteagent.rag.faux import FakeEmbedder
+from noteagent.rag.result import RagHit, RagSearchResult
+from noteagent.rag.search import RagSearchBackend
+from noteagent.rag.settings import RagSettings
 from noteagent.wiki.agent_tools import WikiToolLimits, wiki_tools
 
 
@@ -24,6 +29,21 @@ def _write(layout: ProjectLayout, relative: str, body: str) -> None:
 
 def _page(title: str, body: str) -> str:
     return f'---\ntitle: "{title}"\n---\n\n{body}\n'
+
+
+class FakeRag:
+    """A retrieval backend whose one answer, or failure, the test chooses."""
+
+    def __init__(self, result=None, *, error=None):
+        self.result = result or RagSearchResult((), "lexical")
+        self.error = error
+        self.queries: list[str] = []
+
+    def search(self, query: str):
+        self.queries.append(query)
+        if self.error is not None:
+            raise self.error
+        return self.result
 
 
 class WikiToolTests(unittest.TestCase):
@@ -175,6 +195,129 @@ class WikiToolTests(unittest.TestCase):
 
         self.assertTrue(result.meta["missing"])
         self.assertIn("no wiki pages matched", result.content)
+
+    def test_a_hybrid_result_replaces_the_lexical_search(self) -> None:
+        result = RagSearchResult(
+            (RagHit("concepts/entropy", "熵摘录", "title", 0.9),),
+            "hybrid",
+        )
+        registry = wiki_tools(self.layout, rag=FakeRag(result))
+
+        answer = registry.dispatch(
+            "search", '{"query": "熵"}', ToolContext("s1")
+        )
+
+        self.assertIn("[[concepts/entropy]]", answer.content)
+        self.assertIn("熵摘录", answer.content)
+        self.assertEqual(answer.meta["mode"], "hybrid")
+        self.assertEqual(answer.meta["hits"], 1)
+        self.assertFalse(answer.meta["degraded"])
+
+    def test_a_degraded_result_with_hits_keeps_them(self) -> None:
+        result = RagSearchResult(
+            (RagHit("concepts/entropy", "熵摘录", "title", 0.9),),
+            "hybrid",
+            True,
+            ("rerank failed: down",),
+        )
+        registry = wiki_tools(self.layout, rag=FakeRag(result))
+
+        answer = registry.dispatch(
+            "search", '{"query": "熵"}', ToolContext("s1")
+        )
+
+        self.assertIn("[[concepts/entropy]]", answer.content)
+        self.assertEqual(answer.meta["mode"], "hybrid")
+        self.assertTrue(answer.meta["degraded"])
+        self.assertEqual(
+            [item.code for item in answer.diagnostics],
+            ["rag_degraded"],
+        )
+
+    def test_a_degraded_result_falls_back_to_lexical(self) -> None:
+        result = RagSearchResult(
+            (), "lexical", True, ("index cold",)
+        )
+        registry = wiki_tools(self.layout, rag=FakeRag(result))
+
+        answer = registry.dispatch(
+            "search", '{"query": "不确定性"}', ToolContext("s1")
+        )
+
+        self.assertIn("[[concepts/entropy]]", answer.content)
+        self.assertEqual(answer.meta["mode"], "lexical")
+        self.assertTrue(answer.meta["degraded"])
+        self.assertEqual(
+            [item.code for item in answer.diagnostics],
+            ["rag_fallback"],
+        )
+
+    def test_a_raising_backend_falls_back_to_lexical(self) -> None:
+        registry = wiki_tools(
+            self.layout, rag=FakeRag(error=RuntimeError("boom"))
+        )
+
+        answer = registry.dispatch(
+            "search", '{"query": "不确定性"}', ToolContext("s1")
+        )
+
+        self.assertIn("[[concepts/entropy]]", answer.content)
+        self.assertTrue(answer.meta["degraded"])
+        self.assertIn("boom", answer.diagnostics[0].message)
+
+    def test_the_search_contract_is_unchanged_by_rag(self) -> None:
+        plain = wiki_tools(self.layout).get("search")
+        hybrid = wiki_tools(
+            self.layout,
+            rag=FakeRag(RagSearchResult((), "lexical")),
+        ).get("search")
+
+        self.assertIsNotNone(plain)
+        self.assertIsNotNone(hybrid)
+        assert plain is not None and hybrid is not None
+        self.assertEqual(plain.name, hybrid.name)
+        self.assertEqual(plain.description, hybrid.description)
+        self.assertEqual(plain.parameters, hybrid.parameters)
+        self.assertEqual(plain.side_effect, hybrid.side_effect)
+        self.assertEqual(plain.timeout_s, hybrid.timeout_s)
+
+    def test_rag_off_adds_no_mode_to_the_result(self) -> None:
+        result = self.dispatch("search", '{"query": "不确定性"}')
+
+        self.assertNotIn("mode", result.meta)
+
+    def test_the_real_backend_wires_through_the_tool(self) -> None:
+        settings = RagSettings(
+            enabled=True,
+            embedding=EmbeddingConfig(
+                endpoint="http://fake",
+                model="fake-model",
+                dim=4,
+            ),
+        )
+        backend = RagSearchBackend(
+            self.layout,
+            settings,
+            embedder=FakeEmbedder(dim=4),
+            clock=lambda: 0.0,
+            sync_interval_s=0.0,
+            sync_runner=lambda work: work(),
+        )
+        registry = wiki_tools(self.layout, rag=backend)
+
+        cold = registry.dispatch(
+            "search", '{"query": "不确定性"}', ToolContext("s1")
+        )
+        self.assertIn("[[concepts/entropy]]", cold.content)
+        self.assertEqual(cold.meta["mode"], "lexical")
+        self.assertTrue(cold.meta["degraded"])
+
+        warm = registry.dispatch(
+            "search", '{"query": "不确定性"}', ToolContext("s1")
+        )
+        self.assertEqual(warm.meta["mode"], "hybrid")
+        self.assertFalse(warm.meta["degraded"])
+        self.assertIn("[[concepts/entropy]]", warm.content)
 
     def test_search_keeps_its_hit_and_excerpt_budget(self) -> None:
         for number in range(6):

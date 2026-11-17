@@ -78,9 +78,16 @@ without touching the saved settings.
 | `NOTEAGENT_SEARCH_MODE` | `auto`, `native`, or `external` |
 | `NOTEAGENT_SEARCH_TIMEOUT`, `NOTEAGENT_SEARCH_COUNTRY`, `NOTEAGENT_SEARCH_LANG`, `NOTEAGENT_SEARCH_UI_LANG` | Search locale and limits |
 | `NOTEAGENT_EXTRACT_MEDIA` | Extract images from PDF and HTML sources |
+| `NOTEAGENT_RAG_ENABLED` | Turn hybrid retrieval on (`false` by default) |
+| `NOTEAGENT_RAG_EMBEDDING_ENDPOINT`, `NOTEAGENT_RAG_EMBEDDING_MODEL`, `NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX` | The local embedding service; the model defaults to Qwen3-Embedding-0.6B |
+| `NOTEAGENT_RAG_EMBEDDING_BATCH`, `NOTEAGENT_RAG_EMBEDDING_CONCURRENCY`, `NOTEAGENT_RAG_EMBEDDING_RETRIES`, `NOTEAGENT_RAG_EMBEDDING_QUERY_TIMEOUT`, `NOTEAGENT_RAG_EMBEDDING_PAGE_TIMEOUT`, `NOTEAGENT_RAG_EMBEDDING_API_KEY` | Advanced embedding controls; the key may also come from the credential store |
+| `NOTEAGENT_RAG_RERANK_ENABLED`, `NOTEAGENT_RAG_RERANK_ENDPOINT`, `NOTEAGENT_RAG_RERANK_MODEL`, `NOTEAGENT_RAG_RERANK_CANDIDATES`, `NOTEAGENT_RAG_RERANK_TOP_N`, `NOTEAGENT_RAG_RERANK_API_KEY`, `NOTEAGENT_RAG_RERANK_TIMEOUT` | The optional rerank service (off by default); its key may also come from the credential store |
 | `NOTEAGENT_HOME` | Where projects and notes live |
 | `NOTEAGENT_PROJECT` | The project a command reads, instead of the active-project pointer |
 | `NOTEAGENT_CONFIG_DIR` | Moves the configuration document (portable installs and tests) |
+
+The RAG variables are read from the environment for now; the settings document and screen do not
+include them yet.
 
 The Electron shell adds the built-in guest browser, which is what makes
 "log in, read a page, keep it" work end to end:
@@ -109,6 +116,26 @@ If two pages or two captures would end up with the same file name, the plan list
 `--yes` refuses to run: merging or renaming them is a decision for the person who knows what
 the material is. What moves, and what a migrated project keeps, is in
 [`docs/project-layout.md`](docs/project-layout.md).
+
+## Retrieval (RAG, off by default)
+
+`search` keeps its contract: a page slug and a short excerpt, never the page body. With RAG
+turned on, the same tool answers from a derived index instead of the full-text scan:
+
+- BM25F (CJK bigrams and words) and a vector index are fused by reciprocal-rank fusion. A page
+  whose slug or title matches exactly ranks first unless the optional reranker changes the order.
+- The embedding service is a local or self-hosted OpenAI-compatible `/v1/embeddings` endpoint
+  (Ollama, LM Studio, vLLM, TEI). No model is bundled with the app. The optional reranker is a
+  Cohere-compatible `/rerank` endpoint; a TEI-style result list is accepted too.
+- Only wiki content pages are indexed and sent to the service. `raw/` and `notes/` never reach it;
+  notes are used only by offline experiments.
+- A cold or stale index returns the old lexical result at once and schedules a sync. A service
+  failure, a timeout or a reranker error keeps search working: lexical results, or the fused order
+  with a diagnostic.
+- The index is derived data under `.noteagent/rag/`; delete it or rebuild it at any time.
+  `noteagent rag status` reports its state; `noteagent rag rebuild` rebuilds it. One embedding
+  service answers both queries and documents; the reranker is a second, optional service. Query
+  embeddings use the short instruction prefix, documents do not.
 
 ## Desktop app
 
@@ -147,7 +174,7 @@ The menu opens each of those folders; the same menu follows the system language.
 | `desktop/` | The Electron shell: application window, startup screens, guest browser |
 | `scripts/` | Release build: the interface copied into the Python package, the bundled Python runtime, the order the two must be done in, and the packaged-core smoke |
 | `tests/` | Python tests |
-| `evals/` | Deterministic behaviour evals: the HTTP API, a scripted model, a temporary project |
+| `evals/` | Deterministic behaviour evals: the HTTP API, a scripted model, a temporary project. `evals/rag/` is a separate retrieval measurement harness, not a CI gate |
 | `projects/` | Wiki projects — **not in git**; each holds `config/`, `raw/`, `wiki/` |
 
 The Python core is the only place business logic lives. The frontend calls the HTTP API; it never
@@ -163,6 +190,8 @@ shells out to the CLI, and it never decides what gets written.
 | [`docs/release-fixes.md`](docs/release-fixes.md) | The three repairs that ship before launch, and why they add nothing to the on-disk schema |
 | [`docs/provenance.md`](docs/provenance.md) | What this design owes to earlier work and to its GPL-3.0 reference, and how each shared idea differs here |
 | [`docs/development.md`](docs/development.md) | Running each part, the check suite, packaging, data locations |
+| [`docs/rag-design.md`](docs/rag-design.md) | The retrieval design: corpus, chunking, index, fusion and evaluation |
+| [`evals/rag/README.md`](evals/rag/README.md) | Running the offline retrieval evaluation and reading its report |
 
 ## Contributing
 

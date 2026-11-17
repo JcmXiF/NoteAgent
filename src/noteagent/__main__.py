@@ -187,6 +187,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="When reading a directory, do not scan subfolders",
     )
 
+    rag_cmd = sub.add_parser(
+        "rag", help="Inspect or rebuild the retrieval index"
+    )
+    rag_sub = rag_cmd.add_subparsers(dest="rag_command", required=True)
+    rag_sub.add_parser("status", help="Show the retrieval index state")
+    rag_sub.add_parser("rebuild", help="Rebuild the retrieval index")
+
     analyze_cmd = sub.add_parser(
         "analyze",
         help="Analyze one source file with the model (no wiki writes)",
@@ -817,6 +824,68 @@ def cmd_acquire_search(
     return 0
 
 
+def cmd_rag_status(project: Path | None) -> int:
+    """Print the index state without calling the embedding service."""
+    try:
+        from noteagent.rag.settings import load_rag_settings
+
+        settings = load_rag_settings()
+        if not settings.enabled:
+            print("rag: disabled")
+            print("enabled: false")
+            return 0
+        layout = active_layout(project)
+        from noteagent.rag.search import get_backend
+
+        backend = get_backend(layout, settings)
+        if backend is None:
+            print("rag: unavailable")
+            print("enabled: true")
+            return 2
+        status = backend.status()
+        print(f"rag: {status.state}")
+        print("enabled: true")
+        print(f"units: {status.units}")
+        print(f"chunks: {status.chunks}")
+        print(f"failed: {status.failed}")
+        if status.reason:
+            print(f"reason: {status.reason}")
+        return 0
+    except Exception as err:  # noqa: BLE001 - a CLI reports, never crashes
+        print(f"Error: {err}", file=sys.stderr)
+        return 2
+
+
+def cmd_rag_rebuild(project: Path | None) -> int:
+    """Drop the derived index and sync it again."""
+    try:
+        from noteagent.rag.settings import load_rag_settings
+
+        settings = load_rag_settings()
+        if not settings.enabled:
+            print("rag: disabled")
+            return 2
+        layout = active_layout(project)
+        from noteagent.rag.search import get_backend
+
+        backend = get_backend(layout, settings)
+        if backend is None:
+            print("rag: unavailable")
+            return 2
+        report = backend.rebuild()
+        print(f"rag: {backend.status().state}")
+        print(f"added: {report.added}")
+        print(f"updated: {report.updated}")
+        print(f"deleted: {report.deleted}")
+        print(f"embedded: {report.embedded_chunks}")
+        for failure in report.failures:
+            print(f"failed: {failure.unit_id}: {failure.reason}")
+        return 0 if not report.failures else 2
+    except Exception as err:  # noqa: BLE001 - a CLI reports, never crashes
+        print(f"Error: {err}", file=sys.stderr)
+        return 2
+
+
 def cmd_acquire_status() -> int:
     """Print search provider status without exposing the API key."""
     from noteagent.acquire.search_config import load_search_config
@@ -917,6 +986,10 @@ def _run(argv: list[str] | None = None) -> int:
                 )
             return 0
 
+        if args.command == "rag":
+            if args.rag_command == "status":
+                return cmd_rag_status(args.project)
+            return cmd_rag_rebuild(args.project)
         # Parsing needs no active project: it reads text and writes nothing.
         if args.command == "parse":
             return cmd_parse(args.path)
