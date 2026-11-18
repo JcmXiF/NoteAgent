@@ -289,10 +289,9 @@ def _unlock_handle(handle: Any) -> None:
     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _row(effect: Effect) -> dict[str, object]:
+def effect_payload(effect: Effect) -> dict[str, object]:
+    """The public shape of one effect, for the project effects API."""
     return {
-        "v": EFFECT_VERSION,
-        "type": EFFECT_TYPE,
         "id": effect.ident,
         "at": effect.at,
         "runId": effect.run_id,
@@ -307,6 +306,14 @@ def _row(effect: Effect) -> dict[str, object]:
         "provider": effect.provider,
         "status": effect.status,
         "error": effect.error,
+    }
+
+
+def _row(effect: Effect) -> dict[str, object]:
+    return {
+        "v": EFFECT_VERSION,
+        "type": EFFECT_TYPE,
+        **effect_payload(effect),
     }
 
 
@@ -383,6 +390,7 @@ __all__ = [
     "Effect",
     "EffectJournal",
     "FAILED",
+    "effect_payload",
     "KINDS",
     "NOTE_WRITE",
     "PROVIDER_PAGE_HISTORY",

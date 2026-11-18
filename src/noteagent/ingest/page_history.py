@@ -41,6 +41,9 @@ WRITTEN_BY_AGENT = "agent"
 #: only what a page's history asks for.
 HISTORY_LIMIT = 200
 
+#: A write made by putting an earlier version back.
+MODE_RESTORE = "restore"
+
 #: Versions of wiki pages are kept as markdown, so a person can open one directly.
 BLOB_SUFFIX = ".md"
 
@@ -269,6 +272,11 @@ def note_agent_write(
     )
 
 
+def history_entries(layout: ProjectLayout) -> tuple[SnapshotEntry, ...]:
+    """Every write row, oldest first; the restore preview scans them for renames."""
+    return tuple(_read_log(layout))
+
+
 def page_snapshots(
     layout: ProjectLayout,
     relative_path: str,
@@ -325,10 +333,12 @@ def rename_entries(layout: ProjectLayout, relative_path: str, new_path: str) -> 
 __all__ = [
     "AREA_WIKI",
     "HISTORY_LIMIT",
+    "MODE_RESTORE",
     "SnapshotEntry",
     "WRITTEN_BY_AGENT",
     "blob_digest",
     "blob_path",
+    "history_entries",
     "keep_before",
     "note_agent_write",
     "page_snapshots",

@@ -88,6 +88,8 @@ from noteagent.api.projects import (
 )
 from noteagent.api.rag_settings import rag_rebuild_payload, rag_status_payload
 from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
+from noteagent.effects.journal import EffectJournal, effect_payload
+from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
@@ -460,6 +462,21 @@ class PageRestoreBody(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
     id: str = Field(..., min_length=1, max_length=80)
     baseRevision: str = ""
+
+
+class RunRestorePageBody(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    action: str = "restore"
+    force: bool = False
+
+
+class RunRestoreBody(BaseModel):
+    """Which run to undo, and which of its pages the reader chose."""
+
+    runId: str = Field(..., min_length=1, max_length=200)
+    pages: list[RunRestorePageBody] = Field(
+        default_factory=list, max_length=500
+    )
 
 
 class SessionQueryBody(BaseModel):
@@ -1260,6 +1277,43 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise http_error(err, 404) from err
         except ValueError as err:
             raise http_error(err, 400) from err
+
+    @app.get("/api/projects/{name}/effects")
+    @app.get("/api/v1/projects/{name}/effects")
+    def project_effects(
+        name: str,
+        runId: str = Query("", max_length=200),
+        kind: str = Query("", max_length=80),
+        status: str = Query("", max_length=40),
+    ) -> dict[str, object]:
+        journal = EffectJournal(require_project_layout(name))
+        return {
+            "effects": [
+                effect_payload(effect)
+                for effect in journal.query(
+                    run_id=runId, kind=kind, status=status
+                )
+            ]
+        }
+
+    @app.get("/api/projects/{name}/effects/restore/preview")
+    @app.get("/api/v1/projects/{name}/effects/restore/preview")
+    def project_effects_restore_preview(
+        name: str,
+        runId: str = Query(..., min_length=1, max_length=200),
+    ) -> dict[str, object]:
+        return preview_restore(require_project_layout(name), runId)
+
+    @app.post("/api/projects/{name}/effects/restore")
+    @app.post("/api/v1/projects/{name}/effects/restore")
+    def project_effects_restore(
+        name: str, body: RunRestoreBody
+    ) -> dict[str, object]:
+        return restore_run(
+            require_project_layout(name),
+            body.runId,
+            [page.model_dump() for page in body.pages],
+        )
 
     @app.get("/api/projects/{name}/search")
     def project_search(
