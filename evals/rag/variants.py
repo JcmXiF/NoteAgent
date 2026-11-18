@@ -1,16 +1,23 @@
 """The retrieval variants an eval can run, and what each one returns.
 
-A variant is a function from a project and a query to two ranked id lists. The
-Stage 0 baseline is ``lexical``: the search the project already runs, so the
-number it produces is the number a reader gets today, not a reimplementation
-that might drift from it.
+A variant is a two-phase thing: ``prepare`` builds or looks up whatever it needs
+(an index, usually) and returns a :class:`Retriever`; the harness then asks that
+retriever one query at a time. Keeping the phases apart is what lets an index be
+built once per configuration and its cost be reported separately from query
+latency.
+
+The Stage 0 baseline is ``lexical``: the search the project already runs, so the
+number it produces is the number a reader gets today, not a reimplementation that
+might drift from it. It needs no index and returns through the same lifecycle.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import dataclass, replace
+from enum import Enum
+from typing import Protocol, cast
 
 from evals.rag.dataset import note_ref, page_ref
 
@@ -19,16 +26,32 @@ from noteagent.wiki.local_search import search_project
 
 __all__ = [
     "DEPTH",
+    "EvalContext",
+    "FnRetriever",
+    "IndexBuild",
+    "IndexBuildRecord",
+    "IndexCache",
+    "IndexKey",
     "Retrieval",
+    "Retriever",
+    "Scope",
     "UnknownVariant",
     "VARIANTS",
     "Variant",
+    "filter_scope",
     "get_variant",
 ]
 
 #: How many results a variant may hand back, mirroring the ``search`` tool's
 #: own cap. Metrics cut at 5 and 10; MRR looks through this whole list.
 DEPTH = 20
+
+
+class Scope(str, Enum):
+    """Which kinds of result a run is allowed to return."""
+
+    WIKI = "wiki"
+    WIKI_NOTES = "wiki+notes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,13 +68,152 @@ class Retrieval:
         return tuple(page_ref(slug) for slug in self.pages)
 
 
+def filter_scope(retrieval: Retrieval, scope: Scope) -> Retrieval:
+    """Drop the kinds the run's scope does not allow."""
+    scope = Scope(scope)
+    if scope is Scope.WIKI_NOTES:
+        return retrieval
+    return Retrieval(pages=retrieval.pages, notes=())
+
+
+@dataclass(frozen=True, slots=True)
+class IndexKey:
+    """The configuration that decides whether an index can be reused."""
+
+    chunking: str
+    embedding_model: str
+    embedding_dim: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexBuild:
+    """One index build and the cost it incurred.
+
+    ``index`` is opaque to the harness: the eval knows how to ask a variant for
+    it, not what shape it has. ``seconds`` may be zero when the builder does not
+    measure itself; the cache fills it in.
+    """
+
+    index: object
+    seconds: float
+    embedding_calls: int
+    embedding_tokens: int
+    chunk_count: int
+    size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexBuildRecord:
+    """The cost of one index build, without the index payload."""
+
+    key: IndexKey
+    seconds: float
+    embedding_calls: int
+    embedding_tokens: int
+    chunk_count: int
+    size_bytes: int
+
+    @classmethod
+    def of(cls, key: IndexKey, build: IndexBuild) -> IndexBuildRecord:
+        """The record for one build, without carrying its index payload."""
+        return cls(
+            key=key,
+            seconds=build.seconds,
+            embedding_calls=build.embedding_calls,
+            embedding_tokens=build.embedding_tokens,
+            chunk_count=build.chunk_count,
+            size_bytes=build.size_bytes,
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "chunking": self.key.chunking,
+            "embeddingModel": self.key.embedding_model,
+            "embeddingDim": self.key.embedding_dim,
+            "seconds": round(self.seconds, 3),
+            "embeddingCalls": self.embedding_calls,
+            "embeddingTokens": self.embedding_tokens,
+            "chunkCount": self.chunk_count,
+            "sizeBytes": self.size_bytes,
+        }
+
+
+class IndexCache:
+    """Builds an index at most once per key, and remembers what each build cost."""
+
+    def __init__(
+        self,
+        builder: Callable[[IndexKey, ProjectLayout], IndexBuild] | None = None,
+    ) -> None:
+        self._builder = builder
+        self._entries: dict[IndexKey, IndexBuild] = {}
+
+    def get(self, key: IndexKey, layout: ProjectLayout) -> IndexBuild:
+        """The index for *key*, building it on first use."""
+        found = self._entries.get(key)
+        if found is not None:
+            return found
+        if self._builder is None:
+            raise RuntimeError(f"no index builder is registered for {key}")
+        started = time.perf_counter()
+        build = self._builder(key, layout)
+        elapsed = time.perf_counter() - started
+        if build.seconds <= 0:
+            build = replace(build, seconds=elapsed)
+        self._entries[key] = build
+        return build
+
+    def records(self) -> tuple[IndexBuildRecord, ...]:
+        """The builds this cache performed, in first-use order."""
+        return tuple(
+            IndexBuildRecord.of(key, build)
+            for key, build in self._entries.items()
+        )
+
+    def mark(self) -> int:
+        """A snapshot for attributing only the builds a later run adds."""
+        return len(self._entries)
+
+    def records_since(self, mark: int) -> tuple[IndexBuildRecord, ...]:
+        """The builds added after *mark*, for one run's cost report."""
+        return self.records()[max(0, mark):]
+
+
+class Retriever(Protocol):
+    """What a prepared variant hands the harness: one query at a time."""
+
+    def retrieve(self, query: str) -> Retrieval:
+        """The ranked result for *query*."""
+
+
+@dataclass(frozen=True, slots=True)
+class FnRetriever:
+    """A retriever built from a plain function."""
+
+    fn: Callable[[str], Retrieval]
+
+    def retrieve(self, query: str) -> Retrieval:
+        return self.fn(query)
+
+
+@dataclass(frozen=True, slots=True)
+class EvalContext:
+    """What a variant needs to prepare itself for one run."""
+
+    layout: ProjectLayout
+    scope: Scope
+    indexes: IndexCache
+    index_key: IndexKey | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class Variant:
-    """A named retrieval strategy the harness can compare."""
+    """A named retrieval strategy the harness can prepare and compare."""
 
     name: str
     description: str
-    retrieve: Callable[[ProjectLayout, str], Retrieval]
+    prepare: Callable[[EvalContext], Retriever]
+    index_key: IndexKey | None = None
 
 
 class UnknownVariant(ValueError):
@@ -63,14 +225,19 @@ class UnknownVariant(ValueError):
         )
 
 
-def _lexical(layout: ProjectLayout, query: str) -> Retrieval:
-    found = search_project(layout, query, per_kind=DEPTH)
-    pages = cast(list[dict[str, object]], found["pages"])
-    notes = cast(list[dict[str, object]], found["notes"])
-    return Retrieval(
-        pages=tuple(str(item["slug"]) for item in pages),
-        notes=tuple(str(item["id"]) for item in notes),
-    )
+def _lexical(context: EvalContext) -> Retriever:
+    layout = context.layout
+
+    def retrieve(query: str) -> Retrieval:
+        found = search_project(layout, query, per_kind=DEPTH)
+        pages = cast(list[dict[str, object]], found["pages"])
+        notes = cast(list[dict[str, object]], found["notes"])
+        return Retrieval(
+            pages=tuple(str(item["slug"]) for item in pages),
+            notes=tuple(str(item["id"]) for item in notes),
+        )
+
+    return FnRetriever(retrieve)
 
 
 VARIANTS: dict[str, Variant] = {
@@ -81,7 +248,7 @@ VARIANTS: dict[str, Variant] = {
             "rank_text scores slug/title exact 4, contained 3, all words 2, "
             "body 1; ties by slug or note id"
         ),
-        retrieve=_lexical,
+        prepare=_lexical,
     ),
 }
 

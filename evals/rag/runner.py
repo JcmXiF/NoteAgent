@@ -26,7 +26,15 @@ from evals.rag.metrics import (
     recall_at_k,
     reciprocal_rank,
 )
-from evals.rag.variants import Variant, get_variant
+from evals.rag.variants import (
+    EvalContext,
+    IndexBuildRecord,
+    IndexCache,
+    Scope,
+    Variant,
+    filter_scope,
+    get_variant,
+)
 from evals.report import utc_now
 
 from noteagent.project.layout import ProjectLayout
@@ -134,6 +142,8 @@ class Evaluation:
     results: tuple[QueryResult, ...]
     started_at: str
     duration_s: float
+    scope: Scope = Scope.WIKI_NOTES
+    index_builds: tuple[IndexBuildRecord, ...] = ()
 
     @property
     def scored(self) -> tuple[QueryResult, ...]:
@@ -184,13 +194,30 @@ def run_queries(
     queries: tuple[RagQuery, ...] | list[RagQuery],
     corpus_root: Path | str,
     variant: Variant,
+    *,
+    scope: Scope = Scope.WIKI_NOTES,
+    indexes: IndexCache | None = None,
 ) -> tuple[QueryResult, ...]:
-    """Ask *variant* every query against the corpus, timing each call."""
+    """Prepare *variant*, then ask it every query, timing each call.
+
+    Preparation is outside the loop: an index build is a run-level cost, not a
+    per-query latency. The scope is applied to each result after the retriever
+    answers, so the same variant and index can serve both scopes.
+    """
+    scope = Scope(scope)
     layout = ProjectLayout(root=Path(corpus_root).resolve())
+    cache = indexes or IndexCache()
+    context = EvalContext(
+        layout=layout,
+        scope=scope,
+        indexes=cache,
+        index_key=variant.index_key,
+    )
+    retriever = variant.prepare(context)
     results: list[QueryResult] = []
     for query in queries:
         started = time.perf_counter()
-        retrieval = variant.retrieve(layout, query.query)
+        retrieval = filter_scope(retriever.retrieve(query.query), scope)
         elapsed_ms = (time.perf_counter() - started) * 1_000.0
         results.append(
             QueryResult(
@@ -205,20 +232,34 @@ def run_queries(
 def evaluate(
     dataset: Dataset,
     corpus_root: Path | str,
-    variant_name: str = "lexical",
+    variant: str | Variant = "lexical",
+    *,
+    scope: Scope = Scope.WIKI_NOTES,
+    indexes: IndexCache | None = None,
 ) -> Evaluation:
     """Check the corpus, run the variant, and return the scored run."""
-    variant = get_variant(variant_name)
+    scope = Scope(scope)
+    selected = (
+        variant
+        if isinstance(variant, Variant)
+        else get_variant(variant)
+    )
     corpus = Path(corpus_root).resolve()
     check_corpus(dataset, corpus)
+    cache = indexes or IndexCache()
+    mark = cache.mark()
     started_at = utc_now()
     started = time.perf_counter()
-    results = run_queries(dataset.queries, corpus, variant)
+    results = run_queries(
+        dataset.queries, corpus, selected, scope=scope, indexes=cache
+    )
     return Evaluation(
-        variant=variant,
+        variant=selected,
         dataset=dataset,
         corpus=corpus,
         results=results,
         started_at=started_at,
         duration_s=time.perf_counter() - started,
+        scope=scope,
+        index_builds=cache.records_since(mark),
     )

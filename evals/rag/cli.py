@@ -9,7 +9,7 @@ from pathlib import Path
 from evals.rag.dataset import DatasetError, load_dataset
 from evals.rag.report import write_report
 from evals.rag.runner import evaluate
-from evals.rag.variants import UnknownVariant
+from evals.rag.variants import Scope, UnknownVariant
 
 __all__ = ["main"]
 
@@ -29,6 +29,12 @@ def _parser() -> argparse.ArgumentParser:
         "--variant",
         default="lexical",
         help="retrieval variant to run (default: lexical)",
+    )
+    parser.add_argument(
+        "--scope",
+        choices=[scope.value for scope in Scope],
+        default=Scope.WIKI_NOTES.value,
+        help="result kinds to allow (default: wiki+notes)",
     )
     parser.add_argument(
         "--dataset",
@@ -58,7 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         dataset = load_dataset(dataset_path)
-        evaluation = evaluate(dataset, corpus, args.variant)
+        evaluation = evaluate(
+            dataset,
+            corpus,
+            args.variant,
+            scope=Scope(args.scope),
+        )
     except (DatasetError, UnknownVariant) as err:
         print(err, file=sys.stderr)
         return 2
@@ -68,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     latency = evaluation.latency
     print(
         f"{evaluation.variant.name}: {len(dataset.queries)} queries | "
+        f"scope {evaluation.scope.value} | "
         f"Recall@5 {metrics.recall_at_5:.3f} | "
         f"Hit@5 {metrics.hit_at_5:.3f} | "
         f"nDCG@10 {metrics.ndcg_at_10:.3f} | "

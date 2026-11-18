@@ -13,6 +13,7 @@ from typing import Any
 
 from evals.rag.metrics import MetricSet
 from evals.rag.runner import Evaluation, QueryResult
+from evals.rag.variants import IndexBuildRecord
 
 __all__ = ["REPORT_VERSION", "markdown", "payload", "write_report"]
 
@@ -27,6 +28,7 @@ def payload(evaluation: Evaluation) -> dict[str, Any]:
             "name": evaluation.variant.name,
             "description": evaluation.variant.description,
         },
+        "scope": evaluation.scope.value,
         "baseline": evaluation.variant.name == "lexical",
         "dataset": {
             "path": evaluation.dataset.path.as_posix(),
@@ -46,6 +48,9 @@ def payload(evaluation: Evaluation) -> dict[str, Any]:
             "gap": evaluation.gap.as_dict(),
         },
         "latency": evaluation.latency.as_dict(),
+        "indexBuilds": [
+            build.as_dict() for build in evaluation.index_builds
+        ],
         "queries": [
             _query_payload(result) for result in evaluation.results
         ],
@@ -70,6 +75,7 @@ def markdown(evaluation: Evaluation) -> str:
             f"- Variant: **{evaluation.variant.name}** — "
             f"{evaluation.variant.description}"
         ),
+        f"- Scope: **{evaluation.scope.value}**",
         (
             f"- Result: **Recall@5 {metrics.recall_at_5:.3f} · "
             f"Hit@5 {metrics.hit_at_5:.3f} · "
@@ -85,11 +91,30 @@ def markdown(evaluation: Evaluation) -> str:
             f"({gap.rate:.0%})"
         ),
         "",
-        "## By query type",
-        "",
-        "| Type | Queries | Recall@5 | Hit@5 | nDCG@10 | MRR |",
-        "|---|---:|---:|---:|---:|---:|",
     ]
+    if evaluation.index_builds:
+        lines.extend(
+            [
+                "## Index builds",
+                "",
+                (
+                    "| Chunking | Model | Dim | Seconds | Calls |"
+                    " Tokens | Chunks | Bytes |"
+                ),
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for build in evaluation.index_builds:
+            lines.append(_index_row(build))
+        lines.append("")
+    lines.extend(
+        [
+            "## By query type",
+            "",
+            "| Type | Queries | Recall@5 | Hit@5 | nDCG@10 | MRR |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
     for name, bucket in evaluation.metrics_by_type().items():
         lines.append(_metric_row(name, bucket))
 
@@ -170,4 +195,14 @@ def _query_row(result: QueryResult) -> str:
     return (
         f"| `{result.query.id}` | {result.query.type} | {expected} | "
         f"{outcome} | {rank} | {result.latency_ms:.1f} ms |"
+    )
+
+
+def _index_row(build: IndexBuildRecord) -> str:
+    record = build.as_dict()
+    return (
+        f"| {record['chunking']} | {record['embeddingModel']} | "
+        f"{record['embeddingDim']} | {record['seconds']:.3f} | "
+        f"{record['embeddingCalls']} | {record['embeddingTokens']} | "
+        f"{record['chunkCount']} | {record['sizeBytes']} |"
     )
