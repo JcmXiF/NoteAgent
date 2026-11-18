@@ -13,7 +13,6 @@ from collections.abc import Sequence
 from noteagent.acquire.query import rewrite_query
 from noteagent.acquire.run_fetch import run_web_fetch
 from noteagent.acquire.run_search import run_web_search
-from noteagent.agent.clock import Clock
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
@@ -69,7 +68,7 @@ def pipeline_service_for(deps: AppDeps, layout: ProjectLayout) -> PipelineServic
         compile=deps.pipeline_compile,
     )
     if deps.pipeline_stages is None:
-        service.use_stages(default_stages(layout, clock=deps.clock))
+        service.use_stages(default_stages(layout))
     else:
         service.use_stages(deps.pipeline_stages)
     return service
@@ -91,9 +90,8 @@ def prepare_active_project(deps: AppDeps) -> None:
         return
 
 
-def default_stages(layout: ProjectLayout, *, clock: Clock) -> Sequence[PipelineStage]:
-    """The stages a product run walks: collect the material, for now."""
-    del clock
+def default_stages(layout: ProjectLayout) -> Sequence[PipelineStage]:
+    """The stages a product run walks: acquire, frame, plan."""
     logger = RunLogger.for_layout(layout)
 
     def search(query: str):

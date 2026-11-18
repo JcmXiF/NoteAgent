@@ -357,7 +357,7 @@ class PipelineConfirmationTests(unittest.TestCase):
                 item["material"]: item["state"] for item in materials
             }
             self.assertEqual(len(states), 2)
-            self.assertEqual(states[source], "promoted")
+            self.assertEqual(states[source], "compiled")
             unused = [name for name in states if name != source]
             # Planned by the run, never asked to be written: still only staged.
             self.assertEqual(states[unused[0]], "planned")
@@ -374,6 +374,13 @@ class PipelineConfirmationTests(unittest.TestCase):
             ]
             self.assertEqual(len(promoted), 1)
             self.assertEqual(promoted[0].run_id, run_id)
+            compiled = [
+                item
+                for item in MaterialLog(layout.materials_log).transitions()
+                if item.state == "compiled"
+            ]
+            self.assertEqual(len(compiled), 1)
+            self.assertEqual(compiled[0].detail["pages"], ["wiki/entropy.md"])
             # The material nobody asked to write is still in staging.
             self.assertTrue((layout.staging / run_id).is_dir())
             self.assertTrue(

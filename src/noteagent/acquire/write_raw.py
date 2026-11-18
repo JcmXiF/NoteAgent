@@ -28,7 +28,7 @@ from noteagent.acquire.media.extract import persist_html_media
 from noteagent.acquire.quality import assess_capture
 from noteagent.acquire.tools.fetchers.article import visible_text_from_html
 from noteagent.acquire.types import Capture
-from noteagent.io.atomic import write_text_atomic
+from noteagent.io.atomic import write_bytes_atomic, write_text_atomic
 from noteagent.project.identity import source_identity
 from noteagent.project.layout import RAW_DIR, ProjectLayout
 from noteagent.project.raw_kinds import (
@@ -437,7 +437,7 @@ def _write_image(
     stamp = captured_at or date.today().isoformat()
     if not dry_run:
         absolute.parent.mkdir(parents=True, exist_ok=True)
-        absolute.write_bytes(capture.image_bytes)
+        write_bytes_atomic(absolute, capture.image_bytes)
         try:
             derived = ImageSourceAdapter().derive_bytes(
                 capture.image_bytes,
@@ -498,7 +498,7 @@ def _write_office(
     stamp = captured_at or date.today().isoformat()
     if not dry_run:
         absolute.parent.mkdir(parents=True, exist_ok=True)
-        absolute.write_bytes(capture.office_bytes)
+        write_bytes_atomic(absolute, capture.office_bytes)
         try:
             derived = OfficeSourceAdapter().derive_bytes(
                 capture.office_bytes,
@@ -560,7 +560,7 @@ def _write_pdf(
     stamp = captured_at or date.today().isoformat()
     if not dry_run:
         absolute.parent.mkdir(parents=True, exist_ok=True)
-        absolute.write_bytes(capture.pdf_bytes)
+        write_bytes_atomic(absolute, capture.pdf_bytes)
         try:
             blocks = PdfSourceAdapter().derive(
                 absolute,

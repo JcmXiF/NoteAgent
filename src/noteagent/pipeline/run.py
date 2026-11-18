@@ -55,8 +55,7 @@ STARTED_BY = ("human", "session")
 QUERY_MODES = ("precise", "model")
 MATERIAL_MODES = ("manual", "auto")
 
-#: The stage names the worker walks through. Ticket 01 only needs the ends; the
-#: stages between are filled by the tickets that build them.
+#: The stage names the worker walks through, in order.
 STAGES: tuple[str, ...] = ("starting", "acquire", "frame", "plan", "confirm", "compile", "done")
 
 _ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")

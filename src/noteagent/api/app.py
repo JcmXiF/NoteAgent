@@ -1540,7 +1540,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         service = pipeline_service_for(deps, layout)
         try:
             payload = service.write_clips(
-                lambda: put_clips_payload(layout, body.model_dump())
+                lambda: put_clips_payload(
+                    layout, body.model_dump(), clock=deps.clock
+                )
             )
             # A run waiting to be confirmed follows the board: a changed plan or
             # answer gets a new revision, and a changed frame is planned again.

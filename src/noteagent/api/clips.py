@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
-from noteagent.agent.clock import SystemClock, iso_timestamp
+from noteagent.agent.clock import Clock, SystemClock
 from noteagent.ingest.clips import (
     RAW_PREFIX,
     ClipCollection,
@@ -21,7 +21,7 @@ from noteagent.ingest.clips import (
 )
 from noteagent.ingest.revision_inbox import note_source_change
 from noteagent.ingest.topic_map import parse_topic_map
-from noteagent.pipeline.materials import MaterialLog, MaterialTransition
+from noteagent.pipeline.materials import Materials
 from noteagent.project.layout import ProjectLayout
 
 
@@ -52,7 +52,12 @@ def get_clips_payload(layout: ProjectLayout) -> dict[str, Any]:
     return clips_payload(store)
 
 
-def put_clips_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, Any]:
+def put_clips_payload(
+    layout: ProjectLayout,
+    body: dict[str, Any],
+    *,
+    clock: Clock | None = None,
+) -> dict[str, Any]:
     payload = dict(body)
     # An answer nobody sent is not the same as an answer cleared: a caller that does
     # not know about a field must not wipe it.
@@ -78,7 +83,12 @@ def put_clips_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, 
         # changes, the plan is a statement about a question nobody asked.
         store = replace(store, topic_map=None, decisions=())
     save_clip_store(layout, store)
-    _mark_human_frames(layout, disk.collections, store.collections)
+    _mark_human_frames(
+        layout,
+        disk.collections,
+        store.collections,
+        clock=clock or SystemClock(),
+    )
     note_source_change(layout)
     return clips_payload(store)
 
@@ -87,29 +97,27 @@ def _mark_human_frames(
     layout: ProjectLayout,
     before: Sequence[ClipCollection],
     after: Sequence[ClipCollection],
+    *,
+    clock: Clock,
 ) -> None:
     """Record the frames a person drew, so a later run leaves them alone."""
     changed = _changed_sources(layout, before, after)
     if not changed:
         return
-    log = MaterialLog(layout.materials_log)
-    states = log.states()
-    now = iso_timestamp(SystemClock())
+    materials = Materials(layout, clock=clock)
+    states = materials.states()
     for source, frames in changed.items():
         state = states.get(source)
         if state is None:
             # A selection from a page that is not a material of this pipeline.
             continue
         try:
-            log.append(
-                MaterialTransition(
-                    at=now,
-                    material=source,
-                    state="framed",
-                    run_id=state.run_id,
-                    source="human",
-                    detail={"frames": frames},
-                )
+            materials.mark(
+                source,
+                "framed",
+                run_id=state.run_id,
+                source="human",
+                detail={"frames": frames},
             )
         except OSError:
             continue

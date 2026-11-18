@@ -19,6 +19,7 @@ from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
+    durable_source_file,
     load_clip_store,
     save_clip_store,
 )
@@ -694,6 +695,8 @@ class PipelineService:
             # else this run collected stays in staging for retention.
             self._promote_for(current, confirmation)
             result = self._compile(self._layout, confirmation, cancel)
+            if result.written:
+                self._mark_compiled(current, confirmation)
             self._save(
                 replace(
                     current,
@@ -709,6 +712,43 @@ class PipelineService:
             self._save(replace(current, status="failed", error=str(err)[:500]))
         finally:
             self._release_run(current)
+
+    def _mark_compiled(
+        self, run: PipelineRun, confirmation: Confirmation
+    ) -> None:
+        """Link each written page back to the material it was compiled from."""
+        pages_by_source: dict[str, list[str]] = {}
+        for page in confirmation.writes:
+            node = confirmation.topic_map.node_for_slug(page.slug)
+            if node is None:
+                continue
+            cited = [
+                section.collection_id
+                for section in node.outline
+                if (not page.section_ids or section.id in page.section_ids)
+                and section.collection_id
+            ]
+            if not cited:
+                cited = list(node.collection_ids)
+            for collection in confirmation.selections:
+                if collection.id not in cited:
+                    continue
+                source = collection.source_key.replace("\\", "/").strip()
+                pages = pages_by_source.setdefault(source, [])
+                if page.wiki_path not in pages:
+                    pages.append(page.wiki_path)
+        with self._registry.writer(self._project_key):
+            for source, pages in sorted(pages_by_source.items()):
+                if not source.startswith("raw/"):
+                    continue
+                if durable_source_file(self._layout, source) is None:
+                    continue
+                self._materials.mark(
+                    source,
+                    "compiled",
+                    run_id=run.id,
+                    detail={"pages": pages},
+                )
 
     def _promote_for(
         self, run: PipelineRun, confirmation: Confirmation
