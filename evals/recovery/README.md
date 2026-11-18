@@ -78,6 +78,27 @@ not a pass/fail gate. The Markdown report carries the metric table, a
 per-scenario passed/failed/missed/infra table, the missed attempts and the
 infra failures.
 
+## Baseline (2026-11-18)
+
+`python -m evals.recovery --suite recovery --reps 3`, plus B1-B4 and B6 at
+three reps each, on this machine with `deepseek-v4-flash`:
+
+- Recovery: **18/18 passed** in 236.5s.
+  - Interrupt detection 12/12, false interrupts 0/3, content preservation
+    107/107, tool replay 0, resume success 12/12, budget completion 18/18.
+  - Recovery time: p50 1562 ms, p95 1594 ms over 9 restarts.
+- Rollback: **B1-B4 and B6, 15/15 passed**.
+  - Classification accuracy 21/21, user-edit overwrite 0/6, restore
+    idempotency 3/3, restore success 9/9.
+- B5 was not counted: the real pipeline planner failed at the plan stage
+  (`topic map JSON is invalid` / `topic map is missing primary`) before
+  writing a page. The harness reports that as `missed` then `infra`; it is not
+  a rollback failure. Rerunning it needs a working planner, not a change here.
+
+The raw reports and per-attempt projects live under
+`build/evals/recovery/_final_*`. `build/` is git-ignored, so this summary is
+the tracked record.
+
 ## How it is built
 
 - `runner.py` owns the scenario orchestration and the missed-boundary retry
