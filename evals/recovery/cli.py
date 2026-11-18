@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from evals.recovery.dataset import SCENARIOS
+from evals.recovery.envfile import load_env_file
 from evals.recovery.report import counts as report_counts
 from evals.recovery.report import write_report
 from evals.recovery.runner import run_eval
@@ -23,6 +24,9 @@ __all__ = ["main"]
 
 DEFAULT_REPORT = "build/evals/recovery/report.json"
 DEFAULT_ARTIFACTS = "build/evals/recovery/artifacts"
+#: The checkout's local secrets file. It is git-ignored; existing environment
+#: variables win, so exporting a value still overrides the file.
+DEFAULT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -94,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    loaded = load_env_file(DEFAULT_ENV)
+    if loaded:
+        print(f"env: loaded {len(loaded)} setting(s) from {DEFAULT_ENV.name}")
 
     try:
         from noteagent.llm.config import load_llm_config

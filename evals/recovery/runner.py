@@ -19,6 +19,7 @@ from typing import Any
 
 from evals.recovery.boundary import (
     QUESTION_ONLY,
+    TERMINAL,
     TOOL_CALL_OPEN,
     classify_file,
     pending_calls,
@@ -48,8 +49,8 @@ INTERRUPT_TIMEOUT_S = 60.0
 PIPELINE_TIMEOUT_S = 240.0
 
 PROMPT_READ = (
-    "Call the wiki_read tool with slug 'concepts/alpha', then answer with one "
-    "sentence about what the page explains."
+    "Call the wiki_read tool with slug 'concepts/alpha', then explain what "
+    "the page is about in three detailed paragraphs."
 )
 PROMPT_PLAIN = "Answer in one sentence: what is two plus two?"
 PROMPT_QUESTION = "What is two plus two? Answer with one word."
@@ -257,11 +258,18 @@ def _r1(ctx: RunContext) -> Attempt:
             return Attempt(status="failed", detail="no token before stream end")
         interrupted = _wait_interrupted(client, session_id)
         if interrupted is None:
+            boundary = classify_file(ctx.session_path(session_id))
+            if boundary == TERMINAL:
+                return Attempt(
+                    status="missed",
+                    observed_boundary=boundary,
+                    detail="the answer completed before the disconnect landed",
+                )
             return _detection_failure(
                 ctx,
                 session_id,
                 detail="the disconnect did not leave an interrupted run",
-                observed=classify_file(ctx.session_path(session_id)),
+                observed=boundary,
             )
         before = read_entries(ctx.session_path(session_id))
         observed = classify_file(ctx.session_path(session_id))
@@ -439,6 +447,16 @@ def _r3(ctx: RunContext) -> Attempt:
     server, client = ctx.start()
     session_id = client.create_session(ctx.scenario.id)
     path = ctx.session_path(session_id)
+
+    # The scan only invents a recovered question when a settled marker precedes
+    # it; a brand-new session with no marker is left alone by design.
+    first = client.query(session_id, PROMPT_PLAIN)
+    first_done, first_error = _terminal_events(first)
+    if not _run_finished(first_done, first_error):
+        return Attempt(
+            status="failed", detail="the settling run did not finish"
+        )
+
     outcome: dict[str, Any] = {}
 
     def ask() -> None:
@@ -462,6 +480,14 @@ def _r3(ctx: RunContext) -> Attempt:
         server.kill()
         client.close()
         thread.join(timeout=10.0)
+
+        landed = classify_file(path)
+        if landed != QUESTION_ONLY:
+            return Attempt(
+                status="missed",
+                observed_boundary=landed,
+                detail=f"the kill landed at {landed}",
+            )
 
         restart_started = time.monotonic()
         _, client2 = ctx.start()
@@ -996,9 +1022,10 @@ def _b5(ctx: RunContext) -> Attempt:
         created = client.post(
             "/api/v1/pipeline/runs",
             {
-                "intent": "整理一篇关于 Alpha 概念的 wiki 笔记",
+                "intent": "Alpha 是本项目的第一个概念页；请基于它写一篇简短的 wiki 笔记。",
                 "startedBy": "session",
                 "sessionId": session_id,
+                "queryMode": "precise",
             },
         )
         if created.status_code != 201:
@@ -1009,7 +1036,9 @@ def _b5(ctx: RunContext) -> Attempt:
         run_id = str(created.json()["id"])
         run = _wait_pipeline(client, run_id)
         if run is None:
-            return Attempt(status="failed", detail="the pipeline run timed out")
+            return Attempt(
+                status="missed", detail="the pipeline run timed out"
+            )
         if run.get("status") == "awaiting_confirmation":
             approved = client.post(
                 f"/api/v1/pipeline/runs/{run_id}/approve",
@@ -1017,20 +1046,27 @@ def _b5(ctx: RunContext) -> Attempt:
             )
             if approved.status_code not in (200, 202):
                 return Attempt(
-                    status="failed",
+                    status="missed",
                     detail=f"pipeline approve: {approved.status_code} "
                     f"{approved.text}",
                 )
             run = _wait_pipeline(client, run_id)
-        if run is None or run.get("status") != "succeeded":
+        if run is None:
             return Attempt(
-                status="failed",
-                detail=f"pipeline finished {None if run is None else run.get('status')}",
+                status="missed", detail="the pipeline run timed out after approval"
             )
         effect_ids = list(run.get("result", {}).get("effectIds") or ())
+        if run.get("status") != "succeeded" and not effect_ids:
+            return Attempt(
+                status="missed",
+                detail=(
+                    "the pipeline never wrote a page: "
+                    f"{run.get('status')} {run.get('error') or ''}"
+                ).strip(),
+            )
         if not effect_ids:
             return Attempt(
-                status="failed",
+                status="missed",
                 detail="the pipeline result carries no effect ids",
             )
         preview = client.get(

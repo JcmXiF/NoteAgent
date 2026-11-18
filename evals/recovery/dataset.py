@@ -63,10 +63,12 @@ SCENARIOS: tuple[Scenario, ...] = (
         suite="recovery",
         title="Crash between question and start marker",
         goal=(
-            "Killing the server after the user message is committed but "
-            "before the run marker leaves a question the scan can recover."
+            "Killing the server after a new question is committed but before "
+            "its run marker leaves a question the scan can recover, when a "
+            "settled run precedes it."
         ),
         checks=(
+            "a settled run precedes the question",
             "startup scan surfaces the question",
             "resume answers the question",
             "no old run is invented as interrupted",

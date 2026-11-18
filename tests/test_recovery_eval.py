@@ -466,6 +466,47 @@ class ProxyTests(unittest.TestCase):
         )
 
 
+class EnvFileTests(unittest.TestCase):
+    def test_load_env_file_keeps_existing_values_and_skips_noise(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from evals.recovery.envfile import load_env_file
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text(
+                "# comment\n"
+                "EVALTEST_A=1\n"
+                "EVALTEST_B='two'\n"
+                "EVALTEST_C=\n"
+                "not a pair\n"
+                "EVALTEST_D=4\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ, {"EVALTEST_B": "keep"}, clear=False
+            ):
+                loaded = load_env_file(path)
+                self.assertIn("EVALTEST_A", loaded)
+                self.assertNotIn("EVALTEST_B", loaded)
+                self.assertEqual(os.environ["EVALTEST_A"], "1")
+                self.assertEqual(os.environ["EVALTEST_B"], "keep")
+                self.assertEqual(os.environ["EVALTEST_C"], "")
+                self.assertEqual(os.environ["EVALTEST_D"], "4")
+
+    def test_a_missing_env_file_is_not_an_error(self) -> None:
+        from pathlib import Path
+
+        from evals.recovery.envfile import load_env_file
+
+        self.assertEqual(
+            load_env_file(Path("no-such-eval-directory/.env")), ()
+        )
+
+
 class RetryRuleTests(unittest.TestCase):
     def test_a_persistent_miss_becomes_infra_after_four_attempts(self) -> None:
         import tempfile

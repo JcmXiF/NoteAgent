@@ -44,6 +44,7 @@ class FailingProxy:
         timeout_s: float = 180.0,
     ) -> None:
         self.upstream_url = upstream_url
+        self._fail_first = fail_first
         self.failures = FailureCounter(fail_first)
         self.timeout_s = timeout_s
         self._server: ThreadingHTTPServer | None = None
@@ -65,7 +66,8 @@ class FailingProxy:
     @property
     def requests(self) -> int:
         with self._forward_lock:
-            return self.failures.remaining + self._forwarded
+            failed = self._fail_first - self.failures.remaining
+            return failed + self._forwarded
 
     def note_forwarded(self) -> None:
         with self._forward_lock:
@@ -132,7 +134,11 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_header("Connection", "close")
                 self.end_headers()
                 try:
-                    for chunk in response.iter_raw():
+                    # ``iter_bytes`` removes the upstream's chunk framing and
+                    # content encoding. Relaying ``iter_raw`` would hand the
+                    # client chunk headers inside the SSE body and end the
+                    # stream early.
+                    for chunk in response.iter_bytes():
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):

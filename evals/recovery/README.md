@@ -26,8 +26,10 @@ python -m evals.recovery --filter R2
 - `--force` is required when `CI` or `GITHUB_ACTIONS` is set.
 
 The model connection is the one saved in the app's settings or in
-`NOTEAGENT_LLM_*`; the CLI calls `install_view()` and `load_llm_config()` and
-exits `2` when no connection is configured.
+`NOTEAGENT_LLM_*`. Before `install_view()` the CLI loads the checkout's
+`.env`; a variable already exported in the process wins over the file, and a
+missing file is not an error. The file is git-ignored and must never be
+committed. The CLI exits `2` when no connection is configured.
 
 ## Scenarios
 
@@ -39,7 +41,7 @@ measure.
 |---|---|---|
 | R1 | recovery | Closes the SSE stream mid-answer; the run pauses, then resumes. |
 | R2 | recovery | SIGKILLs between a committed tool call and its result. |
-| R3 | recovery | SIGKILLs between the user message and the start marker. |
+| R3 | recovery | SIGKILLs between a question (after a settled run) and its start marker. |
 | R4 | recovery | Completes normally, restarts, and must not be reported interrupted. |
 | R5 | recovery | Refuses a resume after the model changes; resumes with a stale warning after the wiki changes. |
 | R6 | recovery | A loopback proxy fails the first two provider requests; the run retries. |
@@ -102,7 +104,10 @@ infra failures.
   the kernel writes the marker first, the attempt is `missed` and retried; a
   persistent miss is reported as an infra failure, not a product failure.
 - B5 uses the real pipeline planner, so it is the slowest and most variable
-  scenario; its timeout is 240 seconds per stage wait.
+  scenario; its timeout is 240 seconds per stage wait. A plan-stage failure
+  (invalid or incomplete topic map) is reported as `missed`/`infra`, not as a
+  rollback failure: the rollback path is only measurable once the compile
+  writes pages.
 - Replay is measured as duplicate `toolResult` rows. The chat toolset is
   read-only, so there is no side-effect execution to count directly.
 - Budget completion covers chat runs, whose model calls are visible in the
