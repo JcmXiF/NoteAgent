@@ -37,6 +37,14 @@ python -m evals.rag --matrix channel \
   --corpus .scratch/rag/prototype \
   --embedding-endpoint http://127.0.0.1:11434/v1 \
   --embedding-model qwen3-embedding:0.6b --embedding-dim 1024
+python -m evals.rag --matrix first-round \
+  --dataset .scratch/rag/prototype/queries.jsonl \
+  --corpus .scratch/rag/prototype \
+  --report build/evals/rag/first-round.json \
+  --ablation evals/rag/ABLATION.md \
+  --raw-dir build/evals/rag/ablation \
+  --embedding-endpoint http://127.0.0.1:11434/v1 \
+  --embedding-model qwen3-embedding:0.6b --embedding-dim 1024
 python -m evals.rag --dataset path/to/queries.jsonl --corpus path/to/project \
   --report build/evals/rag/report.json
 ```
@@ -51,6 +59,15 @@ python -m evals.rag --dataset path/to/queries.jsonl --corpus path/to/project \
 - `--matrix channel` runs `lexical`, `bm25`, `vector` and `hybrid` in both
   scopes and writes one report with a main (wiki-only) and a secondary
   (wiki+notes) table. One base index is built and reused across the eight runs.
+- `--matrix swaps` runs the hybrid reference and S1/S2/S3/S4/S6 in both
+  scopes; S5 is recorded as skipped. S1 gets a separate whole-page index.
+- `--matrix gate` records BM25 term coverage and raw vector cosine/margin for
+  the wiki scope and sweeps thresholds offline. The ranking tables stay
+  ungated; the six-gap curves are exploratory.
+- `--matrix first-round` runs channel, swaps and gate on one shared index
+  cache, writes the raw JSON under `--raw-dir` (default
+  `build/evals/rag/ablation/`), updates the tracked `--ablation` file (default
+  `evals/rag/ABLATION.md`), and writes the combined JSON to `--report`.
 - `--embedding-endpoint` / `--embedding-model` / `--embedding-dim` /
   `--embedding-api-key` configure the OpenAI-compatible embedding service. The
   endpoint and model can also come from the `NOTEAGENT_RAG_EMBEDDING_*`
@@ -74,6 +91,12 @@ tokens, chunk count, size). Build cost is separate from query latency.
 
 The channel matrix report keeps the same metric block, adds p50/p95 per row,
 and has one index-build table for the builds the eight runs shared.
+
+The first-round report adds paired bootstrap deltas to the channel and swap
+tables: 10,000 resamples, a 95% percentile CI, the mean delta, a fixed seed,
+and no p-values. Per-bucket CIs are in `first-round.json` and labelled
+exploratory. The tracked `evals/rag/ABLATION.md` is the protocol and summary;
+the full gate curves are in the raw gate report.
 
 The lexical baseline on the old 25-query set: Recall@5 0.800, Hit@5 0.800,
 nDCG@10 0.722, MRR 0.683; on this development machine, p50 about 5 ms and

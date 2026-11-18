@@ -44,6 +44,8 @@ __all__ = [
     "GateQuery",
     "GateReport",
     "SCORE_THRESHOLDS",
+    "SIGNAL_LABELS",
+    "VARIANT_LABELS",
     "gate_markdown",
     "gate_payload",
     "run_gate",
@@ -55,12 +57,12 @@ COVERAGE_THRESHOLDS = tuple(index / 10 for index in range(11))
 #: Cosine and margin are continuous; step 0.05 keeps the table readable.
 SCORE_THRESHOLDS = tuple(index / 20 for index in range(21))
 
-_SIGNAL_LABELS = {
+SIGNAL_LABELS = {
     "coverage": "term coverage",
     "cosine": "top cosine",
     "margin": "top1−top2 margin",
 }
-_VARIANT_LABELS = {
+VARIANT_LABELS = {
     "bm25": "BM25-only",
     "vector": "Vector-only",
     "hybrid": "Hybrid",
@@ -143,13 +145,15 @@ def run_gate(
     *,
     embedder: EmbeddingClient,
     index_key: IndexKey | None = None,
+    indexes: IndexCache | None = None,
 ) -> GateReport:
     """Run retrieval once per query, record signals, then sweep thresholds."""
     scope = Scope.WIKI
     corpus = Path(corpus_root).resolve()
     check_corpus(dataset, corpus)
     layout = ProjectLayout(root=corpus)
-    cache = IndexCache(base_index_builder(embedder))
+    cache = indexes or IndexCache(base_index_builder(embedder))
+    mark = cache.mark()
     key = index_key or CHANNEL_INDEX_KEY
     build = cache.get(key, layout)
     base = cast(BaseIndex, build.index)
@@ -205,7 +209,7 @@ def run_gate(
         scope=scope,
         records=tuple(records),
         curves=curves,
-        index_builds=cache.records(),
+        index_builds=cache.records_since(mark),
     )
 
 
@@ -256,8 +260,8 @@ def gate_markdown(report: GateReport) -> str:
         lines.extend(
             [
                 (
-                    f"## {_VARIANT_LABELS[curve.variant]} — "
-                    f"{_SIGNAL_LABELS[curve.signal]}"
+                    f"## {VARIANT_LABELS[curve.variant]} — "
+                    f"{SIGNAL_LABELS[curve.signal]}"
                 ),
                 "",
                 (

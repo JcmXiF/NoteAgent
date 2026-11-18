@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from evals.rag.dataset import DatasetError, load_dataset
+from evals.rag.first_round import run_first_round, write_first_round
 from evals.rag.gate import run_gate, write_gate
 from evals.rag.matrix import run_channel_matrix, write_matrix
 from evals.rag.report import write_report
@@ -60,13 +61,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--matrix",
-        choices=["channel", "swaps", "gate"],
+        choices=["channel", "swaps", "gate", "first-round"],
         default=None,
         help=(
-            "run a matrix: channel (lexical/BM25/vector/hybrid), swaps "
-            "(hybrid reference plus S1/S2/S3/S4/S6), or gate curves; "
-            "channel/swaps cover both scopes, gate is wiki-only"
+            "run a matrix: channel, swaps, gate, or the whole first round "
+            "(channel + swaps + gate + bootstrap report)"
         ),
+    )
+    parser.add_argument(
+        "--ablation",
+        default="evals/rag/ABLATION.md",
+        help="tracked first-round protocol and summary",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        default="build/evals/rag/ablation",
+        help="where the raw matrix JSON and Markdown are written",
     )
     parser.add_argument(
         "--embedding-endpoint",
@@ -226,6 +236,38 @@ def main(
             written = write_gate(report, Path(args.report))
             print(f"gate curves: {len(report.curves)} curves")
             print(f"report: {written}")
+            return 0
+        if args.matrix == "first-round":
+            if (
+                selected_embedder is None
+                or selected_query_embedder is None
+            ):
+                print(
+                    "the first round needs embedding and query "
+                    "embedding endpoints",
+                    file=sys.stderr,
+                )
+                return 2
+            report = run_first_round(
+                dataset,
+                corpus,
+                embedder=selected_embedder,
+                query_embedder=selected_query_embedder,
+                index_key=index_key,
+            )
+            written = write_first_round(
+                report,
+                ablation_path=Path(args.ablation),
+                raw_dir=Path(args.raw_dir),
+                report_path=Path(args.report),
+            )
+            print(
+                f"first round: channel {len(report.channel)}, "
+                f"swaps {len(report.swap)}, "
+                f"gate {len(report.gate.curves)} curves"
+            )
+            print(f"report: {written}")
+            print(f"ablation: {args.ablation}")
             return 0
         variant = get_variant(args.variant)
         if variant.index_key is not None and selected_embedder is None:

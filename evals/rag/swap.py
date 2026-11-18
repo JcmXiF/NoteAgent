@@ -15,6 +15,7 @@ from evals.rag.dataset import Dataset
 from evals.rag.report import (
     index_row,
     metrics_payload,
+    query_results,
     write_json_markdown,
 )
 from evals.rag.runner import Evaluation, evaluate
@@ -41,11 +42,11 @@ __all__ = [
 
 SWAP_VARIANTS = (
     ("hybrid", "reference"),
-    ("hybrid_s1_whole_page", "S1 whole-page"),
     ("hybrid_s2_max", "S2 max aggregation"),
     ("hybrid_s3_minmax", "S3 min-max + equal weight"),
     ("hybrid_s4_no_prefix", "S4 prefix off"),
     ("hybrid_s6_no_exact", "S6 exact tier off"),
+    ("hybrid_s1_whole_page", "S1 whole-page"),
 )
 
 SKIPPED_SWAPS = (
@@ -70,6 +71,7 @@ def run_swap_matrix(
     embedder: EmbeddingClient,
     query_embedder: EmbeddingClient | None = None,
     index_key: IndexKey | None = None,
+    indexes: IndexCache | None = None,
 ) -> tuple[SwapRun, ...]:
     """Run the reference and the five swap rows in both scopes."""
     if query_embedder is None:
@@ -77,7 +79,7 @@ def run_swap_matrix(
             "the swap matrix needs a no-prefix query embedder for S4"
         )
     base_key = index_key or CHANNEL_INDEX_KEY
-    cache = IndexCache(base_index_builder(embedder))
+    cache = indexes or IndexCache(base_index_builder(embedder))
     runs: list[SwapRun] = []
     for name, label in SWAP_VARIANTS:
         variant = get_variant(name)
@@ -215,6 +217,7 @@ def _row(run: SwapRun) -> dict[str, Any]:
         "queriesRun": len(evaluation.results),
         "metrics": metrics_payload(evaluation),
         "latency": evaluation.latency.as_dict(),
+        "queries": query_results(evaluation),
         "indexBuilds": [
             build.as_dict() for build in evaluation.index_builds
         ],

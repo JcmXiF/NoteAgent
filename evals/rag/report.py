@@ -21,6 +21,7 @@ __all__ = [
     "markdown",
     "metrics_payload",
     "payload",
+    "query_results",
     "write_json_markdown",
     "write_report",
 ]
@@ -53,10 +54,15 @@ def payload(evaluation: Evaluation) -> dict[str, Any]:
         "indexBuilds": [
             build.as_dict() for build in evaluation.index_builds
         ],
-        "queries": [
-            _query_payload(result) for result in evaluation.results
-        ],
+        "queries": query_results(evaluation),
     }
+
+
+def query_results(evaluation: Evaluation) -> list[dict[str, Any]]:
+    """Every query's ranked result, the part a diff can be traced through."""
+    return [
+        _query_payload(result) for result in evaluation.results
+    ]
 
 
 def metrics_payload(evaluation: Evaluation) -> dict[str, Any]:

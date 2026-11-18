@@ -16,6 +16,7 @@ from evals.rag.dataset import Dataset
 from evals.rag.report import (
     index_row,
     metrics_payload,
+    query_results,
     write_json_markdown,
 )
 from evals.rag.runner import Evaluation, evaluate
@@ -56,9 +57,10 @@ def run_channel_matrix(
     *,
     embedder: EmbeddingClient,
     index_key: IndexKey | None = None,
+    indexes: IndexCache | None = None,
 ) -> tuple[MatrixRun, ...]:
     """Run lexical, BM25-only, vector-only, and hybrid in both scopes."""
-    cache = IndexCache(base_index_builder(embedder))
+    cache = indexes or IndexCache(base_index_builder(embedder))
     runs: list[MatrixRun] = []
     for name in CHANNEL_VARIANTS:
         variant = get_variant(name)
@@ -181,6 +183,7 @@ def _row(run: MatrixRun) -> dict[str, Any]:
         "queriesRun": len(evaluation.results),
         "metrics": metrics_payload(evaluation),
         "latency": evaluation.latency.as_dict(),
+        "queries": query_results(evaluation),
         "indexBuilds": [
             build.as_dict() for build in evaluation.index_builds
         ],

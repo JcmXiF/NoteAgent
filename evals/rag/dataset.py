@@ -26,6 +26,7 @@ __all__ = [
     "QUERY_TYPES",
     "RagQuery",
     "check_corpus",
+    "corpus_sha256",
     "load_dataset",
     "note_ref",
     "page_ref",
@@ -174,6 +175,26 @@ def check_corpus(dataset: Dataset, corpus_root: Path | str) -> None:
                 )
     if problems:
         raise DatasetError("\n".join(problems))
+
+
+def corpus_sha256(corpus_root: Path | str) -> str:
+    """A deterministic fingerprint of the corpus's Markdown files."""
+    root = Path(corpus_root)
+    digest = hashlib.sha256()
+    for kind in ("wiki", "notes"):
+        base = root / kind
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.md")):
+            rel = path.relative_to(root).as_posix()
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\x00")
+            try:
+                digest.update(path.read_bytes())
+            except OSError:
+                continue
+            digest.update(b"\x00")
+    return digest.hexdigest()
 
 
 def _parse_query(
