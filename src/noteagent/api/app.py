@@ -891,6 +891,33 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise _pipeline_not_found(run_id)
         return run_to_dict(run)
 
+    @app.get("/api/v1/pipeline/runs/{run_id}/restore/preview")
+    def pipeline_restore_preview(run_id: str) -> dict[str, object]:
+        """How the pages this run wrote stand now, before undoing them."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return service.restore_preview(run_id)
+
+    @app.post("/api/v1/pipeline/runs/{run_id}/restore")
+    def pipeline_restore(
+        run_id: str, body: RunRestoreBody
+    ) -> dict[str, object]:
+        """Undo the selected pages of a finished run."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        if body.runId != run_id:
+            raise CodedHTTPException(
+                400,
+                f"run id in body does not match the path: {body.runId}",
+                code="pipeline.invalid",
+            )
+        return service.restore(
+            run_id,
+            [page.model_dump() for page in body.pages],
+        )
+
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:
         """Every session in the active project, newest first."""

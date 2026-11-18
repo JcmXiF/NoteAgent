@@ -2,8 +2,8 @@
 
 The plan is the model's proposal; approval is the person's. This module turns the
 stored plan and the answers a person gave into the pages a run would write, and
-reads the compile's outcome back as three bounded lists: written, skipped and
-failed.
+reads the compile's outcome back as written/skipped/failed plus the effect ids
+the write path recorded.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from noteagent.ingest.topic_map import (
     carry_over_choices,
     parse_topic_map,
 )
-from noteagent.ingest.write_file_blocks import HARD_WRITE_CODES
+from noteagent.ingest.write_file_blocks import HARD_WRITE_CODES, WriteContext
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.run_log import RunLogger
 
@@ -271,6 +271,15 @@ def store_for_compile(
     return replace(store, collections=confirmation.selections)
 
 
+def pipeline_write_context(confirmation: Confirmation) -> WriteContext:
+    """The context every page write of this run records."""
+    return WriteContext(
+        run_id=confirmation.run_id,
+        actor="pipeline",
+        plan_revision=str(confirmation.revision),
+    )
+
+
 def default_compile(
     layout: ProjectLayout,
     confirmation: Confirmation,
@@ -286,6 +295,7 @@ def default_compile(
         store=store,
         run_logger=RunLogger.for_layout(layout),
         cancel=cancel,
+        write_context=pipeline_write_context(confirmation),
     )
     return compile_result_from(result)
 
@@ -309,7 +319,9 @@ def compile_result_from(result: IngestResult) -> CompileResult:
 
 
 def compile_outcome(
-    confirmation: Confirmation, result: CompileResult
+    confirmation: Confirmation,
+    result: CompileResult,
+    effect_ids: Sequence[str] = (),
 ) -> dict[str, object]:
     """The run's record of a compile: every page's outcome, bounded by the plan.
 
@@ -327,6 +339,7 @@ def compile_outcome(
         "written": list(result.written),
         "skipped": [item.payload() for item in skipped],
         "failed": [item.payload() for item in result.failed],
+        "effectIds": list(effect_ids),
     }
 
 
@@ -382,5 +395,6 @@ __all__ = [
     "confirmation_payload",
     "default_compile",
     "derive_confirmation",
+    "pipeline_write_context",
     "store_for_compile",
 ]

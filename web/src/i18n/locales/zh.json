@@ -293,6 +293,8 @@
       "done": "完成"
     },
     "materials": "材料 {{count}}",
+    "toWrite": "要写的页面 {{count}}",
+    "written": "已写页面 {{count}}",
     "material": {
       "staged": "暂存",
       "framed": "已画框",
@@ -312,6 +314,37 @@
       "auto": "自动收下",
       "manual": "手动选卡",
       "manualHint": "手动模式下请在资料面逐张选卡。"
+    },
+    "restore": {
+      "open": "回滚这次运行",
+      "hint": "默认只恢复仍保持这次运行结果的页面；勾选“强制”才会覆盖后来的改动。",
+      "restore": "恢复",
+      "force": "强制",
+      "apply": "恢复选中页",
+      "loadFailed": "读取回滚预览失败。",
+      "failed": "回滚失败。",
+      "done": "已恢复 {{count}} 页。",
+      "conflicted": "跳过 {{count}} 个冲突页。",
+      "failedCount": "{{count}} 页失败。",
+      "movedTo": "现在位于 {{path}}",
+      "kind": "操作：{{kind}}",
+      "run": "运行 {{runId}}",
+      "at": "{{at}}",
+      "defaultAction": "默认：{{action}}",
+      "default": {
+        "restore": "恢复",
+        "skip": "跳过"
+      },
+      "cannotRestore": "这一页无法从历史恢复。",
+      "classification": {
+        "unchanged": "与运行结果一致",
+        "changed_by_person": "之后被人工修改",
+        "changed_by_run": "之后被另一次运行写入",
+        "changed_by_restore": "之后已恢复过",
+        "unknown_external": "之后在应用外被修改",
+        "missing": "页面已不存在",
+        "renamed": "页面已改名"
+      }
     }
   },
   "plan": {

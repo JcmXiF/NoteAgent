@@ -16,6 +16,12 @@ from typing import TypeVar
 
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
+from noteagent.effects.journal import (
+    COMMITTED,
+    WIKI_PAGE_WRITE,
+    EffectJournal,
+)
+from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
@@ -165,6 +171,16 @@ class PipelineService:
         self._compile = compile or default_compile
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
+
+    def restore_preview(self, run_id: str) -> dict[str, object]:
+        """What undoing this run would touch, without changing anything."""
+        return preview_restore(self._layout, run_id)
+
+    def restore(
+        self, run_id: str, pages: Sequence[Mapping[str, object]]
+    ) -> dict[str, object]:
+        """Undo the selected pages of this run."""
+        return restore_run(self._layout, run_id, pages)
 
     def start(
         self,
@@ -695,6 +711,7 @@ class PipelineService:
             # else this run collected stays in staging for retention.
             self._promote_for(current, confirmation)
             result = self._compile(self._layout, confirmation, cancel)
+            effect_ids = self._run_effect_ids(current.id)
             if result.written:
                 self._mark_compiled(current, confirmation)
             self._save(
@@ -702,16 +719,53 @@ class PipelineService:
                     current,
                     status="succeeded",
                     stage="done",
-                    result=compile_outcome(confirmation, result),
+                    result=compile_outcome(
+                        confirmation, result, effect_ids
+                    ),
                 )
             )
         except (PipelineCancelled, JobCancelled):
-            self._save(replace(current, status="cancelled", error=""))
+            self._save(
+                replace(
+                    current,
+                    status="cancelled",
+                    error="",
+                    result=self._result_with_effects(current),
+                )
+            )
         except Exception as err:  # noqa: BLE001 - a failed compile is a result
             logger.exception("pipeline compile %s failed", current.id)
-            self._save(replace(current, status="failed", error=str(err)[:500]))
+            self._save(
+                replace(
+                    current,
+                    status="failed",
+                    error=str(err)[:500],
+                    result=self._result_with_effects(current),
+                )
+            )
         finally:
             self._release_run(current)
+
+    def _run_effect_ids(self, run_id: str) -> tuple[str, ...]:
+        """What the journal says this compile actually wrote."""
+        return tuple(
+            effect.ident
+            for effect in EffectJournal(self._layout).query(
+                run_id=run_id,
+                kind=WIKI_PAGE_WRITE,
+                status=COMMITTED,
+            )
+        )
+
+    def _result_with_effects(
+        self, run: PipelineRun
+    ) -> dict[str, object]:
+        """Keep the committed effect ids when a compile did not finish cleanly."""
+        result = dict(run.result)
+        effect_ids = self._run_effect_ids(run.id)
+        if effect_ids:
+            result["effectIds"] = list(effect_ids)
+        return result
 
     def _mark_compiled(
         self, run: PipelineRun, confirmation: Confirmation

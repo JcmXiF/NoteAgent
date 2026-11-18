@@ -14,20 +14,28 @@ from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.effects.journal import UNDO, WIKI_PAGE_WRITE, EffectJournal
 from noteagent.ingest.clips import load_clip_store
 from noteagent.ingest.compile_cache import read_records
 from noteagent.ingest.confirmed import ingest_confirmed
 from noteagent.ingest.frontmatter import parse_inline_list, parse_page
-from noteagent.ingest.topic_map import map_clips
+from noteagent.ingest.page_history import (
+    blob_digest,
+    page_snapshots,
+    record_write,
+)
+from noteagent.ingest.topic_map import map_clips, topic_slug
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.confirm import (
     CompileResult,
     compile_result_from,
+    pipeline_write_context,
     store_for_compile,
 )
 from noteagent.pipeline.framing import FrameStage
 from noteagent.pipeline.materials import MaterialLog
 from noteagent.pipeline.planning import PlanStage
+from noteagent.io.text_file import write_text
 from noteagent.project.init import init_project
 from noteagent.project.layout import ProjectLayout
 
@@ -45,6 +53,28 @@ except ImportError:  # pragma: no cover
 
 
 _LONG = "熵是不确定性的度量，它衡量一个随机变量的平均信息量。"
+
+OLD_PAGE = """---
+type: concept
+title: 熵
+sources: []
+---
+
+# 熵
+
+旧正文。
+"""
+
+OLD_SUMMARY = """---
+type: source
+title: 熵
+sources: []
+---
+
+# 熵
+
+旧汇总。
+"""
 
 
 def _deps(*, stages=(), planner=None, compile=None, spawn=None) -> AppDeps:
@@ -190,6 +220,7 @@ def _writing_compile():
                 _file_block(page) for page in confirmation.writes
             ),
             cancel=cancel,
+            write_context=pipeline_write_context(confirmation),
         )
         return compile_result_from(result)
 
@@ -318,6 +349,160 @@ class PipelineConfirmationTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(clips["choices"], [])
+
+    def test_a_finished_run_records_effects_and_can_be_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan, _plan_calls = _three_page_plan()
+            compile, _compile_calls = _writing_compile()
+            stage = AcquireStage(
+                search=lambda query: _cards(1),
+                fetch=lambda url, query: _capture(url),
+            )
+            repo = Path(tmp)
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                client = _client(
+                    tmp,
+                    stages=[stage, FrameStage(), PlanStage()],
+                    planner=plan,
+                    compile=compile,
+                )
+                layout = ProjectLayout(repo / "projects" / "demo")
+                page = layout.root / "wiki" / "entropy.md"
+                page.parent.mkdir(parents=True, exist_ok=True)
+                write_text(page, OLD_PAGE)
+                summary_path = f"wiki/sources/{topic_slug('熵')}-clips.md"
+                summary = layout.root.joinpath(*summary_path.split("/"))
+                summary.parent.mkdir(parents=True, exist_ok=True)
+                write_text(summary, OLD_SUMMARY)
+                run_id, _run = _awaiting(client)
+                client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/approve",
+                    json={"planRevision": 1},
+                )
+                run = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}"
+                ).json()
+                preview = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/restore/preview"
+                )
+                restored = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/restore",
+                    json={
+                        "runId": run_id,
+                        "pages": [
+                            {
+                                "path": summary_path,
+                                "action": "restore",
+                            }
+                        ],
+                    },
+                )
+
+            self.assertEqual(run["status"], "succeeded")
+            self.assertIn("wiki/entropy.md", run["result"]["written"])
+            self.assertGreaterEqual(len(run["result"]["effectIds"]), 1)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            paths = [item["path"] for item in preview.json()["pages"]]
+            self.assertIn(summary_path, paths)
+            summary_page = next(
+                item
+                for item in preview.json()["pages"]
+                if item["path"] == summary_path
+            )
+            self.assertEqual(summary_page["classification"], "unchanged")
+            self.assertEqual(summary_page["defaultAction"], "restore")
+            self.assertIn(
+                summary_page["effectId"], run["result"]["effectIds"]
+            )
+            self.assertEqual(restored.status_code, 200, restored.text)
+            self.assertEqual(len(restored.json()["restored"]), 1)
+            self.assertEqual(summary.read_text(encoding="utf-8"), OLD_SUMMARY)
+            self.assertEqual(
+                page_snapshots(layout, summary_path)[0].mode, "restore"
+            )
+            journal = EffectJournal(layout)
+            self.assertTrue(journal.query(kind=WIKI_PAGE_WRITE))
+            self.assertEqual(len(journal.query(kind=UNDO)), 1)
+
+    def test_a_person_edit_after_the_run_needs_force_to_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plan, _plan_calls = _three_page_plan()
+            compile, _compile_calls = _writing_compile()
+            stage = AcquireStage(
+                search=lambda query: _cards(1),
+                fetch=lambda url, query: _capture(url),
+            )
+            repo = Path(tmp)
+            with patch.object(projects_mod, "REPO_ROOT", repo):
+                client = _client(
+                    tmp,
+                    stages=[stage, FrameStage(), PlanStage()],
+                    planner=plan,
+                    compile=compile,
+                )
+                layout = ProjectLayout(repo / "projects" / "demo")
+                summary_path = f"wiki/sources/{topic_slug('熵')}-clips.md"
+                summary = layout.root.joinpath(*summary_path.split("/"))
+                summary.parent.mkdir(parents=True, exist_ok=True)
+                write_text(summary, OLD_SUMMARY)
+                run_id, _run = _awaiting(client)
+                client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/approve",
+                    json={"planRevision": 1},
+                )
+                wrote = summary.read_text(encoding="utf-8")
+                person = "---\ntype: source\n---\n\n# 熵\n\n人改过的汇总。\n"
+                write_text(summary, person)
+                record_write(
+                    layout,
+                    summary_path,
+                    before=blob_digest(wrote),
+                    after_text=person,
+                    mode="edit",
+                    by="person",
+                )
+                preview = client.get(
+                    f"/api/v1/pipeline/runs/{run_id}/restore/preview"
+                )
+                blocked = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/restore",
+                    json={
+                        "runId": run_id,
+                        "pages": [
+                            {"path": summary_path, "action": "restore"}
+                        ],
+                    },
+                )
+                still_person = summary.read_text(encoding="utf-8")
+                forced = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/restore",
+                    json={
+                        "runId": run_id,
+                        "pages": [
+                            {
+                                "path": summary_path,
+                                "action": "restore",
+                                "force": True,
+                            }
+                        ],
+                    },
+                )
+
+            page = next(
+                item
+                for item in preview.json()["pages"]
+                if item["path"] == summary_path
+            )
+            self.assertEqual(page["classification"], "changed_by_person")
+            self.assertEqual(blocked.json()["restored"], [])
+            self.assertEqual(
+                blocked.json()["conflicted"][0]["classification"],
+                "changed_by_person",
+            )
+            self.assertEqual(still_person, person)
+            self.assertEqual(len(forced.json()["restored"]), 1)
+            self.assertEqual(summary.read_text(encoding="utf-8"), OLD_SUMMARY)
+            self.assertEqual(len(EffectJournal(layout).query(kind=UNDO)), 1)
 
     def test_approval_promotes_only_the_write_pages_material(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
