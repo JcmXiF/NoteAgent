@@ -4,7 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import i18n from "@/i18n";
 import { EffectiveConfigSection } from "@/components/settings/EffectiveConfigSection";
-import { installSettings, profileSettings } from "@/components/settings/test-fixtures";
+import {
+  installSettings,
+  profileSettings,
+  ragSettings,
+} from "@/components/settings/test-fixtures";
 import type { InstallSettings } from "@/lib/install-settings";
 
 /**
@@ -55,6 +59,25 @@ const EFFECTIVE: Partial<InstallSettings> = {
     uiLang: "zh-CN",
     configured: true,
   },
+  rag: ragSettings({
+    enabled: true,
+    embedding: {
+      endpoint: "http://localhost:8080/v1",
+      model: "qwen3-embedding:0.6b",
+      queryPrefix: "Q: {query}",
+      batch: 8,
+      concurrency: 2,
+      apiKeySet: true,
+    },
+    rerank: {
+      enabled: true,
+      endpoint: "http://localhost:8081/v1",
+      model: "rerank-model",
+      candidates: 20,
+      topN: 5,
+      apiKeySet: true,
+    },
+  }),
   extractMedia: false,
   locked: ["llm.temperature"],
   revision: 7,
@@ -74,6 +97,19 @@ const EFFECTIVE: Partial<InstallSettings> = {
     "search.country": "config",
     "search.searchLang": "config",
     "search.uiLang": "default",
+    "rag.enabled": "config",
+    "rag.embedding.endpoint": "config",
+    "rag.embedding.model": "config",
+    "rag.embedding.queryPrefix": "config",
+    "rag.embedding.batch": "config",
+    "rag.embedding.concurrency": "default",
+    "rag.embedding.apiKey": "keychain",
+    "rag.rerank.enabled": "config",
+    "rag.rerank.endpoint": "config",
+    "rag.rerank.model": "config",
+    "rag.rerank.candidates": "config",
+    "rag.rerank.topN": "default",
+    "rag.rerank.apiKey": "keychain",
     extractMedia: "default",
   },
 };
@@ -105,6 +141,17 @@ describe("the effective configuration", () => {
     expect(text).toContain("CN");
     expect(text).toContain("zh-hans");
     expect(text).toContain("zh-CN");
+    expect(text).toContain("使用混合检索");
+    expect(text).toContain("http://localhost:8080/v1");
+    expect(text).toContain("qwen3-embedding:0.6b");
+    expect(text).toContain("查询前缀");
+    expect(text).toContain("Q: {query}");
+    expect(text).toContain("嵌入批量");
+    expect(text).toContain("并发数");
+    expect(text).toContain("重排服务地址");
+    expect(text).toContain("http://localhost:8081/v1");
+    expect(text).toContain("候选数");
+    expect(text).toContain("保留数");
     // A key is reported as stored, never as text.
     expect(text).toContain("已保存");
     // The four sources the core can name.

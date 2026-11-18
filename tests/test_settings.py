@@ -27,11 +27,29 @@ from noteagent.acquire.search_config import (
 from noteagent.llm.config import reset_process_env_keys
 from noteagent.project.init import init_project
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_DIM,
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_QUERY_PREFIX,
+    load_embedding_config,
+)
+from noteagent.rag.embedding import EmbeddingError
+from noteagent.rag.faux import FakeEmbedder
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.brief import brief_view, save_brief
-from noteagent.settings.credentials import SEARCH_KEY, llm_key
+from noteagent.settings.credentials import (
+    RAG_EMBEDDING_KEY,
+    RAG_RERANK_KEY,
+    SEARCH_KEY,
+    llm_key,
+)
 from noteagent.settings.effective import forget_applied
 from noteagent.settings.fields import MANAGED_ENV_NAMES
 from noteagent.settings.profiles import create_profile
+from noteagent.settings.store import dump_config, parse_config
 from noteagent.settings.install import (
     _tool_check_tools,
     apply_install,
@@ -361,6 +379,574 @@ class SearchSettingsTests(unittest.TestCase):
                 ),
             ):
                 self.assertEqual(active_llm_provider(), "")
+
+
+class RagSettingsTests(unittest.TestCase):
+    """The retrieval switch is install-wide: document, screen and runtime agree."""
+
+    def test_rag_is_off_by_default_and_reports_its_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            self.assertFalse(view["rag"]["enabled"])
+            self.assertEqual(view["rag"]["embedding"]["endpoint"], "")
+            self.assertEqual(
+                view["rag"]["embedding"]["model"], DEFAULT_EMBEDDING_MODEL
+            )
+            self.assertEqual(view["sources"]["rag.enabled"], "default")
+            self.assertEqual(view["sources"]["rag.embedding.model"], "default")
+            self.assertEqual(view["locked"], [])
+
+    def test_enabling_rag_writes_the_document_and_the_process_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(document["rag"]["enabled"])
+            self.assertEqual(
+                document["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertTrue(view["rag"]["enabled"])
+            self.assertEqual(
+                view["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertEqual(view["sources"]["rag.embedding.endpoint"], "config")
+            self.assertEqual(os.environ["NOTEAGENT_RAG_ENABLED"], "1")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_ENDPOINT"],
+                "http://localhost:8080/v1",
+            )
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_MODEL"], "qwen3-embedding:0.6b"
+            )
+
+    def test_turning_rag_off_writes_the_off_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+            view = apply_install({"rag": {"enabled": False}})
+
+            self.assertFalse(view["rag"]["enabled"])
+            self.assertEqual(os.environ["NOTEAGENT_RAG_ENABLED"], "0")
+
+    def test_enabling_without_an_endpoint_is_refused_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"enabled": True, "embedding": {"model": "m"}}}
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertEqual(caught.exception.status, 400)
+            self.assertFalse(path.exists())
+
+    def test_enabling_without_a_model_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {
+                        "rag": {
+                            "enabled": True,
+                            "embedding": {
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "",
+                            },
+                        }
+                    }
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertFalse(path.exists())
+
+    def test_clearing_the_endpoint_while_enabled_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                }
+            )
+            with self.assertRaises(Refusal):
+                apply_install({"rag": {"embedding": {"endpoint": ""}}})
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                document["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+
+    def test_a_rag_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_ENDPOINT"] = "http://env/v1"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["embedding"]["endpoint"], "http://env/v1")
+            self.assertEqual(view["sources"]["rag.embedding.endpoint"], "env")
+            self.assertIn("rag.embedding.endpoint", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"embedding": {"endpoint": "http://other/v1"}}}
+                )
+            self.assertEqual(caught.exception.code, "settings.locked")
+
+    def test_an_empty_environment_model_means_the_runtime_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_MODEL"] = ""
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(
+                view["rag"]["embedding"]["model"], DEFAULT_EMBEDDING_MODEL
+            )
+            self.assertEqual(view["sources"]["rag.embedding.model"], "env")
+            self.assertIn("rag.embedding.model", view["locked"])
+
+            saved = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {"endpoint": "http://localhost:8080/v1"},
+                    }
+                }
+            )
+            self.assertTrue(saved["rag"]["enabled"])
+
+    def test_advanced_embedding_defaults_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            embedding = view["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], DEFAULT_QUERY_PREFIX)
+            self.assertEqual(embedding["batch"], DEFAULT_BATCH)
+            self.assertEqual(embedding["concurrency"], DEFAULT_CONCURRENCY)
+            self.assertFalse(embedding["apiKeySet"])
+            self.assertNotIn("apiKey", embedding)
+            self.assertEqual(
+                view["sources"]["rag.embedding.queryPrefix"], "default"
+            )
+
+    def test_advanced_embedding_values_save_and_reach_the_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "m",
+                            "queryPrefix": "Q: {query}",
+                            "batch": 8,
+                            "concurrency": 2,
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                document["rag"]["embedding"]["queryPrefix"], "Q: {query}"
+            )
+            self.assertEqual(document["rag"]["embedding"]["batch"], 8)
+            self.assertEqual(document["rag"]["embedding"]["concurrency"], 2)
+
+            embedding = view["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], "Q: {query}")
+            self.assertEqual(embedding["batch"], 8)
+            self.assertEqual(embedding["concurrency"], 2)
+            self.assertEqual(view["sources"]["rag.embedding.batch"], "config")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX"],
+                "Q: {query}",
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_EMBEDDING_BATCH"], "8")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_EMBEDDING_CONCURRENCY"], "2"
+            )
+
+    def test_an_empty_query_prefix_reaches_the_runtime_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = apply_install({"rag": {"embedding": {"queryPrefix": ""}}})
+
+            self.assertEqual(view["rag"]["embedding"]["queryPrefix"], "")
+            # The loader tells "set to empty" apart from "not set"; the
+            # document's empty prefix must disable the instruction, not restore
+            # the default.
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_EMBEDDING_QUERY_PREFIX"), ""
+            )
+            loaded = load_embedding_config(
+                credential_store=FakeCredentials()
+            )
+            self.assertEqual(loaded.query_prefix, "")
+
+    def test_a_query_prefix_without_the_placeholder_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"embedding": {"queryPrefix": "no placeholder"}}}
+                )
+
+            self.assertEqual(caught.exception.code, "settings.invalid")
+            self.assertEqual(
+                caught.exception.params.get("field"),
+                "rag.embedding.queryPrefix",
+            )
+            self.assertFalse(path.exists())
+
+    def test_enabling_refuses_a_prefix_that_was_edited_by_hand(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            # The document schema accepts any prefix; the save path is what
+            # enforces the placeholder. A hand-edited file skips that path.
+            path.write_text(
+                dump_config(
+                    parse_config(
+                        {
+                            "schemaVersion": 1,
+                            "rag": {
+                                "embedding": {
+                                    "queryPrefix": "no placeholder"
+                                }
+                            },
+                        }
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {
+                        "rag": {
+                            "enabled": True,
+                            "embedding": {
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "m",
+                            },
+                        }
+                    }
+                )
+
+            self.assertEqual(
+                caught.exception.params.get("field"),
+                "rag.embedding.queryPrefix",
+            )
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(stored["rag"]["enabled"])
+
+    def test_advanced_numbers_out_of_range_are_refused(self) -> None:
+        cases = (
+            ("batch", 0),
+            ("batch", 513),
+            ("concurrency", 0),
+            ("concurrency", 9),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"embedding": {field: value}}})
+                    self.assertEqual(caught.exception.code, "settings.invalid")
+                    self.assertFalse(path.exists())
+
+    def test_the_embedding_key_lives_only_in_the_credential_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            view = apply_install({"rag": {"embedding": {"apiKey": "secret"}}})
+
+            self.assertTrue(view["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn("apiKey", view["rag"]["embedding"])
+            self.assertNotIn("secret", json.dumps(view))
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "secret"
+            )
+            # The runtime reads the key from the environment the save applies.
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_EMBEDDING_API_KEY"), "secret"
+            )
+
+            replaced = apply_install(
+                {"rag": {"embedding": {"apiKey": "second"}}}
+            )
+            self.assertTrue(replaced["rag"]["embedding"]["apiKeySet"])
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "second"
+            )
+
+            cleared = apply_install(
+                {"rag": {"embedding": {"clearApiKey": True}}}
+            )
+            self.assertFalse(cleared["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn(RAG_EMBEDDING_KEY, credentials.values)
+            self.assertNotIn("NOTEAGENT_RAG_EMBEDDING_API_KEY", os.environ)
+
+    def test_an_unavailable_credential_store_refuses_the_embedding_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+            tmp, available=False
+        ) as (path, _credentials):
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"embedding": {"apiKey": "secret"}}})
+
+            self.assertEqual(
+                caught.exception.code, "settings.keychainUnavailable"
+            )
+            self.assertFalse(path.exists())
+            self.assertNotIn("secret", json.dumps(install_view()))
+
+    def test_an_advanced_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_EMBEDDING_BATCH"] = "8"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["embedding"]["batch"], 8)
+            self.assertEqual(view["sources"]["rag.embedding.batch"], "env")
+            self.assertIn("rag.embedding.batch", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"embedding": {"batch": 16}}})
+            self.assertEqual(caught.exception.code, "settings.locked")
+
+
+class RerankSettingsTests(unittest.TestCase):
+    """The optional reranker shares the document, the environment and the store."""
+
+    def test_rerank_is_off_by_default_and_reports_its_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = install_view()
+
+            rerank = view["rag"]["rerank"]
+            self.assertFalse(rerank["enabled"])
+            self.assertEqual(rerank["endpoint"], "")
+            self.assertEqual(rerank["model"], "")
+            self.assertEqual(rerank["candidates"], DEFAULT_CANDIDATE_LIMIT)
+            self.assertEqual(rerank["topN"], DEFAULT_TOP_N)
+            self.assertFalse(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertEqual(
+                view["sources"]["rag.rerank.candidates"], "default"
+            )
+
+    def test_rerank_values_save_and_reach_the_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            view = apply_install(
+                {
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "e",
+                        },
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://localhost:8081/v1",
+                            "model": "r",
+                            "candidates": 20,
+                            "topN": 5,
+                        },
+                    }
+                }
+            )
+
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(document["rag"]["rerank"]["enabled"])
+            self.assertEqual(document["rag"]["rerank"]["candidates"], 20)
+            self.assertEqual(document["rag"]["rerank"]["topN"], 5)
+
+            rerank = view["rag"]["rerank"]
+            self.assertTrue(rerank["enabled"])
+            self.assertEqual(
+                rerank["endpoint"], "http://localhost:8081/v1"
+            )
+            self.assertEqual(rerank["model"], "r")
+            self.assertEqual(rerank["candidates"], 20)
+            self.assertEqual(rerank["topN"], 5)
+            self.assertEqual(
+                view["sources"]["rag.rerank.endpoint"], "config"
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_RERANK_ENABLED"], "1")
+            self.assertEqual(
+                os.environ["NOTEAGENT_RAG_RERANK_CANDIDATES"], "20"
+            )
+            self.assertEqual(os.environ["NOTEAGENT_RAG_RERANK_TOP_N"], "5")
+
+    def test_enabling_rerank_needs_an_endpoint_and_a_model(self) -> None:
+        cases = (
+            ({"enabled": True, "model": "r"}, "rag.rerank.endpoint"),
+            (
+                {"enabled": True, "endpoint": "http://localhost:8081/v1"},
+                "rag.rerank.model",
+            ),
+        )
+        for body, field in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"rerank": body}})
+
+                    self.assertEqual(
+                        caught.exception.code, "settings.invalid"
+                    )
+                    self.assertEqual(
+                        caught.exception.params.get("field"), field
+                    )
+                    self.assertFalse(path.exists())
+
+    def test_out_of_range_rerank_numbers_are_refused(self) -> None:
+        cases = (
+            ("candidates", 0, "rag.rerank.candidates"),
+            ("candidates", 501, "rag.rerank.candidates"),
+            ("topN", 0, "rag.rerank.topN"),
+            ("topN", 101, "rag.rerank.topN"),
+        )
+        for field, value, expected in cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    with self.assertRaises(Refusal) as caught:
+                        apply_install({"rag": {"rerank": {field: value}}})
+                    self.assertEqual(
+                        caught.exception.params.get("field"), expected
+                    )
+                    self.assertFalse(path.exists())
+
+    def test_top_n_must_not_exceed_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            with self.assertRaises(Refusal) as caught:
+                apply_install(
+                    {"rag": {"rerank": {"candidates": 10, "topN": 11}}}
+                )
+
+            self.assertEqual(
+                caught.exception.params.get("field"), "rag.rerank.topN"
+            )
+            self.assertFalse(path.exists())
+
+    def test_changing_top_n_alone_respects_the_saved_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {"rag": {"rerank": {"candidates": 10, "topN": 5}}}
+            )
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"rerank": {"topN": 11}}})
+            self.assertEqual(
+                caught.exception.params.get("field"), "rag.rerank.topN"
+            )
+
+    def test_rerank_disabled_may_clear_the_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            view = apply_install(
+                {
+                    "rag": {
+                        "rerank": {
+                            "enabled": False,
+                            "endpoint": "",
+                            "model": "",
+                        }
+                    }
+                }
+            )
+            self.assertFalse(view["rag"]["rerank"]["enabled"])
+
+    def test_the_rerank_key_lives_only_in_the_credential_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            view = apply_install({"rag": {"rerank": {"apiKey": "secret"}}})
+
+            rerank = view["rag"]["rerank"]
+            self.assertTrue(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertNotIn("secret", json.dumps(view))
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_RERANK_KEY), "secret"
+            )
+            self.assertEqual(
+                os.environ.get("NOTEAGENT_RAG_RERANK_API_KEY"), "secret"
+            )
+
+            cleared = apply_install(
+                {"rag": {"rerank": {"clearApiKey": True}}}
+            )
+            self.assertFalse(cleared["rag"]["rerank"]["apiKeySet"])
+            self.assertNotIn(RAG_RERANK_KEY, credentials.values)
+            self.assertNotIn("NOTEAGENT_RAG_RERANK_API_KEY", os.environ)
+
+    def test_a_rerank_value_from_the_environment_is_locked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            os.environ["NOTEAGENT_RAG_RERANK_TOP_N"] = "5"
+            reset_process_env_keys()
+
+            view = install_view()
+            self.assertEqual(view["rag"]["rerank"]["topN"], 5)
+            self.assertEqual(view["sources"]["rag.rerank.topN"], "env")
+            self.assertIn("rag.rerank.topN", view["locked"])
+
+            with self.assertRaises(Refusal) as caught:
+                apply_install({"rag": {"rerank": {"topN": 6}}})
+            self.assertEqual(caught.exception.code, "settings.locked")
 
 
 class ProbeTests(unittest.TestCase):
@@ -1136,6 +1722,200 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(saved.json()["search"]["country"], "CN")
             self.assertEqual(client.get("/api/settings").json()["search"]["mode"], "external")
 
+    def test_rag_settings_save_through_the_settings_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            client = TestClient(create_app())
+            default = client.get("/api/settings")
+            self.assertEqual(default.status_code, 200, default.text)
+            self.assertFalse(default.json()["rag"]["enabled"])
+
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "qwen3-embedding:0.6b",
+                        },
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            self.assertTrue(body["rag"]["enabled"])
+            self.assertEqual(
+                body["rag"]["embedding"]["endpoint"], "http://localhost:8080/v1"
+            )
+            self.assertEqual(body["sources"]["rag.embedding.endpoint"], "config")
+
+            refused = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"enabled": True, "embedding": {"endpoint": ""}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(refused.status_code, 400, refused.text)
+            self.assertEqual(refused.json()["code"], "settings.invalid")
+            self.assertEqual(
+                refused.json()["params"]["field"], "rag.embedding.endpoint"
+            )
+            self.assertTrue(client.get("/api/settings").json()["rag"]["enabled"])
+
+    def test_advanced_rag_settings_and_key_save_through_the_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "enabled": True,
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "m",
+                            "queryPrefix": "Q: {query}",
+                            "batch": 8,
+                            "concurrency": 2,
+                            "apiKey": "secret",
+                        },
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            embedding = body["rag"]["embedding"]
+            self.assertEqual(embedding["queryPrefix"], "Q: {query}")
+            self.assertEqual(embedding["batch"], 8)
+            self.assertEqual(embedding["concurrency"], 2)
+            self.assertTrue(embedding["apiKeySet"])
+            self.assertNotIn("apiKey", embedding)
+            self.assertNotIn("secret", saved.text)
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_EMBEDDING_KEY), "secret"
+            )
+
+            cleared = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"embedding": {"clearApiKey": True}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertFalse(cleared.json()["rag"]["embedding"]["apiKeySet"])
+            self.assertNotIn(RAG_EMBEDDING_KEY, credentials.values)
+
+    def test_bad_advanced_rag_values_are_coded_400s(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            client = TestClient(create_app())
+            cases = (
+                ({"queryPrefix": "no placeholder"}, "rag.embedding.queryPrefix"),
+                ({"batch": 0}, "rag.embedding.batch"),
+                ({"concurrency": 9}, "rag.embedding.concurrency"),
+            )
+            for embedding, field in cases:
+                with self.subTest(field=field):
+                    refused = client.put(
+                        "/api/settings", json={"rag": {"embedding": embedding}}
+                    )
+                    self.assertEqual(refused.status_code, 400, refused.text)
+                    self.assertEqual(
+                        refused.json()["code"], "settings.invalid"
+                    )
+                    self.assertEqual(
+                        refused.json()["params"]["field"], field
+                    )
+            self.assertFalse(path.exists())
+
+    def test_rerank_settings_save_through_the_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            credentials,
+        ):
+            client = TestClient(create_app())
+            saved = client.put(
+                "/api/settings",
+                json={
+                    "rag": {
+                        "rerank": {
+                            "enabled": True,
+                            "endpoint": "http://localhost:8081/v1",
+                            "model": "r",
+                            "candidates": 20,
+                            "topN": 5,
+                            "apiKey": "secret",
+                        }
+                    }
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            body = saved.json()
+            rerank = body["rag"]["rerank"]
+            self.assertTrue(rerank["enabled"])
+            self.assertEqual(
+                rerank["endpoint"], "http://localhost:8081/v1"
+            )
+            self.assertEqual(rerank["model"], "r")
+            self.assertEqual(rerank["candidates"], 20)
+            self.assertEqual(rerank["topN"], 5)
+            self.assertTrue(rerank["apiKeySet"])
+            self.assertNotIn("apiKey", rerank)
+            self.assertNotIn("secret", saved.text)
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials.values.get(RAG_RERANK_KEY), "secret"
+            )
+
+            cleared = client.put(
+                "/api/settings",
+                json={
+                    "rag": {"rerank": {"clearApiKey": True}},
+                    "revision": body["revision"],
+                },
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.text)
+            self.assertFalse(cleared.json()["rag"]["rerank"]["apiKeySet"])
+            self.assertNotIn(RAG_RERANK_KEY, credentials.values)
+
+    def test_bad_rerank_values_are_coded_400s(self) -> None:
+        cases = (
+            ({"enabled": True, "model": "r"}, "rag.rerank.endpoint"),
+            (
+                {"enabled": True, "endpoint": "http://localhost:8081/v1"},
+                "rag.rerank.model",
+            ),
+            ({"candidates": 0}, "rag.rerank.candidates"),
+            ({"topN": 101}, "rag.rerank.topN"),
+            ({"candidates": 10, "topN": 11}, "rag.rerank.topN"),
+        )
+        for rerank, field in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ) as (path, _credentials):
+                    refused = TestClient(create_app()).put(
+                        "/api/settings",
+                        json={"rag": {"rerank": rerank}},
+                    )
+                    self.assertEqual(
+                        refused.status_code, 400, refused.text
+                    )
+                    self.assertEqual(
+                        refused.json()["code"], "settings.invalid"
+                    )
+                    self.assertEqual(
+                        refused.json()["params"]["field"], field
+                    )
+                    self.assertFalse(path.exists())
+
     def test_a_stale_revision_is_a_409_with_its_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
             client = TestClient(create_app())
@@ -1186,6 +1966,260 @@ class SettingsApiTests(unittest.TestCase):
             self.assertEqual(view["llm"]["model"], "outside")
             self.assertEqual(view["sources"]["llm.model"], "env")
             self.assertIn("llm.model", view["locked"])
+
+
+@unittest.skipIf(TestClient is None, "fastapi not installed")
+class RagProbeApiTests(unittest.TestCase):
+    """The test button's request: the draft, the key, and what came back."""
+
+    def test_a_working_draft_answers_dim_and_time_without_saving(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            path,
+            _credentials,
+        ):
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                        "apiKey": "secret",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["dim"], DEFAULT_DIM)
+            self.assertGreaterEqual(body["durationSeconds"], 0)
+            self.assertNotIn("secret", response.text)
+            self.assertEqual(captured[0].api_key, "secret")
+            self.assertFalse(path.exists())
+
+    def test_the_stored_key_is_used_when_the_draft_has_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            # The key belongs to the saved address; the probe of that address
+            # may use it.
+            apply_install(
+                {
+                    "rag": {
+                        "embedding": {
+                            "endpoint": "http://localhost:8080/v1",
+                            "model": "fake-model",
+                        }
+                    }
+                }
+            )
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(captured[0].api_key, "stored")
+
+    def test_a_stored_key_is_not_sent_to_another_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            apply_install(
+                {
+                    "rag": {
+                        "embedding": {
+                            "endpoint": "https://saved.example/v1",
+                            "model": "m",
+                            "apiKey": "stored",
+                        }
+                    }
+                }
+            )
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                client = TestClient(create_app())
+                refused = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://other.example/v1",
+                        "model": "m",
+                    },
+                )
+                same_host = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://saved.example/v1/other",
+                        "model": "m",
+                    },
+                )
+                with_key = client.post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://other.example/v1",
+                        "model": "m",
+                        "apiKey": "draft",
+                    },
+                )
+
+            self.assertEqual(refused.status_code, 409, refused.text)
+            self.assertEqual(
+                refused.json()["code"], "settings.probeKeyRequired"
+            )
+            self.assertEqual(same_host.status_code, 200, same_host.text)
+            self.assertEqual(with_key.status_code, 200, with_key.text)
+            self.assertEqual(
+                [config.api_key for config in captured], ["stored", "draft"]
+            )
+
+    def test_clearing_the_key_probes_without_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            captured: list[object] = []
+
+            def factory(config):
+                captured.append(config)
+                return FakeEmbedder(dim=config.dim)
+
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient", factory
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "https://saved.example/v1",
+                        "model": "m",
+                        "clearApiKey": True,
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(captured[0].api_key, "")
+
+    def test_failures_are_coded_and_do_not_echo_the_key(self) -> None:
+        cases = (
+            (
+                "embedding request failed: timed out",
+                "settings.ragProbeUnreachable",
+            ),
+            ("embedding HTTP 401: no", "settings.ragProbeRejected"),
+            (
+                "the embedding endpoint did not answer JSON",
+                "settings.ragProbeFailed",
+            ),
+        )
+        for message, code in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(
+                    tmp
+                ):
+                    with patch(
+                        "noteagent.settings.install.OpenAIEmbeddingClient",
+                        lambda _config: _RaisingEmbedder(message),
+                    ):
+                        response = TestClient(create_app()).post(
+                            "/api/settings/rag/probe",
+                            json={
+                                "endpoint": "http://localhost:8080/v1",
+                                "model": "fake-model",
+                                "apiKey": "secret",
+                            },
+                        )
+
+                    self.assertEqual(response.status_code, 502, response.text)
+                    self.assertEqual(response.json()["code"], code)
+                    self.assertNotIn("secret", response.text)
+
+    def test_a_different_dimension_is_its_own_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp):
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient",
+                lambda _config: _ShortEmbedder(),
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={
+                        "endpoint": "http://localhost:8080/v1",
+                        "model": "fake-model",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 502, response.text)
+            self.assertEqual(
+                response.json()["code"], "settings.ragProbeDimension"
+            )
+
+    def test_an_incomplete_draft_is_refused_before_calling_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, isolated_env(), settings_home(tmp) as (
+            _path,
+            credentials,
+        ):
+            # A stored key must not turn a missing address into a key error.
+            credentials.values[RAG_EMBEDDING_KEY] = "stored"
+            with patch(
+                "noteagent.settings.install.OpenAIEmbeddingClient",
+                side_effect=AssertionError("must not call the service"),
+            ):
+                response = TestClient(create_app()).post(
+                    "/api/settings/rag/probe",
+                    json={"endpoint": "", "model": "fake-model"},
+                )
+
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(response.json()["code"], "settings.invalid")
+            self.assertEqual(
+                response.json()["params"]["field"],
+                "rag.embedding.endpoint",
+            )
+
+
+class _RaisingEmbedder:
+    """An embedding client whose one call fails with a given message."""
+
+    def __init__(self, message: str) -> None:
+        self.dim = DEFAULT_DIM
+        self.message = message
+
+    def embed(self, texts, *, query: bool = False):
+        raise EmbeddingError(self.message)
+
+
+class _ShortEmbedder:
+    """An embedding client that answers with the wrong width."""
+
+    dim = DEFAULT_DIM
+
+    def embed(self, texts, *, query: bool = False):
+        return [(0.0,) * 8]
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
@@ -1596,3 +2630,62 @@ class ToolProbeTests(unittest.TestCase):
             if tool["function"]["name"] == "search"
         ]
         self.assertEqual(_tool_check_tools(), live)
+
+
+class RagDocumentTests(unittest.TestCase):
+    def test_rag_is_off_and_uses_the_local_defaults(self) -> None:
+        config = parse_config({"schemaVersion": 1})
+
+        self.assertFalse(config.rag.enabled)
+        self.assertEqual(
+            config.rag.embedding.model, DEFAULT_EMBEDDING_MODEL
+        )
+        self.assertEqual(
+            config.rag.embedding.query_prefix, DEFAULT_QUERY_PREFIX
+        )
+        self.assertEqual(config.rag.embedding.batch, 64)
+        self.assertEqual(config.rag.embedding.concurrency, 1)
+        self.assertFalse(config.rag.rerank.enabled)
+        self.assertEqual(config.rag.rerank.candidates, 50)
+        self.assertEqual(config.rag.rerank.top_n, 10)
+
+    def test_the_rag_section_round_trips(self) -> None:
+        rag = {
+            "enabled": True,
+            "embedding": {
+                "endpoint": "http://localhost:8080/v1",
+                "model": "qwen3-embedding:0.6b",
+                "queryPrefix": "Q: {query}",
+                "batch": 8,
+                "concurrency": 2,
+            },
+            "rerank": {
+                "enabled": True,
+                "endpoint": "http://localhost:8081/v1",
+                "model": "qwen3-reranker",
+                "candidates": 20,
+                "topN": 5,
+            },
+        }
+
+        config = parse_config({"schemaVersion": 1, "rag": rag})
+        stored = json.loads(dump_config(config))
+
+        self.assertTrue(config.rag.enabled)
+        self.assertEqual(config.rag.embedding.batch, 8)
+        self.assertEqual(config.rag.rerank.top_n, 5)
+        self.assertEqual(stored["rag"], rag)
+
+    def test_bad_rag_values_are_refused(self) -> None:
+        cases = (
+            {"rag": {"enabled": "yes"}},
+            {"rag": {"embedding": {"batch": 0}}},
+            {"rag": {"embedding": {"concurrency": 0}}},
+            {"rag": {"embedding": {"endpoint": "not-a-url"}}},
+            {"rag": {"rerank": {"candidates": 10, "topN": 11}}},
+            {"rag": {"embedding": {"apiKey": "secret"}}},
+        )
+        for rag in cases:
+            with self.subTest(rag=rag):
+                with self.assertRaises(Refusal):
+                    parse_config({"schemaVersion": 1, **rag})

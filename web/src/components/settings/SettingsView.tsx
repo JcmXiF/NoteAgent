@@ -16,6 +16,7 @@ import { EffectiveConfigSection } from "@/components/settings/EffectiveConfigSec
 import { GenerationSection } from "@/components/settings/GenerationSection";
 import { ProfilesSection } from "@/components/settings/ProfilesSection";
 import { ProjectSection } from "@/components/settings/ProjectSection";
+import { RetrievalSection } from "@/components/settings/RetrievalSection";
 import { SearchSection } from "@/components/settings/SearchSection";
 import { fetchSettings } from "@/lib/api/settings";
 import { errorMessage } from "@/lib/api/client";
@@ -27,7 +28,15 @@ import { useLayoutStore } from "@/stores/layout-store";
 const GROUPS = [
   {
     scope: "settings.scope.install",
-    ids: ["model", "generation", "search", "deepCheck", "effective", "diagnostics"],
+    ids: [
+      "model",
+      "generation",
+      "search",
+      "retrieval",
+      "deepCheck",
+      "effective",
+      "diagnostics",
+    ],
   },
   { scope: "settings.scope.project", ids: ["project"] },
   { scope: "settings.scope.window", ids: ["appearance"] },
@@ -62,6 +71,7 @@ export function SettingsView() {
     model: false,
     generation: false,
     search: false,
+    retrieval: false,
     project: false,
   });
 
@@ -76,6 +86,11 @@ export function SettingsView() {
   const onSearchDirty = useCallback((value: boolean) => {
     setDirty((current) => (current.search === value ? current : { ...current, search: value }));
   }, []);
+  const onRetrievalDirty = useCallback((value: boolean) => {
+    setDirty((current) =>
+      current.retrieval === value ? current : { ...current, retrieval: value },
+    );
+  }, []);
   const onProjectDirty = useCallback((value: boolean) => {
     setDirty((current) => (current.project === value ? current : { ...current, project: value }));
   }, []);
@@ -85,6 +100,7 @@ export function SettingsView() {
     model: dirty.model,
     generation: dirty.generation,
     search: dirty.search,
+    retrieval: dirty.retrieval,
     project: dirty.project,
   };
   useEffect(() => {
@@ -203,6 +219,17 @@ export function SettingsView() {
               <SearchSection install={install} onSaved={setInstall} onDirty={onSearchDirty} />
             </Pane>
           ) : section === "search" ? (
+            waiting
+          ) : null}
+          {install ? (
+            <Pane visible={section === "retrieval"}>
+              <RetrievalSection
+                install={install}
+                onSaved={setInstall}
+                onDirty={onRetrievalDirty}
+              />
+            </Pane>
+          ) : section === "retrieval" ? (
             waiting
           ) : null}
           {install ? (

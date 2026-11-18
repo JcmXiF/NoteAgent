@@ -5,7 +5,44 @@
  * test file. Tests override only what they are about.
  */
 
-import type { InstallSettings, ProfileSettings } from "@/lib/install-settings";
+import type {
+  InstallSettings,
+  ProfileSettings,
+  RagEmbeddingSettings,
+  RagRerankSettings,
+  RagSettings,
+} from "@/lib/install-settings";
+
+export function ragSettings(
+  over: Partial<Omit<RagSettings, "embedding" | "rerank">> & {
+    embedding?: Partial<RagEmbeddingSettings>;
+    rerank?: Partial<RagRerankSettings>;
+  } = {},
+): RagSettings {
+  const { embedding, rerank, ...rest } = over;
+  return {
+    enabled: false,
+    embedding: {
+      endpoint: "",
+      model: "Qwen3-Embedding-0.6B",
+      queryPrefix: "Q: {query}",
+      batch: 64,
+      concurrency: 1,
+      apiKeySet: false,
+      ...embedding,
+    },
+    rerank: {
+      enabled: false,
+      endpoint: "",
+      model: "",
+      candidates: 50,
+      topN: 10,
+      apiKeySet: false,
+      ...rerank,
+    },
+    ...rest,
+  };
+}
 
 export function profileSettings(over: Partial<ProfileSettings> = {}): ProfileSettings {
   return {
@@ -44,6 +81,7 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
       uiLang: "",
       configured: false,
     },
+    rag: ragSettings(),
     extractMedia: true,
     locked: [],
     invalid: [],
@@ -59,8 +97,15 @@ export function installSettings(over: Partial<InstallSettings> = {}): InstallSet
 }
 
 /** Types into a controlled input the way a reader would. */
-export function typeInto(element: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+export function typeInto(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  const prototype =
+    element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
   setter?.call(element, value);
   element.dispatchEvent(new Event("input", { bubbles: true }));
 }

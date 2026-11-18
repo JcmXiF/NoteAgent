@@ -31,7 +31,17 @@ from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 from noteagent.io.atomic import write_text_atomic
+from noteagent.rag.config import (
+    DEFAULT_BATCH,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_MODEL as DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_QUERY_PREFIX,
+)
+from noteagent.rag.rerank_config import DEFAULT_TOP_N
+from noteagent.rag.types import DEFAULT_CANDIDATE_LIMIT
 from noteagent.settings.credentials import (
+    RAG_EMBEDDING_KEY,
+    RAG_RERANK_KEY,
     SEARCH_KEY,
     CredentialStore,
     CredentialStoreUnavailable,
@@ -105,6 +115,37 @@ class SearchSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RagEmbeddingSettings:
+    """The local embedding service: where it is and how it is called."""
+
+    endpoint: str = ""
+    model: str = DEFAULT_EMBEDDING_MODEL
+    query_prefix: str = DEFAULT_QUERY_PREFIX
+    batch: int = DEFAULT_BATCH
+    concurrency: int = DEFAULT_CONCURRENCY
+
+
+@dataclass(frozen=True, slots=True)
+class RagRerankSettings:
+    """The optional rerank service; off unless the reader turns it on."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    model: str = ""
+    candidates: int = DEFAULT_CANDIDATE_LIMIT
+    top_n: int = DEFAULT_TOP_N
+
+
+@dataclass(frozen=True, slots=True)
+class RagSettings:
+    """The document's RAG switch and its two service sections."""
+
+    enabled: bool = False
+    embedding: RagEmbeddingSettings = RagEmbeddingSettings()
+    rerank: RagRerankSettings = RagRerankSettings()
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     """The whole document, validated and ready to use."""
 
@@ -112,6 +153,7 @@ class Config:
     active_profile_id: str | None = None
     generation: GenerationSettings = GenerationSettings()
     search: SearchSettings = SearchSettings()
+    rag: RagSettings = RagSettings()
     extract_media: bool = True
     revision: int = 0
     schema_version: int = SCHEMA_VERSION
@@ -273,6 +315,118 @@ def _parse_search(raw: object) -> SearchSettings:
     )
 
 
+def _whole(
+    value: object, field: str, *, low: int, high: int
+) -> int:
+    number = _number(value, field)
+    if not number.is_integer() or not low <= int(number) <= high:
+        raise _config_invalid(
+            field, f"must be a whole number between {low} and {high}"
+        )
+    return int(number)
+
+
+def _multiline(value: object, field: str, *, limit: int) -> str:
+    if not isinstance(value, str):
+        raise _config_invalid(field, "expected text")
+    if len(value) > limit or "\x00" in value:
+        raise _config_invalid(field, "is not usable text")
+    return value
+
+
+def _parse_rag_embedding(raw: object) -> RagEmbeddingSettings:
+    if raw is None:
+        return RagEmbeddingSettings()
+    if not isinstance(raw, Mapping):
+        raise _config_invalid("rag.embedding", "expected an object")
+    _reject_secret(raw, "rag.embedding")
+    return RagEmbeddingSettings(
+        endpoint=_url(
+            raw.get("endpoint", ""), "rag.embedding.endpoint"
+        ),
+        model=_text(
+            raw.get("model", DEFAULT_EMBEDDING_MODEL),
+            "rag.embedding.model",
+            limit=200,
+            allow_empty=True,
+        ),
+        query_prefix=_multiline(
+            raw.get("queryPrefix", DEFAULT_QUERY_PREFIX),
+            "rag.embedding.queryPrefix",
+            limit=2000,
+        ),
+        batch=_whole(
+            raw.get("batch", DEFAULT_BATCH),
+            "rag.embedding.batch",
+            low=1,
+            high=512,
+        ),
+        concurrency=_whole(
+            raw.get("concurrency", DEFAULT_CONCURRENCY),
+            "rag.embedding.concurrency",
+            low=1,
+            high=8,
+        ),
+    )
+
+
+def _parse_rag_rerank(raw: object) -> RagRerankSettings:
+    if raw is None:
+        return RagRerankSettings()
+    if not isinstance(raw, Mapping):
+        raise _config_invalid("rag.rerank", "expected an object")
+    _reject_secret(raw, "rag.rerank")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise _config_invalid("rag.rerank.enabled", "expected true or false")
+    candidates = _whole(
+        raw.get("candidates", DEFAULT_CANDIDATE_LIMIT),
+        "rag.rerank.candidates",
+        low=1,
+        high=500,
+    )
+    top_n = _whole(
+        raw.get("topN", DEFAULT_TOP_N),
+        "rag.rerank.topN",
+        low=1,
+        high=100,
+    )
+    if top_n > candidates:
+        raise _config_invalid(
+            "rag.rerank.topN", "must not exceed candidates"
+        )
+    return RagRerankSettings(
+        enabled=enabled,
+        endpoint=_url(
+            raw.get("endpoint", ""), "rag.rerank.endpoint"
+        ),
+        model=_text(
+            raw.get("model", ""),
+            "rag.rerank.model",
+            limit=200,
+            allow_empty=True,
+        ),
+        candidates=candidates,
+        top_n=top_n,
+    )
+
+
+def _parse_rag(raw: object) -> RagSettings:
+    if raw is None:
+        return RagSettings()
+    if not isinstance(raw, Mapping):
+        raise _config_invalid("rag", "expected an object")
+    _reject_secret(raw, "rag")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise _config_invalid("rag.enabled", "expected true or false")
+    return RagSettings(
+        enabled=enabled,
+        embedding=_parse_rag_embedding(raw.get("embedding")),
+        rerank=_parse_rag_rerank(raw.get("rerank")),
+    )
+
+
 def parse_config(raw: object, *, revision: int = 0) -> Config:
     """Validate a decoded document. Unknown keys are ignored for forward safety."""
     if not isinstance(raw, Mapping):
@@ -312,6 +466,7 @@ def parse_config(raw: object, *, revision: int = 0) -> Config:
         active_profile_id=active,
         generation=_parse_generation(raw.get("generation")),
         search=_parse_search(raw.get("search")),
+        rag=_parse_rag(raw.get("rag")),
         extract_media=extract_media,
         revision=stored_revision,
         schema_version=version,
@@ -346,6 +501,23 @@ def dump_config(config: Config) -> str:
             "country": config.search.country,
             "searchLang": config.search.search_lang,
             "uiLang": config.search.ui_lang,
+        },
+        "rag": {
+            "enabled": config.rag.enabled,
+            "embedding": {
+                "endpoint": config.rag.embedding.endpoint,
+                "model": config.rag.embedding.model,
+                "queryPrefix": config.rag.embedding.query_prefix,
+                "batch": config.rag.embedding.batch,
+                "concurrency": config.rag.embedding.concurrency,
+            },
+            "rerank": {
+                "enabled": config.rag.rerank.enabled,
+                "endpoint": config.rag.rerank.endpoint,
+                "model": config.rag.rerank.model,
+                "candidates": config.rag.rerank.candidates,
+                "topN": config.rag.rerank.top_n,
+            },
         },
         "extractMedia": config.extract_media,
     }
@@ -493,6 +665,24 @@ class ConfigStore:
 
     def delete_search_key(self) -> None:
         self._delete(SEARCH_KEY)
+
+    def get_rag_embedding_key(self) -> str:
+        return self._get(RAG_EMBEDDING_KEY)
+
+    def set_rag_embedding_key(self, value: str) -> None:
+        self._set(RAG_EMBEDDING_KEY, value)
+
+    def delete_rag_embedding_key(self) -> None:
+        self._delete(RAG_EMBEDDING_KEY)
+
+    def get_rag_rerank_key(self) -> str:
+        return self._get(RAG_RERANK_KEY)
+
+    def set_rag_rerank_key(self, value: str) -> None:
+        self._set(RAG_RERANK_KEY, value)
+
+    def delete_rag_rerank_key(self) -> None:
+        self._delete(RAG_RERANK_KEY)
 
     def delete_profile(self, profile_id: str, *, expected_revision: int | None = None) -> Config:
         """Remove a profile, its key and its claim on the active slot.

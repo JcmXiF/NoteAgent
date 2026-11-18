@@ -90,10 +90,38 @@ export type SearchSettings = {
   configured: boolean;
 };
 
+export type RagEmbeddingSettings = {
+  endpoint: string;
+  model: string;
+  queryPrefix: string;
+  batch: number;
+  concurrency: number;
+  /** A key is stored; the key itself is never sent back. */
+  apiKeySet: boolean;
+};
+
+export type RagRerankSettings = {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  candidates: number;
+  topN: number;
+  /** A key is stored; the key itself is never sent back. */
+  apiKeySet: boolean;
+};
+
+/** The install-wide hybrid-retrieval switch and the services it calls. */
+export type RagSettings = {
+  enabled: boolean;
+  embedding: RagEmbeddingSettings;
+  rerank: RagRerankSettings;
+};
+
 export type InstallSettings = {
   version: string;
   llm: LlmSettings;
   search: SearchSettings;
+  rag: RagSettings;
   extractMedia: boolean;
   locked: string[];
   invalid: string[];
@@ -134,9 +162,28 @@ export type SearchDraft = {
   extractMedia: boolean;
 };
 
+export type RagDraft = {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  queryPrefix: string;
+  batch: string;
+  concurrency: string;
+  apiKey: string;
+  clearApiKey: boolean;
+  rerankEnabled: boolean;
+  rerankEndpoint: string;
+  rerankModel: string;
+  rerankCandidates: string;
+  rerankTopN: string;
+  rerankApiKey: string;
+  clearRerankApiKey: boolean;
+};
+
 export type SettingsPatch = {
   llm?: Record<string, unknown>;
   search?: Record<string, unknown>;
+  rag?: Record<string, unknown>;
   extractMedia?: boolean;
   /** The revision the form was built from; a stale one is refused with 409. */
   revision?: number;
@@ -189,7 +236,7 @@ export function profileDraftFrom(profile: ProfileSettings): ProfileDraft {
   };
 }
 
-function trimmedBaseUrl(value: string): string {
+function trimmedUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
@@ -201,7 +248,7 @@ function changedProfileFields(
   const changes: Omit<ProfileUpdatePatch, "revision"> = {};
   if (draft.name.trim() !== profile.name) changes.name = draft.name.trim();
   if (draft.provider !== profile.provider) changes.provider = draft.provider;
-  if (trimmedBaseUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
+  if (trimmedUrl(draft.baseUrl) !== profile.baseUrl) changes.baseUrl = draft.baseUrl.trim();
   if (draft.model.trim() !== profile.model) changes.model = draft.model.trim();
   if (draft.apiKey.trim()) changes.apiKey = draft.apiKey.trim();
   else if (draft.clearApiKey) changes.clearApiKey = true;
@@ -346,7 +393,7 @@ export function generationPatch(
 }
 
 function validBaseUrl(value: string): boolean {
-  const text = value.trim().replace(/\/+$/, "");
+  const text = trimmedUrl(value);
   if (!text || /\s/.test(text) || text.length > 500) return false;
   try {
     const url = new URL(text);
@@ -464,4 +511,224 @@ export function searchPatch(
   if (Object.keys(search).length > 0) patch.search = search;
   if (draft.extractMedia !== extractMedia) patch.extractMedia = draft.extractMedia;
   return patch.search || patch.extractMedia !== undefined ? patch : null;
+}
+
+export function ragDraftFrom(rag: RagSettings): RagDraft {
+  return {
+    enabled: rag.enabled,
+    endpoint: rag.embedding.endpoint,
+    model: rag.embedding.model,
+    queryPrefix: rag.embedding.queryPrefix,
+    batch: String(rag.embedding.batch),
+    concurrency: String(rag.embedding.concurrency),
+    apiKey: "",
+    clearApiKey: false,
+    rerankEnabled: rag.rerank.enabled,
+    rerankEndpoint: rag.rerank.endpoint,
+    rerankModel: rag.rerank.model,
+    rerankCandidates: String(rag.rerank.candidates),
+    rerankTopN: String(rag.rerank.topN),
+    rerankApiKey: "",
+    clearRerankApiKey: false,
+  };
+}
+
+const RAG_NUMBER_FIELDS = [
+  {
+    key: "batch",
+    min: 1,
+    max: 512,
+    problem: "settings.invalid.ragBatch",
+  },
+  {
+    key: "concurrency",
+    min: 1,
+    max: 8,
+    problem: "settings.invalid.ragConcurrency",
+  },
+] as const;
+
+const RAG_RERANK_NUMBER_FIELDS = [
+  {
+    key: "rerankCandidates",
+    saved: "candidates",
+    min: 1,
+    max: 500,
+    problem: "settings.invalid.ragRerankCandidates",
+  },
+  {
+    key: "rerankTopN",
+    saved: "topN",
+    min: 1,
+    max: 100,
+    problem: "settings.invalid.ragRerankTopN",
+  },
+] as const;
+
+/** i18n keys for values the core would refuse on a retrieval save. */
+export function ragProblems(
+  draft: RagDraft,
+  locked: readonly string[] = [],
+): string[] {
+  const problems: string[] = [];
+  // The service fields are hidden while the switch is off, so a draft behind
+  // the switch must not block turning it off.
+  if (!draft.enabled) return problems;
+  if (!validBaseUrl(draft.endpoint)) problems.push("settings.invalid.ragEndpoint");
+  if (!draft.model.trim()) problems.push("settings.invalid.ragModel");
+  // Empty is a real choice: it sends no instruction prefix.
+  if (draft.queryPrefix && !draft.queryPrefix.includes("{query}")) {
+    problems.push("settings.invalid.ragQueryPrefix");
+  }
+  for (const field of RAG_NUMBER_FIELDS) {
+    // A value the environment owns cannot be corrected here, so it must not
+    // hold an unrelated save hostage.
+    if (isLocked(locked, `rag.embedding.${field.key}`)) continue;
+    if (!integerInRange(draft[field.key], field.min, field.max)) {
+      problems.push(field.problem);
+    }
+  }
+  if (!validSecret(draft.apiKey)) problems.push("settings.invalid.secret");
+  // The rerank fields are visible even while rerank is off, so a service that
+  // is off may stay empty; a non-empty address must still be usable, because
+  // the save sends it.
+  if (
+    (draft.rerankEndpoint.trim() || draft.rerankEnabled) &&
+    !validBaseUrl(draft.rerankEndpoint)
+  ) {
+    problems.push("settings.invalid.ragRerankEndpoint");
+  }
+  if (draft.rerankEnabled && !draft.rerankModel.trim()) {
+    problems.push("settings.invalid.ragRerankModel");
+  }
+  for (const field of RAG_RERANK_NUMBER_FIELDS) {
+    if (isLocked(locked, `rag.rerank.${field.saved}`)) continue;
+    if (!integerInRange(draft[field.key], field.min, field.max)) {
+      problems.push(field.problem);
+    }
+  }
+  // Both numbers owned by the environment cannot be corrected here, so the
+  // pair must not hold an unrelated save hostage.
+  const rerankNumbersLocked =
+    isLocked(locked, "rag.rerank.candidates") &&
+    isLocked(locked, "rag.rerank.topN");
+  if (
+    !rerankNumbersLocked &&
+    integerInRange(draft.rerankCandidates, 1, 500) &&
+    integerInRange(draft.rerankTopN, 1, 100) &&
+    Number(draft.rerankTopN.trim()) > Number(draft.rerankCandidates.trim())
+  ) {
+    problems.push("settings.invalid.ragRerankTopN");
+  }
+  if (!validSecret(draft.rerankApiKey)) {
+    problems.push("settings.invalid.ragRerankSecret");
+  }
+  return problems;
+}
+
+/** A trial needs an address and a model; a key is optional for local services. */
+export function ragCanProbe(draft: RagDraft): boolean {
+  return (
+    validBaseUrl(draft.endpoint) &&
+    Boolean(draft.model.trim()) &&
+    validSecret(draft.apiKey)
+  );
+}
+
+export type RagProbePatch = {
+  endpoint: string;
+  model: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+};
+
+/** The draft a trial call sends. A blank key means "use the stored one". */
+export function ragProbePatch(draft: RagDraft): RagProbePatch {
+  const patch: RagProbePatch = {
+    endpoint: trimmedUrl(draft.endpoint),
+    model: draft.model.trim(),
+  };
+  if (draft.apiKey.trim()) patch.apiKey = draft.apiKey.trim();
+  else if (draft.clearApiKey) patch.clearApiKey = true;
+  return patch;
+}
+
+export function ragDirty(draft: RagDraft, saved: RagSettings): boolean {
+  // The service fields are hidden while the switch is off, and a save while it
+  // is off sends only the switch: draft text behind it is not a change.
+  return (
+    draft.enabled !== saved.enabled ||
+    (draft.enabled &&
+      (trimmedUrl(draft.endpoint) !== saved.embedding.endpoint ||
+        draft.model.trim() !== saved.embedding.model ||
+        draft.queryPrefix !== saved.embedding.queryPrefix ||
+        RAG_NUMBER_FIELDS.some((field) =>
+          integerDirty(draft[field.key], saved.embedding[field.key]),
+        ) ||
+        Boolean(draft.apiKey.trim()) ||
+        draft.clearApiKey ||
+        draft.rerankEnabled !== saved.rerank.enabled ||
+        trimmedUrl(draft.rerankEndpoint) !== saved.rerank.endpoint ||
+        draft.rerankModel.trim() !== saved.rerank.model ||
+        RAG_RERANK_NUMBER_FIELDS.some((field) =>
+          integerDirty(draft[field.key], saved.rerank[field.saved]),
+        ) ||
+        Boolean(draft.rerankApiKey.trim()) ||
+        draft.clearRerankApiKey))
+  );
+}
+
+/** Only the switch and the service fields that differ, and only while it is on. */
+export function ragPatch(draft: RagDraft, saved: RagSettings): SettingsPatch | null {
+  const rag: Record<string, unknown> = {};
+  if (draft.enabled !== saved.enabled) rag.enabled = draft.enabled;
+  if (draft.enabled) {
+    const embedding: Record<string, unknown> = {};
+    if (trimmedUrl(draft.endpoint) !== saved.embedding.endpoint) {
+      embedding.endpoint = trimmedUrl(draft.endpoint);
+    }
+    if (draft.model.trim() !== saved.embedding.model) {
+      embedding.model = draft.model.trim();
+    }
+    if (draft.queryPrefix !== saved.embedding.queryPrefix) {
+      embedding.queryPrefix = draft.queryPrefix;
+    }
+    for (const field of RAG_NUMBER_FIELDS) {
+      if (
+        integerDirty(draft[field.key], saved.embedding[field.key]) &&
+        integerInRange(draft[field.key], field.min, field.max)
+      ) {
+        embedding[field.key] = Number(draft[field.key].trim());
+      }
+    }
+    if (draft.apiKey.trim()) embedding.apiKey = draft.apiKey.trim();
+    else if (draft.clearApiKey) embedding.clearApiKey = true;
+    if (Object.keys(embedding).length > 0) rag.embedding = embedding;
+
+    const rerank: Record<string, unknown> = {};
+    if (draft.rerankEnabled !== saved.rerank.enabled) {
+      rerank.enabled = draft.rerankEnabled;
+    }
+    if (trimmedUrl(draft.rerankEndpoint) !== saved.rerank.endpoint) {
+      rerank.endpoint = trimmedUrl(draft.rerankEndpoint);
+    }
+    if (draft.rerankModel.trim() !== saved.rerank.model) {
+      rerank.model = draft.rerankModel.trim();
+    }
+    for (const field of RAG_RERANK_NUMBER_FIELDS) {
+      if (
+        integerDirty(draft[field.key], saved.rerank[field.saved]) &&
+        integerInRange(draft[field.key], field.min, field.max)
+      ) {
+        rerank[field.saved] = Number(draft[field.key].trim());
+      }
+    }
+    if (draft.rerankApiKey.trim()) {
+      rerank.apiKey = draft.rerankApiKey.trim();
+    } else if (draft.clearRerankApiKey) {
+      rerank.clearApiKey = true;
+    }
+    if (Object.keys(rerank).length > 0) rag.rerank = rerank;
+  }
+  return Object.keys(rag).length > 0 ? { rag } : null;
 }
