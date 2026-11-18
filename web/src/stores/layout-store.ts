@@ -40,13 +40,20 @@ const DEFAULT_LEFT_WIDTHS: Record<ModuleId, number> = {
  * The panel belongs to the workspace rather than to a module — what it lists comes
  * from several views — but which parts matter does follow from what is being read.
  */
-export const RIGHT_SECTIONS = ["attention", "selection", "plan", "compile"] as const;
+export const RIGHT_SECTIONS = [
+  "attention",
+  "selection",
+  "pipeline",
+  "plan",
+  "compile",
+] as const;
 export type RightSectionId = (typeof RIGHT_SECTIONS)[number];
 
 /** i18n key per section, used for its heading and its fold control. */
 export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
   attention: "selections.attention",
   selection: "selections.selection",
+  pipeline: "selections.pipeline",
   plan: "selections.plan",
   compile: "selections.compile",
 };
@@ -62,7 +69,7 @@ export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
 const DEFAULT_OPEN: Record<ModuleId, RightSectionId[]> = {
   chat: ["selection"],
   // Selecting, planning and compiling is the one sitting the workbench exists for.
-  sources: ["selection", "plan", "compile"],
+  sources: ["selection", "pipeline", "plan", "compile"],
   docs: ["selection", "plan"],
   // Writing a remark is not part of planning or compiling anything, so nothing of
   // the right panel has a claim on it and the panel starts empty.

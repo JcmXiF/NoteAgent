@@ -28,6 +28,14 @@ type NavIntent =
   | { kind: "browse"; url: string }
   | { kind: "chat"; conversationId?: string }
   /**
+   * One staged material, opened in Sources to look at its blocks and frames.
+   *
+   * It is not a page yet — it lives in the pipeline's staging until it is
+   * promoted — so what it is read by is the run that collected it and the
+   * material's identity, not a wiki path.
+   */
+  | { kind: "material"; runId: string; material: string; title?: string }
+  /**
    * The remarks about a page, and the one of them to put in front.
    *
    * A remark is written about a page, so the request always names the page; it
@@ -50,6 +58,8 @@ function moduleForIntent(intent: NavIntent): ModuleId {
       return "chat";
     case "notes":
       return "notes";
+    case "material":
+      return "sources";
   }
 }
 

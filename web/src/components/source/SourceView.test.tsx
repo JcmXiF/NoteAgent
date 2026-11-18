@@ -5,16 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { SourceView } from "@/components/source/SourceView";
 import { fetchFile } from "@/lib/api/files";
+import { fetchPipelineMaterialBlocks } from "@/lib/api/pipeline";
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useBrowseStore } from "@/stores/browse-store";
 import { useClipsStore } from "@/stores/clips-store";
 import { useDocsReads } from "@/stores/docs-reads";
+import { useNavStore } from "@/stores/nav-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { GuestTab } from "@/lib/desktop";
 
 vi.mock("@/lib/api/files", () => ({
   fetchFile: vi.fn(),
   fileBytesUrl: (project: string, path: string) => `/api/${project}/file-bytes?path=${path}`,
+}));
+
+vi.mock("@/lib/api/pipeline", () => ({
+  fetchPipelineMaterialBlocks: vi.fn(),
 }));
 
 /**
@@ -35,6 +41,8 @@ let root: Root;
 
 beforeEach(() => {
   useWorkspaceStore.setState({ current: project });
+  useNavStore.setState({ seq: 0, intent: null });
+  vi.mocked(fetchPipelineMaterialBlocks).mockReset();
   useClipsStore.setState({ collections: [], focusedId: null });
   useAcquireStore.setState({
     project,
@@ -221,5 +229,41 @@ describe("a source whose capture is gone", () => {
     expect(button(shown, "sources.refetch")).toBeNull();
     expect(button(shown, "sources.openInBrowse")).toBeNull();
     expect(vi.mocked(fetchFile)).not.toHaveBeenCalled();
+  });
+});
+
+describe("a staged material", () => {
+  it("shows its blocks so a frame can be picked", async () => {
+    vi.mocked(fetchPipelineMaterialBlocks).mockResolvedValue({
+      material: "raw/web/entropy-a1.html",
+      blocks: [
+        { id: "b1", tag: "h2", text: "定义", preview: "定义" },
+        {
+          id: "b2",
+          tag: "p",
+          text: "熵是不确定性的度量。",
+          preview: "熵是不确定性的度量。",
+        },
+      ],
+    });
+    useNavStore.setState({
+      seq: 1,
+      intent: {
+        kind: "material",
+        runId: "pr-1",
+        material: "raw/web/entropy-a1.html",
+        title: "熵",
+      },
+    });
+
+    const shown = await draw();
+
+    expect(fetchPipelineMaterialBlocks).toHaveBeenCalledWith(
+      "pr-1",
+      "raw/web/entropy-a1.html",
+    );
+    expect(shown.textContent).toContain("熵");
+    expect(shown.textContent).toContain(i18n.t("sources.materialHint"));
+    expect(shown.textContent).toContain("熵是不确定性的度量。");
   });
 });

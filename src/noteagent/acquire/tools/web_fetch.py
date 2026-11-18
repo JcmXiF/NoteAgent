@@ -75,6 +75,12 @@ _HTTP_ACCESS = {
     429: "http_rate_limited",
 }
 
+#: Statuses that mean a person has to sign in, not that the page is gone.
+LOGIN_WALL_STATUSES = (401, 403)
+
+#: The reasons those statuses produce, for a caller that only sees a Capture.
+LOGIN_WALL_REASONS = frozenset(_HTTP_ACCESS[status] for status in LOGIN_WALL_STATUSES)
+
 
 def _failed(
     url: str,

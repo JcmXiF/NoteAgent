@@ -236,6 +236,32 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
             PostCheck("summary-bounded", "clamp"),
         ),
     ),
+    ModelCall(
+        # One search query rewritten from the intent. The answer is a query, not
+        # a statement about the project; it is bounded, and an empty answer falls
+        # back to the intent.
+        name="pipeline-query-rewrite",
+        source="acquire/query.py",
+        given=frozenset({"intent"}),
+        checks=(
+            PostCheck("query-bounded", "clamp"),
+            PostCheck("query-fallback", "clamp"),
+        ),
+    ),
+    ModelCall(
+        # The framing loop: openings first, then whichever full texts the model
+        # asks for. Its answer is checked against the ids the request showed and
+        # bounded by the frame cap.
+        name="pipeline-frames",
+        source="pipeline/frame_model.py",
+        given=frozenset({"material-openings", "expansions", "instructions"}),
+        checks=(
+            PostCheck("known-block-ids", "gate", frozenset({"material-openings"})),
+            PostCheck("cap-frames", "clamp"),
+            # An empty or unusable answer is filled by the deterministic split.
+            PostCheck("fallback-to-deterministic", "clamp"),
+        ),
+    ),
 )
 
 

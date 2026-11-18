@@ -260,9 +260,59 @@
     "attention": "需要处理",
     "selection": "选中的段落",
     "plan": "要写的页面",
+    "pipeline": "流水线",
     "compile": "写入结果",
     "readFailed": "无法读取已选内容",
     "saveFailed": "选中的内容保存失败"
+  },
+  "pipeline": {
+    "intentLabel": "这次流水线要写什么？",
+    "intentPlaceholder": "一句话就够",
+    "start": "启动",
+    "cancel": "停止",
+    "empty": "还没有运行。给它一个意图就能开始。",
+    "startFailed": "流水线没能启动。",
+    "loadFailed": "读不到流水线的状态。",
+    "cancelFailed": "没能停止这次运行。",
+    "status": {
+      "running": "运行中",
+      "awaiting_confirmation": "等确认",
+      "compiling": "写入中",
+      "succeeded": "已完成",
+      "failed": "失败",
+      "cancelled": "已停止",
+      "interrupted": "已中断"
+    },
+    "stage": {
+      "starting": "准备",
+      "acquire": "收集资料",
+      "frame": "画框",
+      "plan": "规划",
+      "confirm": "等确认",
+      "compile": "写入",
+      "done": "完成"
+    },
+    "materials": "材料 {{count}}",
+    "material": {
+      "staged": "暂存",
+      "framed": "已画框",
+      "planned": "已规划",
+      "promoted": "已转正",
+      "compiled": "已编译",
+      "changed": "有变更",
+      "dropped": "已丢弃"
+    },
+    "query": {
+      "label": "查询",
+      "precise": "精准关键词",
+      "model": "模型优化"
+    },
+    "materialMode": {
+      "label": "资料",
+      "auto": "自动收下",
+      "manual": "手动选卡",
+      "manualHint": "手动模式下请在资料面逐张选卡。"
+    }
   },
   "plan": {
     "title": "要写的页面",
@@ -681,6 +731,8 @@
     "updateFailed": "这一项更新失败",
     "revisions": "资料变了",
     "recovery": "编译没做完",
+    "capture": "待登录捕获",
+    "openCapture": "打开",
     "check": "检查发现",
     "recheck": "重新检查",
     "more": "还有 {{count}} 项",
@@ -970,6 +1022,8 @@
     "body": "这一部分还在完善中，可以暂时使用其他视图。"
   },
   "sources": {
+    "materialHint": "勾选要用的段落，它们会成为一个框；已有的框可以在右栏删除。",
+    "materialFailed": "这份材料的暂存内容读不出来。",
     "empty": {
       "title": "还没有资料",
       "body": "在上方粘贴链接或拖入文件。加入的资料会保留在这里，供你挑选用于页面的段落。"
@@ -1405,12 +1459,26 @@
       "job": {
         "busy": "另一个作业正在运行，请等它结束。"
       },
+      "pipeline": {
+        "busy": "另一个流水线正在运行，请等它结束。",
+        "projectBusy": "另一个进程正在写这个项目，请关掉它再试。",
+        "notFound": "这次流水线运行已经不在了。",
+        "invalid": "流水线的参数不完整。",
+        "conflict": "计划已经变了，请看过当前版本再批准。",
+        "nothingToWrite": "至少要有一个页面设为写入，才能批准。"
+      },
+      "capture.notFound": "这个待登录捕获已经不在了。",
+      "material.blocksMissing": "这份材料的暂存内容已经不在了。",
       "compaction_failed": "较早的对话没能压缩成摘要，请重试。",
       "context_overflow": "对话太长，超出了模型窗口。",
+      "project.notConfigured": "还没有打开任何 wiki 项目。",
+      "session.invalid": "这个会话的数据读不出来。",
       "session": {
         "exists": "这个会话已经存在。",
         "notFound": "这个会话已经不在了。",
-        "invalidId": "这个会话名不能使用。"
+        "invalidId": "这个会话名不能使用。",
+        "notInterrupted": "这次运行已经不需要恢复了。",
+        "notResumable": "这次运行暂停后，项目、模型、工具或设置已经变化，无法继续。"
       },
       "plan": {
         "noSelection": "尚未选择内容，无法整理篇目。请先在资料中选择要用的段落。"
