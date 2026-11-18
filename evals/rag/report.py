@@ -15,7 +15,15 @@ from evals.rag.metrics import MetricSet
 from evals.rag.runner import Evaluation, QueryResult
 from evals.rag.variants import IndexBuildRecord
 
-__all__ = ["REPORT_VERSION", "markdown", "payload", "write_report"]
+__all__ = [
+    "REPORT_VERSION",
+    "index_row",
+    "markdown",
+    "metrics_payload",
+    "payload",
+    "write_json_markdown",
+    "write_report",
+]
 
 REPORT_VERSION = 1
 
@@ -36,17 +44,11 @@ def payload(evaluation: Evaluation) -> dict[str, Any]:
             "queries": len(evaluation.dataset.queries),
             "byType": evaluation.dataset.counts,
         },
+        "queriesRun": len(evaluation.results),
         "corpus": evaluation.corpus.as_posix(),
         "startedAt": evaluation.started_at,
         "durationSeconds": round(evaluation.duration_s, 3),
-        "metrics": {
-            "overall": evaluation.metrics.as_dict(),
-            "byType": {
-                name: metrics.as_dict()
-                for name, metrics in evaluation.metrics_by_type().items()
-            },
-            "gap": evaluation.gap.as_dict(),
-        },
+        "metrics": metrics_payload(evaluation),
         "latency": evaluation.latency.as_dict(),
         "indexBuilds": [
             build.as_dict() for build in evaluation.index_builds
@@ -54,6 +56,18 @@ def payload(evaluation: Evaluation) -> dict[str, Any]:
         "queries": [
             _query_payload(result) for result in evaluation.results
         ],
+    }
+
+
+def metrics_payload(evaluation: Evaluation) -> dict[str, Any]:
+    """The metric block shared by a single run and the matrix rows."""
+    return {
+        "overall": evaluation.metrics.as_dict(),
+        "byType": {
+            name: metrics.as_dict()
+            for name, metrics in evaluation.metrics_by_type().items()
+        },
+        "gap": evaluation.gap.as_dict(),
     }
 
 
@@ -105,7 +119,7 @@ def markdown(evaluation: Evaluation) -> str:
             ]
         )
         for build in evaluation.index_builds:
-            lines.append(_index_row(build))
+            lines.append(index_row(build))
         lines.append("")
     lines.extend(
         [
@@ -132,18 +146,25 @@ def markdown(evaluation: Evaluation) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_report(evaluation: Evaluation, path: Path) -> Path:
-    """Write the JSON and its Markdown summary beside it; return the JSON."""
-    target = Path(path)
+def write_json_markdown(
+    target: Path, data: dict[str, Any], text: str
+) -> Path:
+    """Write a JSON document and its Markdown sibling; return the JSON."""
+    target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        json.dumps(payload(evaluation), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    target.with_suffix(".md").write_text(
-        markdown(evaluation), encoding="utf-8"
-    )
+    target.with_suffix(".md").write_text(text, encoding="utf-8")
     return target
+
+
+def write_report(evaluation: Evaluation, path: Path) -> Path:
+    """Write the run's JSON and Markdown summary; return the JSON."""
+    return write_json_markdown(
+        Path(path), payload(evaluation), markdown(evaluation)
+    )
 
 
 def _query_payload(result: QueryResult) -> dict[str, Any]:
@@ -198,7 +219,7 @@ def _query_row(result: QueryResult) -> str:
     )
 
 
-def _index_row(build: IndexBuildRecord) -> str:
+def index_row(build: IndexBuildRecord) -> str:
     record = build.as_dict()
     return (
         f"| {record['chunking']} | {record['embeddingModel']} | "

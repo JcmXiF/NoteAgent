@@ -12,8 +12,9 @@ from pathlib import Path
 from evals.rag.cli import main
 from evals.rag.dataset import load_dataset
 from evals.rag.report import payload
-from evals.rag.runner import evaluate, run_queries
+from evals.rag.runner import QueryResult, evaluate, run_queries
 from evals.rag.variants import (
+    EvalContext,
     FnRetriever,
     IndexBuild,
     IndexCache,
@@ -61,7 +62,7 @@ def fake_variant(
     prepare_calls: list[Scope],
     retrieve_calls: list[str],
 ) -> Variant:
-    def prepare(context) -> FnRetriever:
+    def prepare(context: EvalContext) -> FnRetriever:
         prepare_calls.append(context.scope)
         assert context.index_key is not None
         context.indexes.get(context.index_key, context.layout)
@@ -132,7 +133,9 @@ class PreparedVariantTests(unittest.TestCase):
 
 
 class ScopeTests(unittest.TestCase):
-    def run_scope(self, scope: Scope):
+    def run_scope(
+        self, scope: Scope
+    ) -> dict[str, QueryResult]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             corpus = make_project(root)
@@ -258,15 +261,14 @@ class CliScopeTests(unittest.TestCase):
             )
 
             stored = json.loads(report.read_text(encoding="utf-8"))
-            notes = next(
-                item
-                for item in stored["queries"]
-                if item["id"] == "notes-01"
-            )
 
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(stored["scope"], "wiki")
-        self.assertEqual(notes["outcome"], "miss")
+        self.assertNotIn(
+            "notes-01",
+            [item["id"] for item in stored["queries"]],
+        )
+        self.assertEqual(stored["queriesRun"], 19)
 
     def test_wiki_notes_keeps_the_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

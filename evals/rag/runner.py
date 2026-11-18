@@ -30,14 +30,17 @@ from evals.rag.variants import (
     EvalContext,
     IndexBuildRecord,
     IndexCache,
+    IndexKey,
     Scope,
     Variant,
+    base_index_builder,
     filter_scope,
     get_variant,
 )
 from evals.report import utc_now
 
 from noteagent.project.layout import ProjectLayout
+from noteagent.rag.embedding import EmbeddingClient
 
 __all__ = [
     "Evaluation",
@@ -45,6 +48,7 @@ __all__ = [
     "Latency",
     "QueryResult",
     "evaluate",
+    "queries_for_scope",
     "run_queries",
 ]
 
@@ -190,6 +194,19 @@ class Evaluation:
         )
 
 
+def queries_for_scope(
+    queries: tuple[RagQuery, ...] | list[RagQuery],
+    scope: Scope,
+) -> tuple[RagQuery, ...]:
+    """The queries a scope scores: wiki-only leaves notes queries out."""
+    scope = Scope(scope)
+    if scope is Scope.WIKI_NOTES:
+        return tuple(queries)
+    return tuple(
+        query for query in queries if query.type != "notes"
+    )
+
+
 def run_queries(
     queries: tuple[RagQuery, ...] | list[RagQuery],
     corpus_root: Path | str,
@@ -197,6 +214,8 @@ def run_queries(
     *,
     scope: Scope = Scope.WIKI_NOTES,
     indexes: IndexCache | None = None,
+    embedder: EmbeddingClient | None = None,
+    index_key: IndexKey | None = None,
 ) -> tuple[QueryResult, ...]:
     """Prepare *variant*, then ask it every query, timing each call.
 
@@ -211,7 +230,8 @@ def run_queries(
         layout=layout,
         scope=scope,
         indexes=cache,
-        index_key=variant.index_key,
+        index_key=index_key or variant.index_key,
+        embedder=embedder,
     )
     retriever = variant.prepare(context)
     results: list[QueryResult] = []
@@ -236,6 +256,8 @@ def evaluate(
     *,
     scope: Scope = Scope.WIKI_NOTES,
     indexes: IndexCache | None = None,
+    embedder: EmbeddingClient | None = None,
+    index_key: IndexKey | None = None,
 ) -> Evaluation:
     """Check the corpus, run the variant, and return the scored run."""
     scope = Scope(scope)
@@ -246,12 +268,26 @@ def evaluate(
     )
     corpus = Path(corpus_root).resolve()
     check_corpus(dataset, corpus)
-    cache = indexes or IndexCache()
+    if indexes is None:
+        cache = (
+            IndexCache(base_index_builder(embedder))
+            if embedder is not None
+            else IndexCache()
+        )
+    else:
+        cache = indexes
+    queries = queries_for_scope(dataset.queries, scope)
     mark = cache.mark()
     started_at = utc_now()
     started = time.perf_counter()
     results = run_queries(
-        dataset.queries, corpus, selected, scope=scope, indexes=cache
+        queries,
+        corpus,
+        selected,
+        scope=scope,
+        indexes=cache,
+        embedder=embedder,
+        index_key=index_key,
     )
     return Evaluation(
         variant=selected,

@@ -30,6 +30,8 @@ def make_project(root: Path) -> Path:
         root / "notes" / "concepts" / "entropy" / f"{NOTE_ID}.md",
         "---\n"
         "page: wiki/concepts/entropy.md\n"
+        'anchor: "性质"\n'
+        'quote: "熵只依赖分布"\n'
         'created: "2026-11-01T09:00:00.000000"\n'
         'updated: "2026-11-01T09:00:00.000000"\n'
         "---\n"
