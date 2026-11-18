@@ -8,7 +8,7 @@ thing a difference between runs can come from is the variant.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from evals.rag.dataset import (
@@ -215,6 +215,7 @@ def run_queries(
     scope: Scope = Scope.WIKI_NOTES,
     indexes: IndexCache | None = None,
     embedder: EmbeddingClient | None = None,
+    query_embedder: EmbeddingClient | None = None,
     index_key: IndexKey | None = None,
 ) -> tuple[QueryResult, ...]:
     """Prepare *variant*, then ask it every query, timing each call.
@@ -224,14 +225,20 @@ def run_queries(
     answers, so the same variant and index can serve both scopes.
     """
     scope = Scope(scope)
+    key = index_key or variant.index_key
+    if key is not None and variant.index_key is not None:
+        # The variant owns the chunking strategy; a caller may override the
+        # embedding model and dimensions, but not the index shape.
+        key = replace(key, chunking=variant.index_key.chunking)
     layout = ProjectLayout(root=Path(corpus_root).resolve())
     cache = indexes or IndexCache()
     context = EvalContext(
         layout=layout,
         scope=scope,
         indexes=cache,
-        index_key=index_key or variant.index_key,
+        index_key=key,
         embedder=embedder,
+        query_embedder=query_embedder,
     )
     retriever = variant.prepare(context)
     results: list[QueryResult] = []
@@ -257,6 +264,7 @@ def evaluate(
     scope: Scope = Scope.WIKI_NOTES,
     indexes: IndexCache | None = None,
     embedder: EmbeddingClient | None = None,
+    query_embedder: EmbeddingClient | None = None,
     index_key: IndexKey | None = None,
 ) -> Evaluation:
     """Check the corpus, run the variant, and return the scored run."""
@@ -287,6 +295,7 @@ def evaluate(
         scope=scope,
         indexes=cache,
         embedder=embedder,
+        query_embedder=query_embedder,
         index_key=index_key,
     )
     return Evaluation(

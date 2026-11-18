@@ -27,6 +27,7 @@ from noteagent.rag.index import CHUNKS_TABLE
 
 __all__ = [
     "ChunkScore",
+    "DEFAULT_TAIL_WEIGHT",
     "VectorHit",
     "VectorRetriever",
     "aggregate_pages",

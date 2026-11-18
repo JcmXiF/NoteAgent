@@ -11,6 +11,7 @@ from evals.rag.dataset import DatasetError, load_dataset
 from evals.rag.matrix import run_channel_matrix, write_matrix
 from evals.rag.report import write_report
 from evals.rag.runner import evaluate
+from evals.rag.swap import run_swap_matrix, write_swap_matrix
 from evals.rag.variants import (
     IndexKey,
     Scope,
@@ -21,6 +22,7 @@ from evals.rag.variants import (
 from noteagent.rag.config import (
     DEFAULT_DIM,
     DEFAULT_MODEL,
+    DEFAULT_QUERY_PREFIX,
     EmbeddingConfig,
     EmbeddingError,
 )
@@ -57,11 +59,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--matrix",
-        choices=["channel"],
+        choices=["channel", "swaps"],
         default=None,
         help=(
-            "run the channel matrix: lexical, BM25-only, vector-only, and "
-            "hybrid in both scopes"
+            "run a matrix: channel (lexical/BM25/vector/hybrid) or swaps "
+            "(hybrid reference plus S1/S2/S3/S4/S6), both in both scopes"
         ),
     )
     parser.add_argument(
@@ -105,19 +107,35 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _embedding_config(
+    args: argparse.Namespace,
+    *,
+    query_prefix: str = DEFAULT_QUERY_PREFIX,
+) -> EmbeddingConfig:
+    return EmbeddingConfig(
+        endpoint=args.embedding_endpoint.strip(),
+        model=args.embedding_model,
+        dim=args.embedding_dim,
+        query_prefix=query_prefix,
+        api_key=args.embedding_api_key,
+    )
+
+
 def _embedder(
     args: argparse.Namespace,
 ) -> OpenAIEmbeddingClient | None:
-    endpoint = args.embedding_endpoint.strip()
-    if not endpoint:
+    if not args.embedding_endpoint.strip():
+        return None
+    return OpenAIEmbeddingClient(_embedding_config(args))
+
+
+def _query_embedder(
+    args: argparse.Namespace,
+) -> OpenAIEmbeddingClient | None:
+    if not args.embedding_endpoint.strip():
         return None
     return OpenAIEmbeddingClient(
-        EmbeddingConfig(
-            endpoint=endpoint,
-            model=args.embedding_model,
-            dim=args.embedding_dim,
-            api_key=args.embedding_api_key,
-        )
+        _embedding_config(args, query_prefix="")
     )
 
 
@@ -125,6 +143,7 @@ def main(
     argv: list[str] | None = None,
     *,
     embedder: EmbeddingClient | None = None,
+    query_embedder: EmbeddingClient | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
     dataset_path = Path(args.dataset)
@@ -136,6 +155,9 @@ def main(
     try:
         dataset = load_dataset(dataset_path)
         selected_embedder = embedder or _embedder(args)
+        selected_query_embedder = (
+            query_embedder or _query_embedder(args)
+        )
         index_key = (
             IndexKey(
                 chunking="heading",
@@ -162,10 +184,43 @@ def main(
             print(f"channel matrix: {len(runs)} runs")
             print(f"report: {written}")
             return 0
+        if args.matrix == "swaps":
+            if selected_embedder is None:
+                print(
+                    "the swap matrix needs an embedding endpoint",
+                    file=sys.stderr,
+                )
+                return 2
+            if selected_query_embedder is None:
+                print(
+                    "the swap matrix needs a query embedding endpoint",
+                    file=sys.stderr,
+                )
+                return 2
+            runs = run_swap_matrix(
+                dataset,
+                corpus,
+                embedder=selected_embedder,
+                query_embedder=selected_query_embedder,
+                index_key=index_key,
+            )
+            written = write_swap_matrix(runs, Path(args.report))
+            print(f"swap matrix: {len(runs)} runs")
+            print(f"report: {written}")
+            return 0
         variant = get_variant(args.variant)
         if variant.index_key is not None and selected_embedder is None:
             print(
                 f"variant {args.variant!r} needs an embedding endpoint",
+                file=sys.stderr,
+            )
+            return 2
+        if (
+            variant.name == "hybrid_s4_no_prefix"
+            and selected_query_embedder is None
+        ):
+            print(
+                f"variant {args.variant!r} needs a query embedding endpoint",
                 file=sys.stderr,
             )
             return 2
@@ -175,6 +230,7 @@ def main(
             variant,
             scope=Scope(args.scope),
             embedder=selected_embedder,
+            query_embedder=selected_query_embedder,
             index_key=index_key,
         )
     except (DatasetError, UnknownVariant, EmbeddingError) as err:

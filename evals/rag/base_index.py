@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from noteagent.ingest.frontmatter import parse_page
 from noteagent.ingest.update_index import iter_wiki_content_pages
 from noteagent.notes.store import list_notes
 from noteagent.project.layout import ProjectLayout
@@ -29,7 +30,12 @@ from noteagent.rag.chunker import (
     wiki_title,
 )
 from noteagent.rag.embedding import EmbeddingClient
-from noteagent.rag.vector import ChunkScore, VectorHit, aggregate_pages
+from noteagent.rag.vector import (
+    DEFAULT_TAIL_WEIGHT,
+    ChunkScore,
+    VectorHit,
+    aggregate_pages,
+)
 from noteagent.wiki.links import wiki_slug_for_path
 
 __all__ = ["BaseIndex", "EvalChunk", "build_base_index"]
@@ -96,6 +102,7 @@ class BaseIndex:
         embedder: EmbeddingClient,
         *,
         limit: int = 50,
+        tail_weight: float = DEFAULT_TAIL_WEIGHT,
     ) -> list[VectorHit]:
         """Page candidates by cosine similarity, aggregated like production."""
         if limit <= 0 or not (query or "").strip() or not self.chunks:
@@ -117,15 +124,20 @@ class BaseIndex:
             )
             for chunk in self.chunks
         ]
-        return aggregate_pages(scores)[:limit]
+        return aggregate_pages(scores, tail_weight=tail_weight)[:limit]
 
 
 def build_base_index(
-    layout: ProjectLayout, embedder: EmbeddingClient
+    layout: ProjectLayout,
+    embedder: EmbeddingClient,
+    *,
+    chunking: str = "heading",
 ) -> BaseIndex:
     """Chunk, embed, and index the corpus's wiki pages and notes."""
     if embedder.dim <= 0:
         raise ValueError("the embedding dimension must be positive")
+    if chunking not in {"heading", "whole-page"}:
+        raise ValueError(f"unknown chunking strategy {chunking!r}")
 
     pages: list[tuple[str, str]] = []
     titles: dict[str, str] = {}
@@ -140,6 +152,35 @@ def build_base_index(
         title = wiki_title(text, slug=slug)
         pages.append((slug, title))
         titles[slug] = title
+        if chunking == "whole-page":
+            body = parse_page(text).body.strip()
+            if not body:
+                continue
+            chunk_id = f"wiki:{slug}#0"
+            docs.append(
+                LexicalDoc(
+                    chunk_id=chunk_id,
+                    page_id=slug,
+                    kind=KIND_WIKI,
+                    chunk_text=body,
+                    heading_path="",
+                    title=title,
+                    chunk_index=0,
+                )
+            )
+            pending.append(
+                _PendingChunk(
+                    chunk_id=chunk_id,
+                    page_id=slug,
+                    kind=KIND_WIKI,
+                    chunk_index=0,
+                    chunk_text=body,
+                    heading_path="",
+                    title=title,
+                    embed_text=_embed_text(title, body),
+                )
+            )
+            continue
         for chunk in chunk_wiki(text, slug=slug):
             docs.append(
                 LexicalDoc(
@@ -231,6 +272,10 @@ def build_base_index(
         dim=embedder.dim,
         size_bytes=size_bytes,
     )
+
+
+def _embed_text(*parts: str) -> str:
+    return "\n".join(part for part in parts if part)
 
 
 def _normalize(value: str) -> str:

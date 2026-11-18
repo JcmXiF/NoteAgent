@@ -26,7 +26,8 @@ from noteagent.project.layout import ProjectLayout
 from noteagent.rag.bm25 import DEFAULT_EXACT_BONUS
 from noteagent.rag.chunker import KIND_NOTE, KIND_WIKI
 from noteagent.rag.embedding import EmbeddingClient
-from noteagent.rag.fusion import DEFAULT_K, fuse
+from noteagent.rag.fusion import DEFAULT_K, PageKey, fuse
+from noteagent.rag.vector import DEFAULT_TAIL_WEIGHT
 from noteagent.wiki.local_search import search_project
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "UnknownVariant",
     "VARIANTS",
     "Variant",
+    "WHOLE_PAGE_INDEX_KEY",
     "base_index_builder",
     "filter_scope",
     "get_variant",
@@ -97,6 +99,12 @@ CHANNEL_INDEX_KEY = IndexKey(
     chunking="heading",
     embedding_model="qwen3-embedding:0.6b",
     embedding_dim=1024,
+)
+
+
+#: The S1 swap's index: one chunk per wiki page, notes unchanged.
+WHOLE_PAGE_INDEX_KEY = replace(
+    CHANNEL_INDEX_KEY, chunking="whole-page"
 )
 
 
@@ -206,7 +214,9 @@ def base_index_builder(
                 f"the embedder says {embedder.dim}"
             )
         before = _embedding_usage(embedder)
-        base = build_base_index(layout, embedder)
+        base = build_base_index(
+            layout, embedder, chunking=key.chunking
+        )
         after = _embedding_usage(embedder)
         return IndexBuild(
             index=base,
@@ -254,6 +264,7 @@ class EvalContext:
     indexes: IndexCache
     index_key: IndexKey | None = None
     embedder: EmbeddingClient | None = None
+    query_embedder: EmbeddingClient | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +326,81 @@ def _retrieval(hits: Sequence[_Ranked]) -> Retrieval:
     )
 
 
+class _Scored(Protocol):
+    kind: str
+    page_id: str
+    score: float
+
+
+class _LexicalRanked(_Scored, Protocol):
+    exact: bool
+
+
+def _retrieval_from_keys(keys: Sequence[PageKey]) -> Retrieval:
+    return Retrieval(
+        pages=tuple(
+            page_id for kind, page_id in keys if kind == KIND_WIKI
+        ),
+        notes=tuple(
+            page_id for kind, page_id in keys if kind == KIND_NOTE
+        ),
+    )
+
+
+def _weighted_keys(
+    lexical: Sequence[_LexicalRanked],
+    vector: Sequence[_Scored],
+    *,
+    candidates: int = DEPTH,
+    exact_pages: set[str] | None = None,
+) -> list[PageKey]:
+    """Min-max normalize each side, then an equal-weight sum; exact tier kept."""
+    bm25 = {
+        (hit.kind, hit.page_id): hit.score
+        for hit in list(lexical)[:candidates]
+    }
+    vector_scores = {
+        (hit.kind, hit.page_id): hit.score
+        for hit in list(vector)[:candidates]
+    }
+    bm25_norm = _minmax(bm25)
+    vector_norm = _minmax(vector_scores)
+    scores = {
+        key: 0.5 * bm25_norm.get(key, 0.0)
+        + 0.5 * vector_norm.get(key, 0.0)
+        for key in set(bm25) | set(vector_scores)
+    }
+    exact = {
+        (KIND_WIKI, slug) for slug in (exact_pages or set())
+    }
+    for key in exact:
+        scores[key] = scores.get(key, 0.0) + DEFAULT_EXACT_BONUS
+    return sorted(
+        scores,
+        key=lambda key: (
+            0 if key in exact else 1,
+            -scores[key],
+            key[1].casefold(),
+            key[0],
+        ),
+    )[:candidates]
+
+
+def _minmax(
+    scores: dict[PageKey, float]
+) -> dict[PageKey, float]:
+    if not scores:
+        return {}
+    values = list(scores.values())
+    low, high = min(values), max(values)
+    if high == low:
+        return {key: 1.0 for key in scores}
+    return {
+        key: (value - low) / (high - low)
+        for key, value in scores.items()
+    }
+
+
 def _bm25(context: EvalContext) -> Retriever:
     base = _base(context)
 
@@ -369,7 +455,9 @@ def _vector(context: EvalContext) -> Retriever:
     return FnRetriever(retrieve)
 
 
-def _hybrid(context: EvalContext) -> Retriever:
+def _hybrid_with_tail(
+    context: EvalContext, tail_weight: float
+) -> Retriever:
     base = _base(context)
     embedder = context.embedder
     if embedder is None:
@@ -379,9 +467,91 @@ def _hybrid(context: EvalContext) -> Retriever:
 
     def retrieve(query: str) -> Retrieval:
         lexical = base.bm25.search(query, limit=DEPTH)
-        vector = base.vector_hits(query, embedder, limit=DEPTH)
+        vector = base.vector_hits(
+            query,
+            embedder,
+            limit=DEPTH,
+            tail_weight=tail_weight,
+        )
         fused = fuse(
             lexical, vector, k=DEFAULT_K, candidates=DEPTH
+        )
+        return _retrieval(fused.hits)
+
+    return FnRetriever(retrieve)
+
+
+def _hybrid(context: EvalContext) -> Retriever:
+    return _hybrid_with_tail(context, DEFAULT_TAIL_WEIGHT)
+
+
+def _hybrid_max(context: EvalContext) -> Retriever:
+    return _hybrid_with_tail(context, 0.0)
+
+
+def _hybrid_no_prefix(context: EvalContext) -> Retriever:
+    base = _base(context)
+    query_embedder = context.query_embedder
+    if query_embedder is None:
+        raise RuntimeError(
+            "the S4 variant needs a no-prefix query embedder"
+        )
+
+    def retrieve(query: str) -> Retrieval:
+        lexical = base.bm25.search(query, limit=DEPTH)
+        vector = base.vector_hits(
+            query, query_embedder, limit=DEPTH
+        )
+        fused = fuse(
+            lexical, vector, k=DEFAULT_K, candidates=DEPTH
+        )
+        return _retrieval(fused.hits)
+
+    return FnRetriever(retrieve)
+
+
+def _hybrid_weighted(context: EvalContext) -> Retriever:
+    base = _base(context)
+    embedder = context.embedder
+    if embedder is None:
+        raise RuntimeError(
+            "the hybrid variant needs an embedding client"
+        )
+
+    def retrieve(query: str) -> Retrieval:
+        exact = base.exact_pages(query)
+        lexical = base.bm25.search(
+            query, limit=DEPTH, exact_tier=False
+        )
+        vector = base.vector_hits(query, embedder, limit=DEPTH)
+        return _retrieval_from_keys(
+            _weighted_keys(
+                lexical, vector, exact_pages=exact
+            )
+        )
+
+    return FnRetriever(retrieve)
+
+
+def _hybrid_no_exact(context: EvalContext) -> Retriever:
+    base = _base(context)
+    embedder = context.embedder
+    if embedder is None:
+        raise RuntimeError(
+            "the hybrid variant needs an embedding client"
+        )
+
+    def retrieve(query: str) -> Retrieval:
+        lexical = base.bm25.search(
+            query, limit=DEPTH, exact_tier=False
+        )
+        vector = base.vector_hits(query, embedder, limit=DEPTH)
+        fused = fuse(
+            lexical,
+            vector,
+            k=DEFAULT_K,
+            candidates=DEPTH,
+            exact_tier=False,
         )
         return _retrieval(fused.hits)
 
@@ -423,6 +593,46 @@ VARIANTS: dict[str, Variant] = {
             "the reference pipeline"
         ),
         prepare=_hybrid,
+        index_key=CHANNEL_INDEX_KEY,
+    ),
+    "hybrid_s1_whole_page": Variant(
+        name="hybrid_s1_whole_page",
+        description=(
+            "S1: hybrid over one whole-page chunk per wiki page"
+        ),
+        prepare=_hybrid,
+        index_key=WHOLE_PAGE_INDEX_KEY,
+    ),
+    "hybrid_s2_max": Variant(
+        name="hybrid_s2_max",
+        description=(
+            "S2: hybrid with max page aggregation (tail weight 0)"
+        ),
+        prepare=_hybrid_max,
+        index_key=CHANNEL_INDEX_KEY,
+    ),
+    "hybrid_s3_minmax": Variant(
+        name="hybrid_s3_minmax",
+        description=(
+            "S3: hybrid with per-query min-max + equal-weight fusion"
+        ),
+        prepare=_hybrid_weighted,
+        index_key=CHANNEL_INDEX_KEY,
+    ),
+    "hybrid_s4_no_prefix": Variant(
+        name="hybrid_s4_no_prefix",
+        description=(
+            "S4: hybrid with the query instruction prefix off"
+        ),
+        prepare=_hybrid_no_prefix,
+        index_key=CHANNEL_INDEX_KEY,
+    ),
+    "hybrid_s6_no_exact": Variant(
+        name="hybrid_s6_no_exact",
+        description=(
+            "S6: hybrid with the whole exact-title tier off"
+        ),
+        prepare=_hybrid_no_exact,
         index_key=CHANNEL_INDEX_KEY,
     ),
 }
