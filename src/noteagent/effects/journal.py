@@ -61,6 +61,11 @@ FAILED = "failed"
 
 STATUSES = frozenset({COMMITTED, FAILED, UNDONE})
 
+#: How a wiki page write can be undone, and by whom.
+REVERSIBLE_SNAPSHOT = "snapshot"
+UNDO_PAGE_HISTORY = "page_history"
+PROVIDER_PAGE_HISTORY = "page_history"
+
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
 
@@ -104,6 +109,14 @@ class EffectJournal:
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIds()
 
+    def new_id(self) -> str:
+        """Reserve an effect id before the write it will later describe.
+
+        A writer needs the id for the page-history row it commits first; the
+        effect itself follows once the page write has succeeded.
+        """
+        return self._ids.new_id("eff")
+
     def append(self, effect: Effect) -> Effect:
         """Write one effect and return it with its id and timestamp filled."""
         if effect.kind not in KINDS:
@@ -116,7 +129,7 @@ class EffectJournal:
             with _file_lock(path):
                 written = replace(
                     effect,
-                    ident=effect.ident or self._ids.new_id("eff"),
+                    ident=effect.ident or self.new_id(),
                     at=effect.at or iso_timestamp(self._clock),
                 )
                 line = (
@@ -372,11 +385,14 @@ __all__ = [
     "FAILED",
     "KINDS",
     "NOTE_WRITE",
+    "PROVIDER_PAGE_HISTORY",
     "RAW_ADD",
     "RAW_DELETE",
+    "REVERSIBLE_SNAPSHOT",
     "SHELL",
     "STATUSES",
     "UNDO",
+    "UNDO_PAGE_HISTORY",
     "UNDONE",
     "WIKI_PAGE_WRITE",
 ]

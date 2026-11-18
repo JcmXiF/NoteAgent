@@ -5,6 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 
+from noteagent.effects.journal import EffectJournal, WIKI_PAGE_WRITE
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
@@ -13,7 +14,9 @@ from noteagent.ingest.clips import (
 )
 from noteagent.ingest.confirmed import apply_block_sources, ingest_confirmed
 from noteagent.ingest.frontmatter import parse_inline_list, parse_page
+from noteagent.ingest.page_history import page_snapshots
 from noteagent.ingest.topic_map import parse_topic_map
+from noteagent.ingest.write_file_blocks import WriteContext
 from noteagent.project.init import init_project
 from noteagent.util.cancel import JobCancelled
 from noteagent.util.refusal import Refusal
@@ -77,6 +80,91 @@ sources: ["raw/web/example.com/kl.html"]
 
 
 class IngestConfirmedTests(unittest.TestCase):
+    def test_a_write_context_reaches_the_effect_and_page_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "proj")
+            html = layout.raw / "web" / "example.com" / "kl.html"
+            html.parent.mkdir(parents=True, exist_ok=True)
+            html.write_text("<p id='na-b1'>KL</p>\n", encoding="utf-8")
+            store = ClipStore(
+                intent="KL散度",
+                collections=(
+                    ClipCollection(
+                        id="c1",
+                        source_key="raw/web/example.com/kl.html",
+                        source_label="KL",
+                        block_ids=("b1", "b2"),
+                        blocks=(
+                            DerivedBlock(
+                                id="b1",
+                                tag="p",
+                                text="KL 是相对熵。",
+                                preview="KL",
+                            ),
+                            DerivedBlock(
+                                id="b2",
+                                tag="p",
+                                text="信息熵。",
+                                preview="熵",
+                            ),
+                        ),
+                    ),
+                ),
+                topic_map=MAP,
+            )
+            save_clip_store(layout, store)
+            topic_map = parse_topic_map(
+                MAP, intent="KL散度", collections=store.collections
+            )
+            context = WriteContext(
+                run_id="run-1",
+                session_id="s1",
+                actor="pipeline",
+                plan_revision="plan-2",
+            )
+
+            ingest_confirmed(
+                layout,
+                confirmed=[
+                    {
+                        "name": "KL散度",
+                        "slug": "kl-divergence",
+                        "wikiPath": "wiki/concepts/kl-divergence.md",
+                        "action": "write",
+                        "sectionIds": ["s1"],
+                    },
+                    {
+                        "name": "信息熵",
+                        "slug": "information-entropy",
+                        "wikiPath": "wiki/concepts/information-entropy.md",
+                        "action": "skip",
+                        "sectionIds": [],
+                    },
+                ],
+                topic_map=topic_map,
+                generation_text=GENERATION,
+                write_context=context,
+            )
+
+            effects = [
+                effect
+                for effect in EffectJournal(layout).query(
+                    kind=WIKI_PAGE_WRITE
+                )
+                if effect.target == "wiki/concepts/kl-divergence.md"
+            ]
+            self.assertEqual(len(effects), 1)
+            effect = effects[0]
+            self.assertEqual(effect.run_id, "run-1")
+            self.assertEqual(effect.session_id, "s1")
+            self.assertEqual(effect.actor, "pipeline")
+            history = page_snapshots(
+                layout, "wiki/concepts/kl-divergence.md"
+            )[0]
+            self.assertEqual(history.effect_id, effect.ident)
+            self.assertEqual(history.run_id, "run-1")
+            self.assertEqual(history.plan_revision, "plan-2")
+
     def test_writes_only_confirmed_and_block_locators(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = init_project(Path(tmp) / "proj")
