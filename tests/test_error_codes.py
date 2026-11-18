@@ -15,6 +15,7 @@ by adding its sentence and nothing else.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -39,6 +40,38 @@ LOCALES = ROOT / "web" / "src" / "i18n" / "locales"
 CLASS_DECL = re.compile(r"^class (\w+)\(([^)]*)\):", re.MULTILINE)
 #: A class attribute naming a situation: `code = "a.b"` alone on a line of its own.
 DECLARED = re.compile(r'^\s*code = "([\w.]+)"\s*$', re.MULTILINE)
+
+
+def keyword_codes(source: str, coded: set[str]) -> set[str]:
+    """A situation passed to a coded class by keyword: `..., code="a.b")`.
+
+    Read from the syntax tree rather than a text match, so a local helper's
+    ``code="handler_error"`` is not mistaken for something the interface is told.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            name = func.id
+        elif isinstance(func, ast.Attribute):
+            name = func.attr
+        else:
+            continue
+        if name not in coded:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "code":
+                continue
+            value = keyword.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                found.add(value.value)
+    return found
 
 
 def core_sources() -> list[str]:
@@ -71,9 +104,14 @@ def core_codes() -> set[str]:
         r'(?:' + "|".join(coded_class_names()) + r')\(\s*"([\w.]+)"'
     )
     found: set[str] = set()
+    # ``CodedHTTPException`` answers through FastAPI's ``HTTPException`` rather
+    # than ``CodedError``, so the inheritance walk does not reach it; it still
+    # names a situation the interface is told about.
+    coded = set(coded_class_names()) | {"CodedHTTPException"}
     for source in core_sources():
         found.update(raised.findall(source))
         found.update(DECLARED.findall(source))
+        found.update(keyword_codes(source, coded))
     return found
 
 
@@ -101,6 +139,10 @@ class CoreCodeTests(unittest.TestCase):
         self.assertIn("search.running", found)
         self.assertIn("project.name.tooLong", found)
         self.assertIn("provider.notConfigured", found)
+        # A code raised by keyword on an HTTP error is still a situation the
+        # interface is told about, and the scan has to see it.
+        self.assertIn("pipeline.busy", found)
+        self.assertIn("pipeline.notFound", found)
         # A local variable called `code` is not a situation the interface is told
         # about, and its values must not be read as codes.
         self.assertNotIn("replaced", found)

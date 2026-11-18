@@ -4,6 +4,7 @@ import { Globe, Loader2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BlockPicker } from "@/components/source/BlockPicker";
+import { BlockSelection } from "@/components/source/BlockSelection";
 import { ImagePicker } from "@/components/source/ImagePicker";
 import {
   failedCaptureHint,
@@ -31,9 +32,17 @@ import { useDeepSearchStore } from "@/stores/deep-search-store";
 import { useDocsReads, type FileRead } from "@/stores/docs-reads";
 import { useDocsStore } from "@/stores/docs-store";
 import { useNavStore } from "@/stores/nav-store";
-import type { CapturePreview } from "@/lib/api/types";
+import { fetchPipelineMaterialBlocks } from "@/lib/api/pipeline";
+import type { CapturePreview, DerivedBlock } from "@/lib/api/types";
 import type { PaneSlot } from "@/stores/layout-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+
+type MaterialView = {
+  runId: string;
+  material: string;
+  title: string;
+  blocks: DerivedBlock[];
+};
 
 /**
  * The stored original behind a source, once it has been read.
@@ -154,6 +163,41 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSeq]);
 
+  /**
+   * A staged material another view asked to see.
+   *
+   * It has no page and no stored original yet: the pipeline keeps it under the
+   * run that collected it, and its blocks are read from there. The same picker
+   * the other sources use turns a ticked run of blocks into a selection.
+   */
+  const [materialView, setMaterialView] = useState<MaterialView | null>(null);
+  useEffect(() => {
+    const intent = useNavStore.getState().intent;
+    if (!intent || intent.kind !== "material") {
+      setMaterialView(null);
+      return;
+    }
+    let live = true;
+    void fetchPipelineMaterialBlocks(intent.runId, intent.material)
+      .then((data) => {
+        if (!live) return;
+        setMaterialView({
+          runId: intent.runId,
+          material: data.material,
+          title: intent.title ?? "",
+          blocks: data.blocks,
+        });
+      })
+      .catch(() => {
+        if (live) setNotice(message("sources.materialFailed"));
+      });
+    return () => {
+      live = false;
+    };
+    // Keyed on the request, not on the material: a later request may replace it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navSeq]);
+
   const capture = entry?.capture;
   /** Where this source's original is, when it has one stored. */
   const storedPath = entry
@@ -186,10 +230,25 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
    * this way is why one set of views, marks and pickers serves both — and why the
    * page does not have to be fetched again to be read.
    */
-  const shown: CapturePreview | null = capture
-    ? capture
-    : storedReady && storedPath
-      ? {
+  const shown: CapturePreview | null = materialView
+    ? {
+        url: materialView.material,
+        finalUrl: materialView.material,
+        title: materialView.title || materialView.material,
+        markdown: "",
+        html: "",
+        blocks: materialView.blocks,
+        captureMethod: "",
+        fidelity: "",
+        reasons: [],
+        httpStatus: null,
+        charCount: 0,
+        kind: "",
+      }
+    : capture
+      ? capture
+      : storedReady && storedPath
+        ? {
           // The address the file records is what "open the original page" needs; the
           // path stands in when it recorded none.
           url: storedOrigin ?? storedPath,
@@ -216,11 +275,13 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
   // The key a selection made from this source records. Until the original is stored
   // the page's address carries its identity; afterwards the file does, which is also
   // the name a request for a stored source arrives under.
-  const sourceKey = entry?.path
-    ? entry.path
-    : entry?.url
-      ? previewSourceKey(entry.url)
-      : storedPath ?? "";
+  const sourceKey = materialView
+    ? materialView.material
+    : entry?.path
+      ? entry.path
+      : entry?.url
+        ? previewSourceKey(entry.url)
+        : storedPath ?? "";
 
   // Which blocks of this page already belong to a selection. A selection made before
   // the page was stored is keyed by its preview URL; afterwards by the stored path, so
@@ -229,10 +290,12 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
     () =>
       sourceMarkup(
         collections,
-        [entry?.url ?? "", entry?.capture?.finalUrl ?? "", storedPath ?? ""],
+        materialView
+          ? [materialView.material]
+          : [entry?.url ?? "", entry?.capture?.finalUrl ?? "", storedPath ?? ""],
         focusedCollectionId,
       ),
-    [collections, entry, storedPath, focusedCollectionId],
+    [collections, entry, storedPath, focusedCollectionId, materialView],
   );
 
   /**
@@ -256,11 +319,18 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
       // A source read back from the project is named by the record's own title, which
       // reads better than the path it is stored at; a page fetched in this session
       // keeps the name it was brought in under.
-      sourceLabel: capture ? capture.title || entry?.url || "" : shown.title,
+      sourceLabel: materialView
+        ? materialView.title || materialView.material
+        : capture
+          ? capture.title || entry?.url || ""
+          : shown.title,
       blockIds: ids,
-      blocks: shown.blocks ?? [],
+      // A frame is the block ids; a material's text stays in its staged blocks.
+      blocks: materialView ? [] : (shown.blocks ?? []),
       // While a search is gathering material, what is picked here is that search's.
-      roundId: roundIdForSelection(useDeepSearchStore.getState().session),
+      roundId: materialView
+        ? ""
+        : roundIdForSelection(useDeepSearchStore.getState().session),
     });
   };
 
@@ -356,7 +426,13 @@ export function SourceView({ slot }: { slot: PaneSlot }) {
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto scroll-thin">
-        {isPdfCapture(shown) ? (
+        {materialView ? (
+          <BlockSelection blocks={shown.blocks ?? []} onCommit={commit}>
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+              {t("sources.materialHint")}
+            </p>
+          </BlockSelection>
+        ) : isPdfCapture(shown) ? (
           <Suspense
             fallback={
               <p className="flex items-center gap-2 p-3 text-xs text-muted-foreground">

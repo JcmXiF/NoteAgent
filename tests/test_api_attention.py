@@ -28,6 +28,11 @@ class AttentionPayloadTests(unittest.TestCase):
                     return_value={"openCount": 1, "items": [{"id": "job"}], "last": None},
                 ),
                 patch.object(
+                    attention_mod.CaptureInbox,
+                    "payload",
+                    return_value={"openCount": 1, "items": [{"id": "capture-1"}]},
+                ),
+                patch.object(
                     attention_mod,
                     "doctor_payload",
                     return_value={"errors": 1, "warnings": 3, "findings": []},
@@ -36,9 +41,10 @@ class AttentionPayloadTests(unittest.TestCase):
                 payload = attention_payload(layout)
 
             self.assertEqual(
-                payload["counts"], {"revision": 2, "recovery": 1, "doctor": 4}
+                payload["counts"],
+                {"revision": 2, "recovery": 1, "capture": 1, "doctor": 4},
             )
-            self.assertEqual(payload["total"], 7)
+            self.assertEqual(payload["total"], 8)
 
     def test_a_repeat_read_does_not_run_the_check(self) -> None:
         # The check reads every page, so it is asked for once, not on every poll.
@@ -70,6 +76,7 @@ class AttentionPayloadTests(unittest.TestCase):
             payload = attention_payload(layout)
             self.assertEqual(payload["counts"]["revision"], 0)
             self.assertEqual(payload["counts"]["recovery"], 0)
+            self.assertEqual(payload["counts"]["capture"], 0)
             self.assertIsNotNone(payload["doctor"])
             self.assertIn("findings", payload["doctor"])
 

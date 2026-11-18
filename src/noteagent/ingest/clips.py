@@ -15,7 +15,9 @@ MAX_COLLECTIONS = 40
 MAX_BLOCKS_PER_COLLECTION = 200
 MAX_TEXT_CHARS = 8_000
 MAX_INTENT_CHARS = 200
-MAX_DECISIONS = 20
+#: The gate answers one plan may hold. It matches the plan's page cap (24), so
+#: every page a plan can name has room for an answer.
+MAX_DECISIONS = 24
 PREVIEW_PREFIX = "preview:"
 RAW_PREFIX = "raw/"
 GATE_ACTIONS = frozenset({"write", "skip", "mention"})
@@ -411,7 +413,7 @@ def collection_from_dict(raw: dict[str, Any]) -> ClipCollection:
     for item in blocks_raw:
         if not isinstance(item, dict):
             raise ValueError("each block must be an object")
-        block = _block_from_dict(item)
+        block = block_from_dict(item)
         if block.id in seen_block:
             continue
         seen_block.add(block.id)
@@ -437,7 +439,7 @@ def drop_collections_for_source(store: ClipStore, identity: str) -> ClipStore:
     return replace(store, collections=kept)
 
 
-def _block_from_dict(raw: dict[str, Any]) -> DerivedBlock:
+def block_from_dict(raw: dict[str, Any]) -> DerivedBlock:
     ident = _required_str(raw, "id")
     tag = str(raw.get("tag") or "").strip()[:32]
     text = str(raw.get("text") or "")[:MAX_TEXT_CHARS]
@@ -487,6 +489,7 @@ __all__ = [
     "MAX_TEXT_CHARS",
     "PREVIEW_PREFIX",
     "RAW_PREFIX",
+    "block_from_dict",
     "clip_store_from_dict",
     "clip_store_to_dict",
     "collection_from_dict",

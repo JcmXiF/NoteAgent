@@ -1,10 +1,22 @@
-import { getJson, projectPath } from "@/lib/api/client";
+import { getJson, postJson, projectPath } from "@/lib/api/client";
 import type {
   CompletedRoundPayload,
   DoctorPayload,
   IngestRecoveryJob,
   RevisionInboxItem,
 } from "@/lib/api/types";
+
+/** A page a run could not read behind a sign-in. */
+export type CaptureInboxItem = {
+  id: string;
+  url: string;
+  title: string;
+  reason: string;
+  httpStatus: number | null;
+  runId: string;
+  at: string;
+  status: string;
+};
 
 /**
  * The one answer to "what is waiting on me".
@@ -21,8 +33,14 @@ export type AttentionPayload = {
     items: IngestRecoveryJob[];
     last: CompletedRoundPayload | null;
   };
+  capture: { openCount: number; items: CaptureInboxItem[] };
   doctor: DoctorPayload | null;
-  counts: { revision: number; recovery: number; doctor: number };
+  counts: {
+    revision: number;
+    recovery: number;
+    capture: number;
+    doctor: number;
+  };
   total: number;
 };
 
@@ -33,4 +51,12 @@ export type AttentionPayload = {
 export function fetchAttention(project: string, check = true): Promise<AttentionPayload> {
   const query = new URLSearchParams({ check: String(check) });
   return getJson<AttentionPayload>(`${projectPath(project, "attention")}?${query}`);
+}
+
+/** Puts one sign-in page away; it comes back only if it is met again. */
+export function postCaptureInboxDismiss(
+  project: string,
+  id: string,
+): Promise<{ openCount: number; items: CaptureInboxItem[] }> {
+  return postJson(`${projectPath(project, "capture-inbox/dismiss")}`, { id });
 }

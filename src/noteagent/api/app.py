@@ -12,11 +12,13 @@ built earlier.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
+from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.background import BackgroundTask
 
 from noteagent import __version__
@@ -70,6 +72,20 @@ from noteagent.api.pages import (
     page_version_payload,
     page_view_payload,
     project_search_payload,
+)
+from noteagent.api.pipeline import (
+    pipeline_service,
+    pipeline_service_for,
+    prepare_active_project,
+)
+from noteagent.api.pipeline_events import iter_pipeline_events
+from noteagent.pipeline.confirm import NothingToWrite, confirmation_payload
+from noteagent.pipeline.lock import ProjectBusy
+from noteagent.pipeline.run import run_to_dict
+from noteagent.pipeline.service import (
+    PipelineBusy,
+    PipelineConflict,
+    PipelineService,
 )
 from noteagent.api.projects import (
     create_project,
@@ -138,6 +154,7 @@ from noteagent.settings.profiles import (
     delete_profile,
     update_profile,
 )
+from noteagent.project.layout import ProjectLayout
 from noteagent.project.lifecycle import ProjectConfirmError, project_contents
 from noteagent.project.names import ProjectNameError
 from noteagent.project.trash import list_trash, restore_trash
@@ -213,6 +230,30 @@ class ProjectConfirmBody(BaseModel):
 class ProjectResetBody(BaseModel):
     confirmName: str = ""
     dryRun: bool = False
+
+
+class CaptureDismissBody(BaseModel):
+    """One page in the sign-in queue the reader is done with."""
+
+    id: str = Field(..., min_length=1, max_length=80)
+
+
+class PipelineStartBody(BaseModel):
+    """What a person or a conversation asks one run to do."""
+
+    intent: str = Field(..., min_length=1, max_length=2000)
+    startedBy: Literal["human", "session"] = "human"
+    sessionId: str | None = Field(default=None, max_length=120)
+    queryMode: Literal["precise", "model"] = "precise"
+    materialMode: Literal["manual", "auto"] = "auto"
+
+    @field_validator("intent")
+    @classmethod
+    def _intent_is_not_blank(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("a pipeline run needs an intent")
+        return cleaned
 
 
 class FolderOpenBody(BaseModel):
@@ -479,6 +520,13 @@ class GateDecisionBody(BaseModel):
     sectionIds: list[str] = Field(default_factory=list, max_length=40)
 
 
+class PipelineApproveBody(BaseModel):
+    """Approval of a run's plan revision, with optional per-page overrides."""
+
+    planRevision: int = Field(..., ge=0)
+    overrides: list[GateDecisionBody] = Field(default_factory=list, max_length=24)
+
+
 class ClipsPutBody(BaseModel):
     intent: str = ""
     collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
@@ -594,6 +642,9 @@ async def _app_lifespan(_app: FastAPI):
 
     # An upgrade brings the old chats across before the socket answers.
     migrate_active_project_chats(_app.state.deps)
+    # A run a previous core left open is not still running, and originals that
+    # predate the material log get a record; both before any route can read them.
+    prepare_active_project(_app.state.deps)
 
     stop = asyncio.Event()
 
@@ -613,6 +664,25 @@ async def _app_lifespan(_app: FastAPI):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+logger = logging.getLogger(__name__)
+
+
+def _after_plan(deps: AppDeps, job_wait, layout: ProjectLayout, job_id: str) -> None:
+    """Close a planning job, then let a waiting run follow the new plan."""
+    job_cleanup(deps, job_wait, layout, job_id, "plan")
+    try:
+        pipeline_service_for(deps, layout).sync_waiting()
+    except Exception:  # noqa: BLE001 - the plan itself is already saved
+        logger.exception("a finished plan could not reach a waiting run")
+
+
+def _pipeline_not_found(run_id: str) -> CodedHTTPException:
+    """The one answer for a run id no route could resolve."""
+    return CodedHTTPException(
+        404, f"no pipeline run: {run_id}", code="pipeline.notFound"
+    )
 
 
 def create_app(deps: AppDeps | None = None) -> FastAPI:
@@ -646,6 +716,150 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def kernel_health() -> dict[str, str]:
         """The versioned health the packaged core reports."""
         return {"status": "ok", "version": __version__}
+
+    @app.post("/api/v1/pipeline/runs", status_code=201)
+    def pipeline_start(body: PipelineStartBody) -> dict[str, object]:
+        """Start one run of the active project's pipeline."""
+        try:
+            run = pipeline_service(deps).start(
+                intent=body.intent,
+                started_by=body.startedBy,
+                session_id=body.sessionId or "",
+                query_mode=body.queryMode,
+                material_mode=body.materialMode,
+            )
+        except PipelineBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.busy"
+            ) from err
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                400, str(err), code="pipeline.invalid"
+            ) from err
+        return run_to_dict(run)
+
+    @app.get("/api/v1/pipeline/runs")
+    def pipeline_runs() -> dict[str, object]:
+        """Every run of the active project, newest first."""
+        return {"runs": [run_to_dict(run) for run in pipeline_service(deps).list()]}
+
+    @app.get("/api/v1/pipeline/runs/{run_id}")
+    def pipeline_run(run_id: str) -> dict[str, object]:
+        run = pipeline_service(deps).get(run_id)
+        if run is None:
+            raise _pipeline_not_found(run_id)
+        return run_to_dict(run)
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/events")
+    def pipeline_run_events(run_id: str) -> StreamingResponse:
+        """The run's stage, plan, material and result events as they happen."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return StreamingResponse(
+            iter_pipeline_events(service, run_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/materials")
+    def pipeline_run_materials(run_id: str) -> dict[str, object]:
+        """The materials this run collected, with their current state."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return {
+            "materials": [
+                state.payload() for state in service.materials_for_run(run_id)
+            ]
+        }
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/materials/blocks")
+    def pipeline_material_blocks(
+        run_id: str,
+        material: str = Query(..., min_length=1, max_length=500),
+    ) -> dict[str, object]:
+        """The staged blocks behind one material, for the source view."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        blocks = service.material_blocks(material, run_id=run_id)
+        if blocks is None:
+            raise CodedHTTPException(
+                404,
+                f"no staged blocks for {material}",
+                code="material.blocksMissing",
+            )
+        return {"material": material, "blocks": blocks}
+
+    @app.get("/api/v1/pipeline/runs/{run_id}/confirmation")
+    def pipeline_run_confirmation(run_id: str) -> dict[str, object]:
+        """The pages this run would write, while it waits for a person."""
+        try:
+            confirmation = pipeline_service(deps).confirmation(run_id)
+        except PipelineConflict as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.conflict"
+            ) from err
+        if confirmation is None:
+            raise _pipeline_not_found(run_id)
+        return confirmation_payload(confirmation)
+
+    @app.post("/api/v1/pipeline/runs/{run_id}/approve", status_code=202)
+    def pipeline_approve(
+        run_id: str, body: PipelineApproveBody
+    ) -> dict[str, object]:
+        """Approve a run's plan revision; the compile starts behind it."""
+        try:
+            run = pipeline_service(deps).approve(
+                run_id,
+                plan_revision=body.planRevision,
+                overrides=[item.model_dump() for item in body.overrides],
+            )
+        except PipelineBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.busy"
+            ) from err
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        except PipelineConflict as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.conflict"
+            ) from err
+        except NothingToWrite as err:
+            raise CodedHTTPException(
+                400, str(err), code="pipeline.nothingToWrite"
+            ) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                400, str(err), code="pipeline.invalid"
+            ) from err
+        if run is None:
+            raise _pipeline_not_found(run_id)
+        return run_to_dict(run)
+
+    @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
+    def pipeline_cancel(run_id: str) -> dict[str, object]:
+        """Stop a run between its stages; a finished run comes back unchanged."""
+        try:
+            run = pipeline_service(deps).cancel(run_id)
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        if run is None:
+            raise _pipeline_not_found(run_id)
+        return run_to_dict(run)
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:
@@ -904,9 +1118,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/projects/use")
     def projects_use(body: ProjectUseBody) -> dict[str, object]:
         try:
-            return use_project(body.name)
+            result = use_project(body.name)
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
+        # An older project's originals predate the material log; give them their
+        # records when the project is opened, not only when the core starts.
+        prepare_active_project(deps)
+        return result
 
     @app.post("/api/projects")
     def projects_create(body: ProjectCreateBody) -> dict[str, object]:
@@ -923,9 +1141,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/folders/open")
     def folders_open(body: FolderOpenBody) -> dict[str, object]:
         try:
-            return open_existing_folder(body.path, name=body.name, mode=body.mode)
+            result = open_existing_folder(body.path, name=body.name, mode=body.mode)
         except Exception as err:
             raise _project_http_error(err) from err
+        prepare_active_project(deps)
+        return result
 
     @app.post("/api/projects/{name}/init")
     def projects_init(name: str) -> dict[str, object]:
@@ -1161,6 +1381,33 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Everything waiting on the reader, counted in one place."""
         return attention_payload(require_project_layout(name), check=check)
 
+    @app.post("/api/projects/{name}/capture-inbox/dismiss")
+    def project_capture_dismiss(
+        name: str, body: CaptureDismissBody
+    ) -> dict[str, object]:
+        """Put one sign-in page away; it comes back only if it is met again."""
+        layout = require_project_layout(name)
+        service = PipelineService(
+            layout,
+            clock=deps.clock,
+            ids=deps.ids,
+            registry=deps.pipeline_registry,
+            keep_runs=deps.pipeline_keep_runs,
+        )
+        try:
+            changed = service.dismiss_capture(body.id)
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
+        if not changed:
+            raise CodedHTTPException(
+                404,
+                f"no capture inbox item: {body.id}",
+                code="capture.notFound",
+            )
+        return service.capture_payload()
+
     @app.post("/api/projects/{name}/acquire/search")
     def project_acquire_search(name: str, body: AcquireSearchBody) -> dict[str, object]:
         require_project_layout(name)
@@ -1288,8 +1535,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.put("/api/projects/{name}/clips")
     def project_clips_put(name: str, body: ClipsPutBody) -> dict[str, object]:
         layout = require_project_layout(name)
+        # Selections are project state too: the write takes the one writer's
+        # place, so it cannot land in the middle of a pipeline run.
+        service = pipeline_service_for(deps, layout)
         try:
-            return put_clips_payload(layout, body.model_dump())
+            payload = service.write_clips(
+                lambda: put_clips_payload(
+                    layout, body.model_dump(), clock=deps.clock
+                )
+            )
+            # A run waiting to be confirmed follows the board: a changed plan or
+            # answer gets a new revision, and a changed frame is planned again.
+            service.sync_waiting()
+            return payload
+        except ProjectBusy as err:
+            raise CodedHTTPException(
+                409, str(err), code="pipeline.projectBusy"
+            ) from err
         except ValueError as err:
             raise http_error(err, 400) from err
 
@@ -1397,9 +1659,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
-            background=BackgroundTask(
-                job_cleanup, deps, job_wait, layout, job_id, "plan"
-            ),
+            background=BackgroundTask(_after_plan, deps, job_wait, layout, job_id),
         )
 
     @app.post("/api/projects/{name}/ingest-confirmed")
