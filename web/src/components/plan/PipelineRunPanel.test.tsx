@@ -7,7 +7,9 @@ import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
 import {
   cancelPipelineRun,
   fetchPipelineMaterials,
+  fetchPipelineRestorePreview,
   fetchPipelineRuns,
+  restorePipelineRun,
   startPipelineRun,
   type PipelineRun,
 } from "@/lib/api/pipeline";
@@ -15,6 +17,9 @@ import {
 vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineRuns: vi.fn(),
   fetchPipelineMaterials: vi.fn(),
+  fetchPipelineConfirmation: vi.fn(),
+  fetchPipelineRestorePreview: vi.fn(),
+  restorePipelineRun: vi.fn(),
   startPipelineRun: vi.fn(),
   cancelPipelineRun: vi.fn(),
 }));
@@ -33,6 +38,21 @@ const running: PipelineRun = {
   planRevision: 0,
   error: "",
   detail: {},
+};
+
+const finished: PipelineRun = {
+  ...running,
+  status: "succeeded",
+  stage: "done",
+  planRevision: 1,
+  updatedAt: "2026-11-10T09:05:00Z",
+  result: {
+    planRevision: 1,
+    written: ["wiki/entropy.md"],
+    skipped: [],
+    failed: [],
+    effectIds: ["eff-1"],
+  },
 };
 
 describe("PipelineRunPanel", () => {
@@ -67,6 +87,66 @@ describe("PipelineRunPanel", () => {
     if (!found) throw new Error(`no button labelled ${label}`);
     return found as HTMLButtonElement;
   }
+
+  it("previews and restores a finished run's pages", async () => {
+    vi.mocked(fetchPipelineRuns).mockResolvedValue({ runs: [finished] });
+    vi.mocked(fetchPipelineRestorePreview).mockResolvedValue({
+      runId: "pr-1",
+      pages: [
+        {
+          path: "wiki/entropy.md",
+          kind: "wiki_page_write",
+          runId: "pr-1",
+          at: "2026-11-10T09:05:00Z",
+          classification: "unchanged",
+          defaultAction: "restore",
+          effectId: "eff-1",
+          before: "old",
+          after: "new",
+          currentPath: "",
+        },
+      ],
+    });
+    vi.mocked(restorePipelineRun).mockResolvedValue({
+      runId: "pr-1",
+      restored: [
+        {
+          path: "wiki/entropy.md",
+          classification: "unchanged",
+          effectId: "eff-2",
+          before: "new",
+          after: "old",
+        },
+      ],
+      skipped: [],
+      conflicted: [],
+      failed: [],
+    });
+    await render();
+
+    await act(async () => {
+      button(i18n.t("pipeline.restore.open")).click();
+    });
+    await act(async () => {});
+
+    expect(container.textContent).toContain("wiki/entropy.md");
+    expect(container.textContent).toContain(
+      i18n.t("pipeline.restore.classification.unchanged"),
+    );
+
+    await act(async () => {
+      button(i18n.t("pipeline.restore.apply")).click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(restorePipelineRun).mock.calls[0][0]).toBe("pr-1");
+    expect(vi.mocked(restorePipelineRun).mock.calls[0][1]).toEqual([
+      { path: "wiki/entropy.md", action: "restore", force: false },
+    ]);
+    expect(container.textContent).toContain(
+      i18n.t("pipeline.restore.done", { count: 1 }),
+    );
+  });
 
   it("shows the latest run's intent, status and stage", async () => {
     vi.mocked(fetchPipelineRuns).mockResolvedValue({ runs: [running] });

@@ -9,7 +9,7 @@ the next round starts from what the log now says.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
@@ -37,6 +37,7 @@ from noteagent.agent.model import (
     ModelClient,
     ModelEvent,
     ModelRequest,
+    ModelRetryEvent,
     ModelStreamError,
     ModelTextDelta,
     ToolCall,
@@ -50,21 +51,46 @@ from noteagent.agent.propose import (
     ProposeError,
     parse_proposal,
 )
+from noteagent.agent.run_marker import (
+    CANCELLED,
+    FAILED,
+    FINISHED,
+    INTERRUPTED,
+    RUNNING,
+    WAITING,
+    RunFingerprint,
+    RunMarker,
+    config_digest,
+    interrupted_marker,
+    last_content_entry_id,
+    marker_entry,
+    missing_tool_calls,
+    sections_digest,
+)
 from noteagent.agent.runtime import (
     BusyError,
     EventSink,
     Resume,
+    ResumeCheck,
     Retry,
     RunCancelled,
+    RunPaused,
     RunRef,
     RunRequest,
     RunResult,
+    RunResume,
     TraceSink,
     UserInput,
     busy_message,
 )
 from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
-from noteagent.agent.tools import Diagnostic, ToolContext, ToolRegistry, ToolResult
+from noteagent.agent.tools import (
+    Diagnostic,
+    ToolContext,
+    ToolRegistry,
+    ToolResult,
+    toolset_name,
+)
 from noteagent.agent.wait import (
     WaitState,
     completion_for,
@@ -170,6 +196,9 @@ class KernelRuntime:
         #: a final answer or a control action.
         max_turns: int = 50,
         compaction: CompactionLimits | None = None,
+        #: Non-secret project/config digests a run marker records. The kernel
+        #: stays generic: the composition root decides what the project is.
+        fingerprint: Mapping[str, str] | None = None,
     ) -> None:
         self._model = model
         self._trace = trace
@@ -184,18 +213,33 @@ class KernelRuntime:
         self._model_name = model_name
         self._max_turns = max_turns
         self._compaction = compaction or CompactionLimits()
+        self._fingerprint = dict(fingerprint or {})
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
         if isinstance(request, Retry):
             raise ValueError("no route opens a retry yet")
         session_id = request.session_id
-        cancel = self._registry.claim(session_id)
+        preclaimed = (
+            request.claim if isinstance(request, RunResume) else None
+        )
+        cancel = (
+            preclaimed
+            if preclaimed is not None
+            else self._registry.claim(session_id)
+        )
+        pause = request.pause
         run_id = self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
+            if isinstance(request, RunResume):
+                return self._run_crash_resume(
+                    request, sink, run_id, cancel, pause
+                )
             if isinstance(request, Resume):
-                return self._run_resume(request, sink, run_id, cancel)
-            return self._run_user(request, sink, run_id, cancel)
+                return self._run_resume(
+                    request, sink, run_id, cancel, pause
+                )
+            return self._run_user(request, sink, run_id, cancel, pause)
         finally:
             self._registry.release(session_id)
 
@@ -246,6 +290,7 @@ class KernelRuntime:
         sink: EventSink,
         run_id: str,
         cancel: Event,
+        pause: Event | None = None,
     ) -> RunResult:
         session_id = request.session_id
         content = request.content.strip()
@@ -258,7 +303,7 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel)
+        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
 
     def _run_resume(
         self,
@@ -266,6 +311,7 @@ class KernelRuntime:
         sink: EventSink,
         run_id: str,
         cancel: Event,
+        pause: Event | None = None,
     ) -> RunResult:
         """Continue a session after the job it waited on came back.
 
@@ -307,7 +353,111 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel)
+        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
+
+    def _run_crash_resume(
+        self,
+        request: RunResume,
+        sink: EventSink,
+        run_id: str,
+        cancel: Event,
+        pause: Event | None = None,
+    ) -> RunResult:
+        """Continue a run a crash left at its last committed turn.
+
+        An unfinished tool call has no result; it gets one that says the
+        outcome is unknown, and the model is told not to assume it ran. The old
+        marker stays where it is; the new run names it in ``resumes``.
+        """
+        session_id = request.session_id
+        try:
+            _check_cancel(cancel)
+            snapshot = self._sessions.load(session_id)
+            marker = interrupted_marker(
+                snapshot.entries, request.run_id
+            )
+            if marker is None:
+                raise ValueError(
+                    f"session {session_id} is not interrupted on "
+                    f"run {request.run_id}"
+                )
+            check = self._resume_check(marker, snapshot.entries)
+            if check.refusal:
+                raise ValueError(check.refusal)
+            missing = missing_tool_calls(
+                snapshot.entries, request.run_id
+            )
+            for call_id, name in missing:
+                self._sessions.append(
+                    session_id,
+                    {
+                        "type": "message",
+                        "role": "toolResult",
+                        "toolCallId": call_id,
+                        "name": name,
+                        "content": (
+                            "outcome unknown: the run was interrupted "
+                            "before this result was committed"
+                        ),
+                        "meta": {"interrupted": True},
+                    },
+                )
+            note = check.note
+            if missing:
+                note += (
+                    " The tool result(s) above have an unknown outcome; "
+                    "do not assume they ran."
+                )
+            return self._run_loop(
+                session_id,
+                run_id,
+                sink,
+                cancel,
+                resumes=request.run_id,
+                note=note,
+                pause=pause,
+            )
+        except RunCancelled:
+            return self._cancelled_result(session_id, run_id, sink, "")
+
+    def _resume_check(
+        self,
+        marker: RunMarker,
+        entries: Sequence[Mapping[str, object]],
+    ) -> ResumeCheck:
+        projection = project(entries)
+        current = self._current_fingerprint(projection.sections)
+        refusal = marker.fingerprint.refusal(
+            current, legacy_config=sections_digest(projection.sections)
+        )
+        if refusal:
+            return ResumeCheck(refusal=refusal)
+        note = (
+            "Resume after an interruption. Continue from the last "
+            "committed turn."
+        )
+        stale = marker.fingerprint.stale(current)
+        if stale:
+            note += (
+                " The "
+                + " and ".join(stale)
+                + " changed since it paused; re-read before relying on "
+                "earlier evidence."
+            )
+        return ResumeCheck(note=note)
+
+    def _current_fingerprint(
+        self, sections: Mapping[str, str]
+    ) -> RunFingerprint:
+        """What this kernel's environment assumes, for a marker or a resume."""
+        return RunFingerprint.from_mapping(
+            self._fingerprint,
+            model=self._model_name,
+            toolset=toolset_name(self._tools),
+            config_hash=config_digest(
+                self._fingerprint.get("configHash", ""), sections
+            ),
+        )
 
     def _run_loop(
         self,
@@ -315,11 +465,22 @@ class KernelRuntime:
         run_id: str,
         sink: EventSink,
         cancel: Event,
+        *,
+        resumes: str = "",
+        note: str = "",
+        pause: Event | None = None,
     ) -> RunResult:
         # What the current model call has streamed but not yet committed. A stop
         # keeps it, so the reader can see where the answer ended.
         partial: list[str] = []
         try:
+            self._mark(
+                session_id,
+                run_id,
+                RUNNING,
+                resumes=resumes,
+                note=note,
+            )
             sink(StatusEvent("thinking", "think"))
             model_calls = 0
             overflow_retried = False
@@ -328,18 +489,27 @@ class KernelRuntime:
 
             while True:
                 _check_cancel(cancel)
+                _check_pause(pause)
                 model_calls += 1
                 if model_calls > self._max_turns:
                     message = (
                         "the run exceeded "
                         f"{self._max_turns} model turns"
                     )
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note="max_turns_exceeded",
+                    )
                     sink(ErrorEvent("max_turns_exceeded", message))
                     return RunResult(
                         session_id, run_id, "failed", error=message
                     )
                 try:
-                    self._compact_if_needed(session_id, sink, cancel)
+                    self._compact_if_needed(
+                        session_id, sink, cancel, pause=pause
+                    )
                 except ModelStreamError as err:
                     return self._compaction_failure(
                         session_id, run_id, sink, err
@@ -358,7 +528,13 @@ class KernelRuntime:
                 partial.clear()
                 try:
                     assistant = collect(
-                        _tap(self._model.stream(model_request), sink, cancel, partial)
+                        _tap(
+                            self._model.stream(model_request),
+                            sink,
+                            cancel,
+                            pause,
+                            partial,
+                        )
                     )
                 except ModelStreamError as err:
                     if err.code == "cancelled":
@@ -376,7 +552,11 @@ class KernelRuntime:
                         overflow_retried = True
                         try:
                             compacted = self._compact_if_needed(
-                                session_id, sink, cancel, force=True
+                                session_id,
+                                sink,
+                                cancel,
+                                force=True,
+                                pause=pause,
                             )
                         except ModelStreamError as summary_err:
                             return self._compaction_failure(
@@ -385,6 +565,18 @@ class KernelRuntime:
                         if compacted:
                             # The prompt is smaller now; ask once more.
                             continue
+                    # The provider wrote this much before it failed. Keep it,
+                    # but mark it incomplete so nothing reads it as finished;
+                    # a retry here would repeat the text.
+                    self._commit_partial(
+                        session_id, "".join(partial), "incomplete"
+                    )
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note=err.code,
+                    )
                     sink(
                         ErrorEvent(
                             err.code,
@@ -431,6 +623,12 @@ class KernelRuntime:
                 answer = assistant.content.strip()
                 if not answer:
                     message = "the model returned no answer"
+                    self._mark(
+                        session_id,
+                        run_id,
+                        FAILED,
+                        note="model_error",
+                    )
                     sink(ErrorEvent("model_error", message))
                     return RunResult(session_id, run_id, "failed", error=message)
                 entry: dict[str, object] = {
@@ -446,6 +644,7 @@ class KernelRuntime:
                         "cacheReadTokens": assistant.usage.cache_read_tokens,
                     }
                 self._sessions.append(session_id, entry)
+                self._mark(session_id, run_id, FINISHED)
                 sink(
                     DoneEvent(
                         {"id": session_id}, {"id": run_id, "status": "completed"}
@@ -456,10 +655,55 @@ class KernelRuntime:
             return self._cancelled_result(
                 session_id, run_id, sink, "".join(partial)
             )
+        except RunPaused:
+            return self._paused_result(session_id, run_id, sink)
+        except Exception as err:
+            self._mark(
+                session_id,
+                run_id,
+                FAILED,
+                note=f"{type(err).__name__}: {err}"[:200],
+            )
+            raise
 
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
         """The tools the model may call, with the control action beside them."""
         return (PROPOSE_TOOL,) + self._tools.model_tools()
+
+    def _mark(
+        self,
+        session_id: str,
+        run_id: str,
+        state: str,
+        *,
+        note: str = "",
+        resumes: str = "",
+        reason: str = "",
+    ) -> None:
+        """Record where the run stands, without making the marker a condition.
+
+        The transcript is the truth; a marker that cannot be written is a lost
+        recovery hint, not a reason to lose the answer that was just committed.
+        """
+        try:
+            snapshot = self._sessions.load(session_id)
+            last = last_content_entry_id(snapshot.entries)
+            fingerprint = self._current_fingerprint(
+                project(snapshot.entries).sections
+            )
+            marker = RunMarker(
+                run_id=run_id,
+                state=state,
+                last_entry_id=last,
+                fingerprint=fingerprint,
+                resumes=resumes,
+                note=note,
+                reason=reason,
+                created_at=iso_timestamp(self._clock),
+            )
+            self._sessions.append(session_id, marker_entry(marker))
+        except Exception:
+            logger.exception("the run marker could not be written")
 
     def _read_proposal(
         self, session_id: str, call: ToolCall
@@ -521,6 +765,7 @@ class KernelRuntime:
                 },
             )
         wait = self._record_wait(session_id, proposal)
+        self._mark(session_id, run_id, WAITING)
         sink(WaitEvent(wait))
         sink(
             DoneEvent(
@@ -676,6 +921,7 @@ class KernelRuntime:
         """End the run because the summary call could not finish."""
         if err.code == "cancelled":
             raise RunCancelled("run cancelled") from err
+        self._mark(session_id, run_id, FAILED, note=err.code)
         sink(
             ErrorEvent(
                 "compaction_failed",
@@ -685,6 +931,26 @@ class KernelRuntime:
         )
         return RunResult(session_id, run_id, "failed", error=str(err))
 
+    def _commit_partial(
+        self,
+        session_id: str,
+        text: str,
+        stop_reason: str,
+    ) -> None:
+        """Keep what was written before a stop, bounded and marked as partial."""
+        value = text.strip()
+        if not value:
+            return
+        self._sessions.append(
+            session_id,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": value[:MAX_ABORTED_CHARS],
+                "stopReason": stop_reason,
+            },
+        )
+
     def _cancelled_result(
         self,
         session_id: str,
@@ -693,19 +959,31 @@ class KernelRuntime:
         partial: str,
     ) -> RunResult:
         """Keep the answer that was being written, then end the run."""
-        text = partial.strip()
-        if text:
-            self._sessions.append(
-                session_id,
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": text[:MAX_ABORTED_CHARS],
-                    "stopReason": "aborted",
-                },
-            )
+        self._commit_partial(session_id, partial, "aborted")
+        self._mark(session_id, run_id, CANCELLED, note="cancelled")
         sink(ErrorEvent("cancelled", "the run was cancelled", retryable=True))
         return RunResult(session_id, run_id, "cancelled")
+
+    def _paused_result(
+        self,
+        session_id: str,
+        run_id: str,
+        sink: EventSink,
+    ) -> RunResult:
+        """Stop at the last committed turn; a reader that comes back resumes."""
+        self._mark(
+            session_id,
+            run_id,
+            INTERRUPTED,
+            reason="client_disconnect",
+        )
+        sink(
+            DoneEvent(
+                {"id": session_id},
+                {"id": run_id, "status": "interrupted"},
+            )
+        )
+        return RunResult(session_id, run_id, "interrupted")
 
     def compact(self, session_id: str, instructions: str = "") -> bool:
         """Summarize the older history now, on the reader's request.
@@ -733,7 +1011,9 @@ class KernelRuntime:
         *,
         force: bool = False,
         instructions: str = "",
+        pause: Event | None = None,
     ) -> bool:
+        _check_pause(pause)
         snapshot = self._sessions.load(session_id)
         cut_id = choose_cut(snapshot.entries, self._compaction)
         if cut_id is None:
@@ -784,20 +1064,32 @@ class KernelRuntime:
         if run_section.strip():
             system += "\n\nCurrent run state:\n" + run_section
         sink(StatusEvent("compacting earlier turns", "think"))
-        summary_message = collect(
-            self._model.stream(
-                ModelRequest(
-                    model=self._model_name,
-                    messages=(
-                        Message("system", system),
-                        Message("user", context or "(no earlier messages)"),
+        try:
+            summary_message = collect(
+                _retry_tap(
+                    self._model.stream(
+                        ModelRequest(
+                            model=self._model_name,
+                            messages=(
+                                Message("system", system),
+                                Message(
+                                    "user",
+                                    context or "(no earlier messages)",
+                                ),
+                            ),
+                            max_tokens=self._compaction.max_summary_tokens,
+                            session_id=session_id,
+                            cancel=cancel,
+                            pause=pause,
+                        )
                     ),
-                    max_tokens=self._compaction.max_summary_tokens,
-                    session_id=session_id,
-                    cancel=cancel,
+                    sink,
                 )
             )
-        )
+        except ModelStreamError:
+            _check_pause(pause)
+            raise
+        _check_pause(pause)
         summary = bounded_summary(
             summary_message.content, self._compaction
         )
@@ -839,17 +1131,50 @@ def _tap(
     stream: Iterable[ModelEvent],
     sink: EventSink,
     cancel: Event,
+    pause: Event | None,
     partial: list[str],
 ) -> Iterator[ModelEvent]:
     """Report text as it arrives, keep what a stop would keep, pass it on."""
     for event in stream:
         _check_cancel(cancel)
+        _check_pause(pause)
+        if isinstance(event, ModelRetryEvent):
+            _retry_status(event, sink)
         if isinstance(event, ModelTextDelta):
             partial.append(event.text)
             sink(TokenEvent(event.text))
+        yield event
+    # An adapter that stopped on pause returns without a done event; turn that
+    # into the pause, not into a truncated answer.
+    _check_pause(pause)
+
+
+def _retry_status(event: ModelRetryEvent, sink: EventSink) -> None:
+    sink(
+        StatusEvent(
+            f"model call failed ({event.code}); retrying "
+            f"{event.attempt}/{event.max_retries} "
+            f"in {event.delay_s:.1f}s",
+            "think",
+        )
+    )
+
+
+def _retry_tap(
+    stream: Iterable[ModelEvent], sink: EventSink
+) -> Iterator[ModelEvent]:
+    """Report a retry in the summary call without streaming its tokens."""
+    for event in stream:
+        if isinstance(event, ModelRetryEvent):
+            _retry_status(event, sink)
         yield event
 
 
 def _check_cancel(cancel: Event) -> None:
     if cancel.is_set():
         raise RunCancelled("run cancelled")
+
+
+def _check_pause(pause: Event | None) -> None:
+    if pause is not None and pause.is_set():
+        raise RunPaused("run paused")

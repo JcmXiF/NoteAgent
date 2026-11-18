@@ -24,7 +24,7 @@ from starlette.background import BackgroundTask
 from noteagent import __version__
 from noteagent.acquire.intake.local_file import MAX_LOCAL_FILES
 from noteagent.agent.model import ModelStreamError
-from noteagent.agent.runtime import BusyError, UserInput, busy_message
+from noteagent.agent.runtime import BusyError, RunResume, UserInput, busy_message
 from noteagent.acquire.search_config import SearchConfigError, SearchError
 from noteagent.acquire.tools.fetchers.html import MAX_HTML_BYTES, MAX_PDF_BYTES
 from noteagent.acquire.types import ProviderNotConfiguredError
@@ -104,6 +104,8 @@ from noteagent.api.projects import (
 )
 from noteagent.api.rag_settings import rag_rebuild_payload, rag_status_payload
 from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
+from noteagent.effects.journal import EffectJournal, effect_payload
+from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
@@ -118,12 +120,15 @@ from noteagent.api.session_access import (
     migrate_sessions,
     open_session_store,
     project_sessions,
+    recover_active_project_runs,
+    resume_refusal,
     session_busy,
     session_runtime,
     session_waits,
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
+from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
@@ -500,8 +505,29 @@ class PageRestoreBody(BaseModel):
     baseRevision: str = ""
 
 
+class RunRestorePageBody(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    action: str = "restore"
+    force: bool = False
+
+
+class RunRestoreBody(BaseModel):
+    """Which run to undo, and which of its pages the reader chose."""
+
+    runId: str = Field(..., min_length=1, max_length=200)
+    pages: list[RunRestorePageBody] = Field(
+        default_factory=list, max_length=500
+    )
+
+
 class SessionQueryBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=100_000)
+
+
+class RunIdBody(BaseModel):
+    """Which interrupted run the reader wants to resume or abandon."""
+
+    runId: str = Field(..., min_length=1, max_length=200)
 
 
 class CompactBody(BaseModel):
@@ -642,8 +668,12 @@ async def _app_lifespan(_app: FastAPI):
 
     # An upgrade brings the old chats across before the socket answers.
     migrate_active_project_chats(_app.state.deps)
-    # A run a previous core left open is not still running, and originals that
-    # predate the material log get a record; both before any route can read them.
+    # A crash leaves a run's last marker at running; recover its terminal state
+    # before the list and the session view can be read.
+    recover_active_project_runs(_app.state.deps)
+    # A pipeline run a previous core left open is not still running, and
+    # originals that predate the material log get a record; both before any
+    # route can read them.
     prepare_active_project(_app.state.deps)
 
     stop = asyncio.Event()
@@ -861,6 +891,33 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise _pipeline_not_found(run_id)
         return run_to_dict(run)
 
+    @app.get("/api/v1/pipeline/runs/{run_id}/restore/preview")
+    def pipeline_restore_preview(run_id: str) -> dict[str, object]:
+        """How the pages this run wrote stand now, before undoing them."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        return service.restore_preview(run_id)
+
+    @app.post("/api/v1/pipeline/runs/{run_id}/restore")
+    def pipeline_restore(
+        run_id: str, body: RunRestoreBody
+    ) -> dict[str, object]:
+        """Undo the selected pages of a finished run."""
+        service = pipeline_service(deps)
+        if service.get(run_id) is None:
+            raise _pipeline_not_found(run_id)
+        if body.runId != run_id:
+            raise CodedHTTPException(
+                400,
+                f"run id in body does not match the path: {body.runId}",
+                code="pipeline.invalid",
+            )
+        return service.restore(
+            run_id,
+            [page.model_dump() for page in body.pages],
+        )
+
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:
         """Every session in the active project, newest first."""
@@ -996,6 +1053,108 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/v1/sessions/{session_id}/resume")
+    def kernel_session_resume(
+        session_id: str, body: RunIdBody
+    ) -> StreamingResponse:
+        """Continue the run a crash left interrupted, from its last turn."""
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        claim = None
+        if deps.runtime is None:
+            # Claim before the response is sent: two resumes, or a resume racing
+            # an abandon, then see one busy answer rather than an SSE error.
+            try:
+                claim = deps.runs.claim(session_id)
+            except BusyError as err:
+                raise _session_busy_refusal(session_id) from err
+        elif session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        try:
+            if interrupted_run(store, session_id, body.runId) is None:
+                raise CodedHTTPException(
+                    409,
+                    f"session {session_id} is not interrupted on run {body.runId}",
+                    code="session.notInterrupted",
+                    params={"id": session_id, "run": body.runId},
+                )
+            runtime = session_runtime(deps, store, layout)
+            refusal = resume_refusal(
+                deps, store, layout, session_id, body.runId
+            )
+            if refusal:
+                raise CodedHTTPException(
+                    409,
+                    refusal,
+                    code="session.notResumable",
+                    params={"id": session_id, "run": body.runId},
+                )
+        except LlmConfigError as err:
+            if claim is not None:
+                deps.runs.release(session_id)
+            raise http_error(err, 503) from err
+        except Exception:
+            if claim is not None:
+                deps.runs.release(session_id)
+            raise
+        return StreamingResponse(
+            iter_run_sse(
+                runtime,
+                RunResume(session_id, body.runId, claim=claim),
+                store=store,
+                waits=session_waits(deps, store),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+            # A stream that never starts still releases the run slot the route
+            # took; the kernel already releases it when the run ends.
+            background=BackgroundTask(deps.runs.release, session_id),
+        )
+
+    @app.post("/api/v1/sessions/{session_id}/abandon")
+    def kernel_session_abandon(
+        session_id: str, body: RunIdBody
+    ) -> dict[str, object]:
+        """Stop waiting on an interrupted run; the transcript is left as it is."""
+        layout = active_layout(deps)
+        store = open_session_store(deps, session_id, layout=layout)
+        claim = None
+        if deps.runtime is None:
+            try:
+                claim = deps.runs.claim(session_id)
+            except BusyError as err:
+                raise _session_busy_refusal(session_id) from err
+        elif session_busy(deps, session_id):
+            raise _session_busy_refusal(session_id)
+        try:
+            marker, changed = abandon_run(
+                store, session_id, body.runId, clock=deps.clock
+            )
+        finally:
+            if claim is not None:
+                deps.runs.release(session_id)
+        if marker is None:
+            raise CodedHTTPException(
+                409,
+                f"session {session_id} is not interrupted on run {body.runId}",
+                code="session.notInterrupted",
+                params={"id": session_id, "run": body.runId},
+            )
+        return {
+            "abandoned": changed,
+            "runId": marker.run_id,
+            "session": session_payload(
+                store,
+                session_id,
+                busy=session_busy(deps, session_id),
+                waits=session_waits(deps, store),
+            ),
+        }
 
     @app.post("/api/v1/sessions/{session_id}/cancel")
     def kernel_session_cancel(session_id: str) -> dict[str, bool]:
@@ -1366,6 +1525,43 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise http_error(err, 404) from err
         except ValueError as err:
             raise http_error(err, 400) from err
+
+    @app.get("/api/projects/{name}/effects")
+    @app.get("/api/v1/projects/{name}/effects")
+    def project_effects(
+        name: str,
+        runId: str = Query("", max_length=200),
+        kind: str = Query("", max_length=80),
+        status: str = Query("", max_length=40),
+    ) -> dict[str, object]:
+        journal = EffectJournal(require_project_layout(name))
+        return {
+            "effects": [
+                effect_payload(effect)
+                for effect in journal.query(
+                    run_id=runId, kind=kind, status=status
+                )
+            ]
+        }
+
+    @app.get("/api/projects/{name}/effects/restore/preview")
+    @app.get("/api/v1/projects/{name}/effects/restore/preview")
+    def project_effects_restore_preview(
+        name: str,
+        runId: str = Query(..., min_length=1, max_length=200),
+    ) -> dict[str, object]:
+        return preview_restore(require_project_layout(name), runId)
+
+    @app.post("/api/projects/{name}/effects/restore")
+    @app.post("/api/v1/projects/{name}/effects/restore")
+    def project_effects_restore(
+        name: str, body: RunRestoreBody
+    ) -> dict[str, object]:
+        return restore_run(
+            require_project_layout(name),
+            body.runId,
+            [page.model_dump() for page in body.pages],
+        )
 
     @app.get("/api/projects/{name}/search")
     def project_search(

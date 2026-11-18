@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,6 +85,13 @@ class RecordWriteTests(unittest.TestCase):
     def _project(self, tmp: str):
         return init_project(Path(tmp) / "demo")
 
+    def _last_row(self, layout) -> dict[str, object]:
+        return json.loads(
+            layout.snapshot_log.read_text(
+                encoding="utf-8"
+            ).splitlines()[-1]
+        )
+
     def test_a_write_notes_what_it_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = self._project(tmp)
@@ -130,6 +138,79 @@ class RecordWriteTests(unittest.TestCase):
             self.assertEqual(entry.before, "")
             self.assertEqual(kept_text(layout, entry.after), PAGE)
 
+    def test_a_write_can_name_its_effect_run_and_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = self._project(tmp)
+            entry = record_write(
+                layout,
+                PAGE_PATH,
+                before=keep_before(layout, PAGE),
+                after_text=NEWER,
+                mode="edit",
+                by="person",
+                effect_id="eff-7",
+                run_id="run-2",
+                plan_revision="plan-3",
+            )
+            assert entry is not None
+
+            self.assertEqual(entry.effect_id, "eff-7")
+            self.assertEqual(entry.run_id, "run-2")
+            self.assertEqual(entry.plan_revision, "plan-3")
+            raw = self._last_row(layout)
+            self.assertEqual(raw["effectId"], "eff-7")
+            self.assertEqual(raw["runId"], "run-2")
+            self.assertEqual(raw["planRevision"], "plan-3")
+            loaded = page_snapshots(layout, PAGE_PATH)[0]
+            self.assertEqual(loaded.effect_id, "eff-7")
+            self.assertEqual(loaded.run_id, "run-2")
+            self.assertEqual(loaded.plan_revision, "plan-3")
+
+    def test_a_write_without_a_context_keeps_the_old_row_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = self._project(tmp)
+            entry = record_write(
+                layout,
+                PAGE_PATH,
+                before=keep_before(layout, PAGE),
+                after_text=NEWER,
+                mode="edit",
+                by="person",
+            )
+            assert entry is not None
+
+            raw = self._last_row(layout)
+            self.assertNotIn("effectId", raw)
+            self.assertNotIn("runId", raw)
+            self.assertNotIn("planRevision", raw)
+
+    def test_a_row_without_the_new_fields_still_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = self._project(tmp)
+            layout.snapshot_log.parent.mkdir(parents=True, exist_ok=True)
+            layout.snapshot_log.write_text(
+                json.dumps(
+                    {
+                        "at": "2026-11-18T09:00:00Z",
+                        "area": "wiki",
+                        "path": PAGE_PATH,
+                        "by": "agent",
+                        "mode": "replace",
+                        "before": "",
+                        "after": blob_digest(NEWER),
+                        "bytes": len(NEWER.encode("utf-8")),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            entry = page_snapshots(layout, PAGE_PATH)[0]
+
+            self.assertEqual(entry.effect_id, "")
+            self.assertEqual(entry.run_id, "")
+            self.assertEqual(entry.plan_revision, "")
+
     def test_the_pipeline_notes_its_own_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = self._project(tmp)
@@ -144,6 +225,23 @@ class RecordWriteTests(unittest.TestCase):
 
             self.assertEqual(entry.by, "agent")
             self.assertEqual(entry.mode, "replace")
+
+    def test_the_pipeline_can_name_its_effect_and_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = self._project(tmp)
+            entry = note_agent_write(
+                layout,
+                PAGE_PATH,
+                before=keep_before(layout, PAGE),
+                after_text=NEWER,
+                mode="replace",
+                effect_id="eff-8",
+                run_id="run-3",
+            )
+            assert entry is not None
+
+            self.assertEqual(entry.effect_id, "eff-8")
+            self.assertEqual(entry.run_id, "run-3")
 
 
 class PageSnapshotsTests(unittest.TestCase):

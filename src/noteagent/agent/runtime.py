@@ -8,8 +8,9 @@ all cross it the same way, with the same request and the same sink.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from threading import Event
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 from noteagent.agent.events import RunEvent
@@ -36,6 +37,10 @@ class RunCancelled(RuntimeError):
     """The run stopped because it was asked to."""
 
 
+class RunPaused(RuntimeError):
+    """The run stopped at a boundary because its reader went away."""
+
+
 @dataclass(frozen=True, slots=True)
 class UserInput:
     """A person asked something in an existing session."""
@@ -43,6 +48,10 @@ class UserInput:
     session_id: str
     content: str
     on_busy: OnBusy = OnBusy.REJECT
+    #: Set by the stream that owns this run when its reader disconnects. The
+    #: kernel stops at the next committed boundary and leaves an interrupted
+    #: marker; a stream that never owns the run never reads it.
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +61,22 @@ class Resume:
     session_id: str
     wait_id: str
     on_busy: OnBusy = OnBusy.QUEUE
+    pause: Event | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RunResume:
+    """A crashed run continues from its last committed turn.
+
+    Not the wait's ``Resume``: there is no job to wait for, only a run marker
+    and a transcript whose unfinished tool calls become ``outcome unknown``.
+    """
+
+    session_id: str
+    run_id: str
+    pause: Event | None = field(default=None, repr=False, compare=False)
+    #: A run slot the route already claimed; the kernel must not claim twice.
+    claim: Event | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +86,14 @@ class Retry:
     session_id: str
     on_busy: OnBusy = OnBusy.REJECT
     reason: str = ""
+    pause: Event | None = field(default=None, repr=False, compare=False)
 
 
-RunRequest: TypeAlias = UserInput | Resume | Retry
+RunRequest: TypeAlias = UserInput | Resume | RunResume | Retry
 
-RunStatus: TypeAlias = Literal["completed", "waiting", "failed", "cancelled"]
+RunStatus: TypeAlias = Literal[
+    "completed", "waiting", "failed", "cancelled", "interrupted"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +105,19 @@ class RunResult:
     status: RunStatus
     wait_id: str = ""
     error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeCheck:
+    """What an interrupted run's environment comparison found.
+
+    ``refusal`` means the run cannot continue against the current project,
+    model, toolset or prompt config. ``note`` is what the model reads: a plain
+    resume sentence, plus a warning when the wiki or sources moved.
+    """
+
+    note: str = ""
+    refusal: str = ""
 
 
 #: Where a run reports while it runs. The API maps it onto an SSE queue; a test

@@ -21,7 +21,11 @@ from noteagent.ingest.confirmed import ingest_confirmed
 from noteagent.ingest.frontmatter import parse_inline_list, parse_page
 from noteagent.ingest.topic_map import map_clips
 from noteagent.pipeline.acquire import AcquireStage
-from noteagent.pipeline.confirm import compile_result_from, store_for_compile
+from noteagent.pipeline.confirm import (
+    compile_result_from,
+    pipeline_write_context,
+    store_for_compile,
+)
 from noteagent.pipeline.framing import FrameStage
 from noteagent.pipeline.planning import PlanStage
 from noteagent.project.init import init_project
@@ -154,6 +158,7 @@ def _writing_compile():
             store=store,
             generation_text=GENERATION,
             cancel=cancel,
+            write_context=pipeline_write_context(confirmation),
         )
         return compile_result_from(result)
 

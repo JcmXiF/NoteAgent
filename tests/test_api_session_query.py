@@ -78,9 +78,35 @@ class SessionQueryTests(unittest.TestCase):
         )
         self.assertEqual(done["session"]["messages"][-1]["content"], "答案")
         self.assertEqual(
-            [entry["role"] for entry in store.load("s1").entries],
+            [
+                entry["role"]
+                for entry in store.load("s1").entries
+                if entry.get("type") == "message"
+            ],
             ["user", "assistant"],
         )
+
+    def test_a_run_marker_records_the_configured_model(self) -> None:
+        store = FakeSessionStore()
+        store.create("s1")
+        deps = AppDeps(
+            sessions=store,
+            model=FauxModelClient.text("答案"),
+            settings={"model": "faux-model"},
+        )
+
+        response = TestClient(create_app(deps)).post(
+            "/api/v1/sessions/s1/query", json={"content": "问题"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        markers = [
+            entry
+            for entry in store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+        self.assertTrue(markers)
+        self.assertEqual(markers[0]["model"], "faux-model")
 
     def test_a_model_failure_is_an_error_event_and_no_answer_entry(self) -> None:
         store = FakeSessionStore()
@@ -104,7 +130,11 @@ class SessionQueryTests(unittest.TestCase):
         self.assertEqual(events[-1][1]["code"], "model_error")
         self.assertTrue(events[-1][1]["retryable"])
         self.assertEqual(
-            [entry["role"] for entry in store.load("s1").entries],
+            [
+                entry["role"]
+                for entry in store.load("s1").entries
+                if entry.get("type") == "message"
+            ],
             ["user"],
         )
 
@@ -236,7 +266,11 @@ class WikiToolApiTests(unittest.TestCase):
         self.assertEqual(step["cards"][0]["path"], "wiki/concepts/entropy.md")
         entries = self.store.load("s1").entries
         self.assertEqual(
-            [entry["role"] for entry in entries],
+            [
+                entry["role"]
+                for entry in entries
+                if entry.get("type") == "message"
+            ],
             ["user", "assistant", "toolResult", "assistant"],
         )
 

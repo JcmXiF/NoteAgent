@@ -69,6 +69,25 @@ class SessionRoundTripTests(_StoreCase):
         self.assertTrue(str(entry["id"]).startswith("e-"))
         self.assertEqual(entry["ts"], NOW)
 
+    def test_a_run_marker_round_trips(self) -> None:
+        self.store.create("s1")
+        self.store.append(
+            "s1",
+            {
+                "type": "run_marker",
+                "runId": "run-1",
+                "state": "running",
+                "lastEntryId": "",
+            },
+        )
+
+        entry = self.store.load("s1").entries[-1]
+
+        self.assertEqual(entry["type"], "run_marker")
+        self.assertEqual(entry["runId"], "run-1")
+        self.assertEqual(entry["state"], "running")
+        self.assertTrue(str(entry["id"]).startswith("e-"))
+
     def test_an_unnamed_session_takes_its_first_question(self) -> None:
         self.store.create("s1")
         self.store.append(

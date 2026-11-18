@@ -12,6 +12,8 @@ import json
 import re
 import uuid
 from collections.abc import Iterator, Mapping
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -130,6 +132,9 @@ class OpenAIModelClient:
                         _error_code(response.status_code, detail),
                         f"model HTTP {response.status_code}: {detail[:800]}",
                         retryable=_retryable(response.status_code),
+                        retry_after_s=_retry_after(
+                            response.headers.get("retry-after")
+                        ),
                     )
                     return
                 yield ModelStartEvent(request.model or self._config.model)
@@ -257,6 +262,9 @@ def _stream_events(
     for payload in iter_sse_payloads(response, on_done=mark_done):
         if request.cancel is not None and request.cancel.is_set():
             raise ModelStreamError("cancelled", "the run was cancelled", retryable=True)
+        if request.pause is not None and request.pause.is_set():
+            # The kernel turns this short stream into an interrupted run.
+            return
         raw_usage = payload.get("usage")
         if isinstance(raw_usage, Mapping):
             usage = _usage(raw_usage)
@@ -406,7 +414,26 @@ def _int(value: object) -> int:
 
 
 def _retryable(status: int) -> bool:
-    return status in (408, 409, 425, 429) or status >= 500
+    # 409/425 are request/state conflicts, not the transient failures the loop
+    # retries; only timeouts, ordinary rate limits and server errors are.
+    return status in (408, 429) or status >= 500
+
+
+def _retry_after(value: str | None) -> float | None:
+    """The provider's ``retry-after``, in seconds or as an HTTP date."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        try:
+            moment = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return max(0.0, (moment - datetime.now(timezone.utc)).total_seconds())
+    return max(0.0, seconds)
 
 
 #: How providers word "this prompt did not fit". The loop compacts and asks
@@ -418,8 +445,17 @@ _CONTEXT_OVERFLOW = re.compile(
     re.IGNORECASE,
 )
 
+#: A 429 that is about the account's spend, not a transient rate.
+_SPEND_LIMIT = re.compile(
+    r"insufficient.?quota|spend limit|credit balance|billing|"
+    r"exceeded your current quota|quota exceeded",
+    re.IGNORECASE,
+)
+
 
 def _error_code(status: int, detail: str) -> str:
     if status in (400, 413) and _CONTEXT_OVERFLOW.search(detail):
         return "context_overflow"
+    if status == 429 and _SPEND_LIMIT.search(detail):
+        return "usage_limit"
     return "model_error"

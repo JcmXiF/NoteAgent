@@ -293,6 +293,8 @@
       "done": "Done"
     },
     "materials": "Materials {{count}}",
+    "toWrite": "Pages to write {{count}}",
+    "written": "Written pages {{count}}",
     "material": {
       "staged": "Staged",
       "framed": "Framed",
@@ -312,6 +314,37 @@
       "auto": "Automatic",
       "manual": "Manual",
       "manualHint": "In manual mode, pick cards in Sources."
+    },
+    "restore": {
+      "open": "Roll back this run",
+      "hint": "Only pages that still say what this run wrote are restored by default; tick Force to overwrite a later change.",
+      "restore": "Restore",
+      "force": "Force",
+      "apply": "Restore selected",
+      "loadFailed": "The rollback preview could not be read.",
+      "failed": "The rollback failed.",
+      "done": "Restored {{count}} page(s).",
+      "conflicted": "{{count}} conflict(s) skipped.",
+      "failedCount": "{{count}} page(s) failed.",
+      "movedTo": "Now at {{path}}",
+      "kind": "Effect: {{kind}}",
+      "run": "Run {{runId}}",
+      "at": "{{at}}",
+      "defaultAction": "Default: {{action}}",
+      "default": {
+        "restore": "restore",
+        "skip": "skip"
+      },
+      "cannotRestore": "This page cannot be restored from the history.",
+      "classification": {
+        "unchanged": "Unchanged since this run",
+        "changed_by_person": "Edited by a person afterwards",
+        "changed_by_run": "Written by another run afterwards",
+        "changed_by_restore": "Restored afterwards",
+        "unknown_external": "Changed outside the app afterwards",
+        "missing": "The page is gone",
+        "renamed": "The page was renamed"
+      }
     }
   },
   "plan": {
@@ -589,6 +622,7 @@
     "send": "Ask",
     "stop": "Stop",
     "aborted": "Stopped before this answer was finished.",
+    "incomplete": "The model stream failed; this is only the part written before it.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
@@ -1475,7 +1509,9 @@
       "session": {
         "exists": "That session already exists.",
         "notFound": "That session is no longer there.",
-        "invalidId": "That session name cannot be used."
+        "invalidId": "That session name cannot be used.",
+        "notInterrupted": "That run is no longer waiting to be resumed.",
+        "notResumable": "The project, model, tools or settings changed since that run paused, so it cannot resume."
       },
       "plan": {
         "noSelection": "Nothing has been selected, so no plan can be made. Select passages in Sources first."
@@ -1524,6 +1560,9 @@
         "nameNotAllowed": "That page name cannot be used. Choose another.",
         "bodyStartsFence": "The body cannot start with a line of dashes, which would be read as this page's settings.",
         "versionMissing": "That version is no longer there."
+      },
+      "snapshot": {
+        "missing": "That saved version is no longer there."
       },
       "trash": {
         "unknown": "That item is no longer in the trash.",

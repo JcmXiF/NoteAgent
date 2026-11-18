@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from noteagent.ingest.auto_ingest import IngestResult
 from noteagent.ingest.clips import (
@@ -28,10 +30,12 @@ from noteagent.pipeline.confirm import (
     compile_result_from,
     confirmation_digest,
     confirmation_payload,
+    default_compile,
     derive_confirmation,
     store_for_compile,
 )
 from noteagent.project.init import init_project
+from noteagent.project.layout import ProjectLayout
 
 INTENT = "熵"
 
@@ -128,6 +132,25 @@ def _confirm(
         store=store,
         overrides=overrides or [],
     )
+
+
+class DefaultCompileTests(unittest.TestCase):
+    def test_the_write_path_is_given_the_run_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            confirmation = _confirm(tmp)
+            layout = ProjectLayout(Path(tmp) / "projects" / "demo")
+            empty = SimpleNamespace(write=SimpleNamespace(written=(), warnings=()))
+
+            with patch(
+                "noteagent.pipeline.confirm.ingest_confirmed",
+                return_value=empty,
+            ) as ingest:
+                default_compile(layout, confirmation)
+
+        context = ingest.call_args.kwargs["write_context"]
+        self.assertEqual(context.run_id, "pr-1")
+        self.assertEqual(context.actor, "pipeline")
+        self.assertEqual(context.plan_revision, "1")
 
 
 class ConfirmationTests(unittest.TestCase):

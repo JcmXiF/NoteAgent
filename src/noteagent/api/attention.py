@@ -1,10 +1,11 @@
 """The one place a reader is told what needs them.
 
-Three queues used to speak separately: sources that changed after they were
-compiled, a compile that was confirmed and then interrupted, and the wiki's own
-check. They are one question to the person reading them — "what is waiting on
-me" — so they are counted together, and the panel shows one number. Nothing here
-acts: each item still carries the action that resolves it.
+Five queues used to speak separately: sources that changed after they were
+compiled, a compile that was confirmed and then interrupted, captures that need
+a sign-in, a chat run a crash left unfinished, and the wiki's own check. They
+are one question to the person reading them — "what is waiting on me" — so they
+are counted together, and the panel shows one number. Nothing here acts: each
+item still carries the action that resolves it.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from noteagent.ingest.revision_inbox import revision_inbox_payload
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.doctor import doctor_payload, doctor_project
 from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.recovery import interrupted_runs_for_layout
 
 __all__ = ["attention_payload"]
 
@@ -32,10 +34,14 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
     doctor: dict[str, Any] | None = None
     if check:
         doctor = doctor_payload(doctor_project(layout), limit=DOCTOR_LIMIT)
+    interrupted = [
+        item.payload() for item in interrupted_runs_for_layout(layout)
+    ]
 
     revision_count = int(revision.get("openCount") or 0)
     recovery_count = int(recovery.get("openCount") or 0)
     capture_count = int(capture.get("openCount") or 0)
+    interrupted_count = len(interrupted)
     # An orphan page and a page from an older project layout are what a healthy
     # project looks like, so they are not things to do.
     doctor_count = 0
@@ -47,11 +53,19 @@ def attention_payload(layout: ProjectLayout, *, check: bool = True) -> dict[str,
         "recovery": recovery,
         "capture": capture,
         "doctor": doctor,
+        "interruptedRuns": interrupted,
         "counts": {
             "revision": revision_count,
             "recovery": recovery_count,
             "capture": capture_count,
             "doctor": doctor_count,
+            "interrupted": interrupted_count,
         },
-        "total": revision_count + recovery_count + capture_count + doctor_count,
+        "total": (
+            revision_count
+            + recovery_count
+            + capture_count
+            + doctor_count
+            + interrupted_count
+        ),
     }

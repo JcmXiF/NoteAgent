@@ -15,6 +15,15 @@ export type PipelineQueryMode = "precise" | "model";
 export type PipelineMaterialMode = "manual" | "auto";
 export type PipelineStartedBy = "human" | "session";
 
+/** What the compile wrote, skipped and failed, and the effects it left. */
+export type PipelineRunResult = {
+  planRevision?: number;
+  written?: string[];
+  skipped?: { path: string; reason: string }[];
+  failed?: { path: string; reason: string }[];
+  effectIds?: string[];
+};
+
 /** One run of the active project's pipeline. */
 export type PipelineRun = {
   id: string;
@@ -31,6 +40,76 @@ export type PipelineRun = {
   error: string;
   /** What the stages have done so far: acquired, skipped and why. */
   detail: Record<string, unknown>;
+  /** What the compile did, once a person approved it. */
+  result?: PipelineRunResult;
+};
+
+export type PipelineConfirmationPage = {
+  name: string;
+  slug: string;
+  wikiPath: string;
+  action: "write" | "mention" | "skip";
+  sectionIds: string[];
+  sections: { id: string; title: string }[];
+};
+
+export type PipelineConfirmation = {
+  runId: string;
+  intent: string;
+  planRevision: number;
+  pages: PipelineConfirmationPage[];
+};
+
+export type PipelineRestoreClassification =
+  | "unchanged"
+  | "changed_by_person"
+  | "changed_by_run"
+  | "changed_by_restore"
+  | "unknown_external"
+  | "missing"
+  | "renamed";
+
+export type PipelineRestorePage = {
+  path: string;
+  kind: string;
+  runId: string;
+  at: string;
+  classification: PipelineRestoreClassification;
+  defaultAction: "restore" | "skip";
+  effectId: string;
+  before: string;
+  after: string;
+  currentPath: string;
+};
+
+export type PipelineRestorePreview = {
+  runId: string;
+  pages: PipelineRestorePage[];
+};
+
+export type PipelineRestoreChoice = {
+  path: string;
+  action: "restore" | "skip";
+  force?: boolean;
+};
+
+export type PipelineRestoreResult = {
+  runId: string;
+  restored: {
+    path: string;
+    classification: string;
+    effectId: string;
+    before: string;
+    after: string;
+  }[];
+  skipped: { path: string; reason: string }[];
+  conflicted: {
+    path: string;
+    classification: string;
+    currentPath?: string;
+    error?: string;
+  }[];
+  failed: { path: string; error: string }[];
 };
 
 export type PipelineStartInput = {
@@ -82,6 +161,32 @@ export function cancelPipelineRun(id: string): Promise<PipelineRun> {
   return postJson<PipelineRun>(
     `/v1/pipeline/runs/${encodeURIComponent(id)}/cancel`,
     {},
+  );
+}
+
+export function fetchPipelineConfirmation(
+  runId: string,
+): Promise<PipelineConfirmation> {
+  return getJson<PipelineConfirmation>(
+    `/v1/pipeline/runs/${encodeURIComponent(runId)}/confirmation`,
+  );
+}
+
+export function fetchPipelineRestorePreview(
+  runId: string,
+): Promise<PipelineRestorePreview> {
+  return getJson<PipelineRestorePreview>(
+    `/v1/pipeline/runs/${encodeURIComponent(runId)}/restore/preview`,
+  );
+}
+
+export function restorePipelineRun(
+  runId: string,
+  pages: PipelineRestoreChoice[],
+): Promise<PipelineRestoreResult> {
+  return postJson<PipelineRestoreResult>(
+    `/v1/pipeline/runs/${encodeURIComponent(runId)}/restore`,
+    { runId, pages },
   );
 }
 

@@ -15,9 +15,16 @@ from typing import TYPE_CHECKING
 
 from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.projection import project
+from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import AgentRuntime
+from noteagent.agent.run_marker import (
+    RunFingerprint,
+    config_digest,
+    sections_digest,
+)
 from noteagent.agent.store import SessionStore, WaitStore
-from noteagent.agent.tools import ToolRegistry
+from noteagent.agent.tools import ToolRegistry, toolset_name
 from noteagent.agent.wait import wait_payload
 from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
@@ -27,9 +34,11 @@ from noteagent.llm.config import load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
+from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
@@ -55,6 +64,22 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
 def _default_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
     """The project's own store, with the clock and ids the app was built with."""
     return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
+
+
+def _active_project_store(deps: AppDeps) -> SessionStore | None:
+    """The active project's store, or ``None`` when there is nothing to open.
+
+    A core that has no project yet, or cannot read the pointer, is a normal
+    start; the route that needs the project reports the reason later.
+    """
+    try:
+        layout = get_active_layout()
+    except ProjectNotConfiguredError:
+        return None
+    except (OSError, ValueError) as err:
+        logger.warning("the active project cannot be read at startup: %s", err)
+        return None
+    return _default_store(deps, layout)
 
 
 def project_sessions(deps: AppDeps) -> SessionStore:
@@ -83,19 +108,35 @@ def migrate_active_project_chats(deps: AppDeps) -> None:
     """
     if deps.sessions is not None:
         return
-    try:
-        layout = get_active_layout()
-    except ProjectNotConfiguredError:
-        return
-    except (OSError, ValueError) as err:
-        logger.warning("the active project cannot be read at startup: %s", err)
+    store = _active_project_store(deps)
+    if store is None:
         return
     try:
-        migrate_sessions(_default_store(deps, layout))
+        migrate_sessions(store)
     except OSError as err:
         # A project the process cannot read is reported when a route needs it;
         # it must not keep the core from starting.
         logger.warning("old chats cannot be migrated at startup: %s", err)
+
+
+def recover_active_project_runs(deps: AppDeps) -> None:
+    """Mark the runs a previous process left running, before the socket answers.
+
+    The scan is best effort: a project that cannot be read is reported when a
+    route needs it, and a session that cannot be parsed is skipped. It never
+    starts a run; a person chooses resume or abandon later.
+    """
+    if deps.sessions is not None:
+        # A test that injected its own store owns its recovery, the same way it
+        # owns its migration; production reads the active project's sessions.
+        return
+    store = _active_project_store(deps)
+    if store is None:
+        return
+    try:
+        recover_store(store, clock=deps.clock, mark=True)
+    except Exception:
+        logger.exception("the interrupted-run scan failed")
 
 
 def open_session_store(
@@ -222,9 +263,17 @@ def session_runtime(
     """
     if deps.runtime is not None:
         return deps.runtime
+    model_name = str((deps.settings or {}).get("model") or "")
     model = deps.model
     if model is None:
-        model = OpenAIModelClient(load_llm_config())
+        config = load_llm_config()
+        model = RetryingModel(OpenAIModelClient(config))
+        model_name = model_name or config.model
+    fingerprint = (
+        project_fingerprint(layout, config=deps.settings or {})
+        if layout is not None
+        else {}
+    )
     return KernelRuntime(
         model=model,
         sessions=store,
@@ -233,10 +282,56 @@ def session_runtime(
         clock=deps.clock,
         ids=deps.ids,
         registry=deps.runs,
+        model_name=model_name,
         max_turns=deps.max_turns,
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.
         trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
+        # Non-secret digests a resume can compare; the kernel only records them.
+        fingerprint=fingerprint,
+    )
+
+
+def _session_model_name(deps: AppDeps) -> str:
+    """The model name a kernel run records, resolved as ``session_runtime`` does."""
+    name = str((deps.settings or {}).get("model") or "")
+    if deps.model is not None:
+        return name
+    return name or load_llm_config().model
+
+
+def resume_refusal(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+    session_id: str,
+    run_id: str,
+) -> str:
+    """Why this interrupted run cannot continue here, or an empty string.
+
+    The comparison is the kernel's fingerprint check, built from the same
+    environment; it stays a route preflight instead of a sixth runtime call.
+    """
+    marker = interrupted_run(store, session_id, run_id)
+    if marker is None:
+        return ""
+    entries = store.load(session_id).entries
+    projection = project(entries)
+    fingerprint = (
+        project_fingerprint(layout, config=deps.settings or {})
+        if layout is not None
+        else {}
+    )
+    current = RunFingerprint.from_mapping(
+        fingerprint,
+        model=_session_model_name(deps),
+        toolset=toolset_name(session_tools(deps, layout)),
+        config_hash=config_digest(
+            fingerprint.get("configHash", ""), projection.sections
+        ),
+    )
+    return marker.fingerprint.refusal(
+        current, legacy_config=sections_digest(projection.sections)
     )
 
 

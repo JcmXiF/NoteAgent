@@ -149,6 +149,11 @@ class ProjectLayout:
         return self.meta / "snapshots.jsonl"
 
     @property
+    def effects(self) -> Path:
+        """The project's effect journal: one side effect per line."""
+        return self.meta / "effects.jsonl"
+
+    @property
     def derived(self) -> Path:
         return self.meta / "derived"
 

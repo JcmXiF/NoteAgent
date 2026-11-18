@@ -60,6 +60,7 @@ from noteagent.ingest.topic_map import (
 from noteagent.ingest.update_index import update_wiki_index
 from noteagent.ingest.write_file_blocks import (
     HARD_WRITE_CODES,
+    WriteContext,
     WriteFileBlocksResult,
     WriteWarning,
     write_file_blocks,
@@ -146,6 +147,7 @@ def ingest_confirmed(
     run_logger: RunLogger | None = None,
     store: ClipStore | None = None,
     cancel: threading.Event | None = None,
+    write_context: WriteContext | None = None,
 ) -> IngestResult:
     """
     Generation and write for human-confirmed pages only. Records source
@@ -233,6 +235,7 @@ def ingest_confirmed(
             status=status,
             run_logger=logger,
             cancel=cancel,
+            write_context=write_context,
         )
 
 
@@ -251,6 +254,7 @@ def _ingest_confirmed_unlocked(
     status: StatusFn,
     run_logger: RunLogger,
     cancel: threading.Event | None,
+    write_context: WriteContext | None,
 ) -> IngestResult:
     collections = clip_store.collections
     summary_path = _clip_summary_path(goal)
@@ -317,6 +321,7 @@ def _ingest_confirmed_unlocked(
             action_by_slug=action_by_slug,
             locators=locators,
             job_id=job_id,
+            write_context=write_context,
         )
     except JobCancelled:
         raise
@@ -347,6 +352,7 @@ def _ingest_confirmed_write(
     action_by_slug: dict[str, str],
     locators: list[str],
     job_id: str,
+    write_context: WriteContext | None = None,
 ) -> IngestResult:
     client: LlmClient | None = None
 
@@ -515,6 +521,7 @@ def _ingest_confirmed_write(
         merger=merger,
         repair=repair,
         run_logger=run_logger,
+        write_context=write_context,
     )
 
     if page_skips:

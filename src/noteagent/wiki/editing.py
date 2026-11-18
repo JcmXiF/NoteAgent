@@ -23,7 +23,7 @@ from __future__ import annotations
 import difflib
 import shutil
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from noteagent.ingest.frontmatter import (
@@ -33,6 +33,7 @@ from noteagent.ingest.frontmatter import (
     unquote_scalar,
 )
 from noteagent.ingest.page_history import (
+    MODE_RESTORE,
     blob_digest,
     blob_path,
     keep_before,
@@ -363,14 +364,17 @@ def restore_version(
     restored = to_lf(restored)
     keep_before(layout, text)
     write_text(path, restored)
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
     record_write(
         layout,
         rel,
         before=current,
         after_text=restored,
-        mode="restore",
+        mode=MODE_RESTORE,
         by=WRITTEN_BY_PERSON,
-        at=(now or datetime.now()).isoformat(timespec="seconds"),
+        at=moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
     )
     return {"path": rel, "changed": True, "revision": blob_digest(restored)}
 
