@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from evals.rag.dataset import DatasetError, load_dataset
+from evals.rag.gate import run_gate, write_gate
 from evals.rag.matrix import run_channel_matrix, write_matrix
 from evals.rag.report import write_report
 from evals.rag.runner import evaluate
@@ -59,11 +60,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--matrix",
-        choices=["channel", "swaps"],
+        choices=["channel", "swaps", "gate"],
         default=None,
         help=(
-            "run a matrix: channel (lexical/BM25/vector/hybrid) or swaps "
-            "(hybrid reference plus S1/S2/S3/S4/S6), both in both scopes"
+            "run a matrix: channel (lexical/BM25/vector/hybrid), swaps "
+            "(hybrid reference plus S1/S2/S3/S4/S6), or gate curves; "
+            "channel/swaps cover both scopes, gate is wiki-only"
         ),
     )
     parser.add_argument(
@@ -206,6 +208,23 @@ def main(
             )
             written = write_swap_matrix(runs, Path(args.report))
             print(f"swap matrix: {len(runs)} runs")
+            print(f"report: {written}")
+            return 0
+        if args.matrix == "gate":
+            if selected_embedder is None:
+                print(
+                    "the gate matrix needs an embedding endpoint",
+                    file=sys.stderr,
+                )
+                return 2
+            report = run_gate(
+                dataset,
+                corpus,
+                embedder=selected_embedder,
+                index_key=index_key,
+            )
+            written = write_gate(report, Path(args.report))
+            print(f"gate curves: {len(report.curves)} curves")
             print(f"report: {written}")
             return 0
         variant = get_variant(args.variant)

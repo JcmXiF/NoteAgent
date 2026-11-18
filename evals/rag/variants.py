@@ -27,7 +27,7 @@ from noteagent.rag.bm25 import DEFAULT_EXACT_BONUS
 from noteagent.rag.chunker import KIND_NOTE, KIND_WIKI
 from noteagent.rag.embedding import EmbeddingClient
 from noteagent.rag.fusion import DEFAULT_K, PageKey, fuse
-from noteagent.rag.vector import DEFAULT_TAIL_WEIGHT
+from noteagent.rag.vector import DEFAULT_TAIL_WEIGHT, VectorHit
 from noteagent.wiki.local_search import search_project
 
 __all__ = [
@@ -41,14 +41,18 @@ __all__ = [
     "IndexKey",
     "Retrieval",
     "Retriever",
+    "Ranked",
     "Scope",
     "UnknownVariant",
     "VARIANTS",
     "Variant",
     "WHOLE_PAGE_INDEX_KEY",
     "base_index_builder",
-    "filter_scope",
+        "filter_scope",
     "get_variant",
+    "hybrid_retrieval",
+    "retrieval_from_hits",
+    "vector_retrieval",
 ]
 
 #: How many results a variant may hand back, mirroring the ``search`` tool's
@@ -308,14 +312,14 @@ def _base(context: EvalContext) -> BaseIndex:
     return cast(BaseIndex, build.index)
 
 
-class _Ranked(Protocol):
+class Ranked(Protocol):
     """Any hit with the two fields the vocabulary split needs."""
 
     kind: str
     page_id: str
 
 
-def _retrieval(hits: Sequence[_Ranked]) -> Retrieval:
+def retrieval_from_hits(hits: Sequence[Ranked]) -> Retrieval:
     return Retrieval(
         pages=tuple(
             hit.page_id for hit in hits if hit.kind == KIND_WIKI
@@ -324,6 +328,60 @@ def _retrieval(hits: Sequence[_Ranked]) -> Retrieval:
             hit.page_id for hit in hits if hit.kind == KIND_NOTE
         ),
     )
+
+
+def vector_retrieval(
+    base: BaseIndex,
+    hits: Sequence[VectorHit],
+    query: str,
+) -> Retrieval:
+    """Vector candidates with the exact tier promoted before the cap.
+
+    An exact page must be considered before the result cap: a named page
+    outside the vector top-N is still the page the reader asked for, the way
+    BM25's rank-independent exact candidates are.
+    """
+    exact = base.exact_pages(query)
+    adjusted = [
+        replace(
+            hit,
+            score=hit.score
+            + (
+                DEFAULT_EXACT_BONUS
+                if hit.kind == KIND_WIKI
+                and hit.page_id in exact
+                else 0.0
+            ),
+        )
+        for hit in hits
+    ]
+    adjusted.sort(
+        key=lambda hit: (
+            0
+            if hit.kind == KIND_WIKI and hit.page_id in exact
+            else 1,
+            -hit.score,
+            hit.page_id,
+        )
+    )
+    return retrieval_from_hits(adjusted[:DEPTH])
+
+
+def hybrid_retrieval(
+    lexical: Sequence[Ranked],
+    vector: Sequence[VectorHit],
+    *,
+    exact_tier: bool = True,
+) -> Retrieval:
+    """The RRF reference, optionally without its exact tier."""
+    fused = fuse(
+        lexical,
+        vector,
+        k=DEFAULT_K,
+        candidates=DEPTH,
+        exact_tier=exact_tier,
+    )
+    return retrieval_from_hits(fused.hits)
 
 
 class _Scored(Protocol):
@@ -405,7 +463,9 @@ def _bm25(context: EvalContext) -> Retriever:
     base = _base(context)
 
     def retrieve(query: str) -> Retrieval:
-        return _retrieval(base.bm25.search(query, limit=DEPTH))
+        return retrieval_from_hits(
+            base.bm25.search(query, limit=DEPTH)
+        )
 
     return FnRetriever(retrieve)
 
@@ -419,38 +479,12 @@ def _vector(context: EvalContext) -> Retriever:
         )
 
     def retrieve(query: str) -> Retrieval:
-        exact = base.exact_pages(query)
-        # An exact page must be considered before the result cap: a named
-        # page outside the vector top-N is still the page the reader asked
-        # for, the way BM25's rank-independent exact candidates are.
         hits = base.vector_hits(
             query,
             embedder,
             limit=max(DEPTH, len(base.chunks)),
         )
-        adjusted = [
-            replace(
-                hit,
-                score=hit.score
-                + (
-                    DEFAULT_EXACT_BONUS
-                    if hit.kind == KIND_WIKI
-                    and hit.page_id in exact
-                    else 0.0
-                ),
-            )
-            for hit in hits
-        ]
-        adjusted.sort(
-            key=lambda hit: (
-                0
-                if hit.kind == KIND_WIKI and hit.page_id in exact
-                else 1,
-                -hit.score,
-                hit.page_id,
-            )
-        )
-        return _retrieval(adjusted[:DEPTH])
+        return vector_retrieval(base, hits, query)
 
     return FnRetriever(retrieve)
 
@@ -473,10 +507,7 @@ def _hybrid_with_tail(
             limit=DEPTH,
             tail_weight=tail_weight,
         )
-        fused = fuse(
-            lexical, vector, k=DEFAULT_K, candidates=DEPTH
-        )
-        return _retrieval(fused.hits)
+        return hybrid_retrieval(lexical, vector)
 
     return FnRetriever(retrieve)
 
@@ -502,10 +533,7 @@ def _hybrid_no_prefix(context: EvalContext) -> Retriever:
         vector = base.vector_hits(
             query, query_embedder, limit=DEPTH
         )
-        fused = fuse(
-            lexical, vector, k=DEFAULT_K, candidates=DEPTH
-        )
-        return _retrieval(fused.hits)
+        return hybrid_retrieval(lexical, vector)
 
     return FnRetriever(retrieve)
 
@@ -546,14 +574,9 @@ def _hybrid_no_exact(context: EvalContext) -> Retriever:
             query, limit=DEPTH, exact_tier=False
         )
         vector = base.vector_hits(query, embedder, limit=DEPTH)
-        fused = fuse(
-            lexical,
-            vector,
-            k=DEFAULT_K,
-            candidates=DEPTH,
-            exact_tier=False,
+        return hybrid_retrieval(
+            lexical, vector, exact_tier=False
         )
-        return _retrieval(fused.hits)
 
     return FnRetriever(retrieve)
 
