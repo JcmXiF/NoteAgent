@@ -1460,6 +1460,9 @@
         "bodyStartsFence": "正文不能以一行短横线开头，否则会被识别为这一页的设置。",
         "versionMissing": "这个版本已经不在了。"
       },
+      "snapshot": {
+        "missing": "这个保存的版本已经不在了。"
+      },
       "trash": {
         "unknown": "这项内容已不在最近删除中。",
         "missing": "要删除的内容已不存在。",

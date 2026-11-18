@@ -1460,6 +1460,9 @@
         "bodyStartsFence": "The body cannot start with a line of dashes, which would be read as this page's settings.",
         "versionMissing": "That version is no longer there."
       },
+      "snapshot": {
+        "missing": "That saved version is no longer there."
+      },
       "trash": {
         "unknown": "That item is no longer in the trash.",
         "missing": "What was to be deleted is no longer there.",

@@ -62,6 +62,11 @@ class SnapshotEntry:
     before: str
     after: str
     bytes_written: int
+    #: The effect journal row and run that caused this write, when a writer
+    #: supplied a context. Old rows have none of them and read as empty.
+    effect_id: str = ""
+    run_id: str = ""
+    plan_revision: str = ""
 
 
 def _root_key(layout: ProjectLayout) -> str:
@@ -122,7 +127,7 @@ def keep_before(layout: ProjectLayout, text: str) -> str:
 
 
 def _row(entry: SnapshotEntry) -> dict[str, object]:
-    return {
+    row: dict[str, object] = {
         "at": entry.at,
         "area": entry.area,
         "path": entry.path,
@@ -132,6 +137,13 @@ def _row(entry: SnapshotEntry) -> dict[str, object]:
         "after": entry.after,
         "bytes": entry.bytes_written,
     }
+    if entry.effect_id:
+        row["effectId"] = entry.effect_id
+    if entry.run_id:
+        row["runId"] = entry.run_id
+    if entry.plan_revision:
+        row["planRevision"] = entry.plan_revision
+    return row
 
 
 def _entry(raw: object) -> SnapshotEntry | None:
@@ -152,6 +164,9 @@ def _entry(raw: object) -> SnapshotEntry | None:
         before=str(raw.get("before") or "").strip(),
         after=after,
         bytes_written=size if isinstance(size, int) else 0,
+        effect_id=str(raw.get("effectId") or "").strip(),
+        run_id=str(raw.get("runId") or "").strip(),
+        plan_revision=str(raw.get("planRevision") or "").strip(),
     )
 
 
@@ -196,6 +211,9 @@ def record_write(
     mode: str,
     by: str,
     at: str | None = None,
+    effect_id: str = "",
+    run_id: str = "",
+    plan_revision: str = "",
 ) -> SnapshotEntry | None:
     """
     Note one write to a page, and keep the text it lands.
@@ -217,6 +235,9 @@ def record_write(
         before=before,
         after=after,
         bytes_written=len(to_lf(after_text).encode("utf-8")),
+        effect_id=effect_id.strip(),
+        run_id=run_id.strip(),
+        plan_revision=plan_revision.strip(),
     )
     with _lock_for(layout):
         _append(layout, entry)
@@ -230,6 +251,9 @@ def note_agent_write(
     before: str,
     after_text: str,
     mode: str,
+    effect_id: str = "",
+    run_id: str = "",
+    plan_revision: str = "",
 ) -> SnapshotEntry | None:
     """Note a write the pipeline made while compiling a page."""
     return record_write(
@@ -239,6 +263,9 @@ def note_agent_write(
         after_text=after_text,
         mode=mode,
         by=WRITTEN_BY_AGENT,
+        effect_id=effect_id,
+        run_id=run_id,
+        plan_revision=plan_revision,
     )
 
 
