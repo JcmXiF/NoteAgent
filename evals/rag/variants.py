@@ -106,7 +106,7 @@ CHANNEL_INDEX_KEY = IndexKey(
 )
 
 
-#: The S1 swap's index: one chunk per wiki page, notes unchanged.
+#: The E04 whole-page index: one chunk per wiki page, notes unchanged.
 WHOLE_PAGE_INDEX_KEY = replace(
     CHANNEL_INDEX_KEY, chunking="whole-page"
 )
@@ -525,7 +525,7 @@ def _hybrid_no_prefix(context: EvalContext) -> Retriever:
     query_embedder = context.query_embedder
     if query_embedder is None:
         raise RuntimeError(
-            "the S4 variant needs a no-prefix query embedder"
+            "the E07 variant needs a no-prefix query embedder"
         )
 
     def retrieve(query: str) -> Retrieval:
@@ -621,7 +621,7 @@ VARIANTS: dict[str, Variant] = {
     "hybrid_s1_whole_page": Variant(
         name="hybrid_s1_whole_page",
         description=(
-            "S1: hybrid over one whole-page chunk per wiki page"
+            "E04: hybrid over one whole-page chunk per wiki page"
         ),
         prepare=_hybrid,
         index_key=WHOLE_PAGE_INDEX_KEY,
@@ -629,7 +629,7 @@ VARIANTS: dict[str, Variant] = {
     "hybrid_s2_max": Variant(
         name="hybrid_s2_max",
         description=(
-            "S2: hybrid with max page aggregation (tail weight 0)"
+            "E05: hybrid with max page aggregation (tail weight 0)"
         ),
         prepare=_hybrid_max,
         index_key=CHANNEL_INDEX_KEY,
@@ -637,7 +637,7 @@ VARIANTS: dict[str, Variant] = {
     "hybrid_s3_minmax": Variant(
         name="hybrid_s3_minmax",
         description=(
-            "S3: hybrid with per-query min-max + equal-weight fusion"
+            "E06: hybrid with per-query min-max + equal-weight fusion"
         ),
         prepare=_hybrid_weighted,
         index_key=CHANNEL_INDEX_KEY,
@@ -645,7 +645,7 @@ VARIANTS: dict[str, Variant] = {
     "hybrid_s4_no_prefix": Variant(
         name="hybrid_s4_no_prefix",
         description=(
-            "S4: hybrid with the query instruction prefix off"
+            "E07: hybrid with the query instruction prefix off"
         ),
         prepare=_hybrid_no_prefix,
         index_key=CHANNEL_INDEX_KEY,
@@ -653,7 +653,7 @@ VARIANTS: dict[str, Variant] = {
     "hybrid_s6_no_exact": Variant(
         name="hybrid_s6_no_exact",
         description=(
-            "S6: hybrid with the whole exact-title tier off"
+            "E08: hybrid with the whole exact-title tier off"
         ),
         prepare=_hybrid_no_exact,
         index_key=CHANNEL_INDEX_KEY,

@@ -100,15 +100,25 @@ class FirstRoundTests(unittest.TestCase):
         self.assertIn("# Retrieval ablation — first round", text)
         self.assertIn("Channel rows — main (wiki-only)", text)
         self.assertIn("Channel rows — secondary (wiki+notes)", text)
-        self.assertIn("Swap rows — main (wiki-only)", text)
+        self.assertIn("Module ablation rows — main (wiki-only)", text)
         self.assertIn("Gate curves (exploratory)", text)
         self.assertIn("Δ Recall@5 [95% CI]", text)
         self.assertIn("Hit@5", text)
         self.assertIn("MRR", text)
         self.assertIn("per-bucket Recall@5", text)
         self.assertIn("10,000 resamples", text)
-        self.assertIn("S5 tokenizer is skipped", text)
+        self.assertIn("E09 tokenizer is skipped", text)
         self.assertIn("Exploratory", text)
+
+    def test_the_markdown_accepts_a_run_label_and_note(self) -> None:
+        text = ablation_markdown(
+            self.report,
+            run_label="R3 300-page control",
+            run_note="40 labeled pages + 260 distractors.",
+        )
+
+        self.assertIn("# Retrieval ablation — R3 300-page control", text)
+        self.assertIn("Run note: 40 labeled pages + 260 distractors.", text)
 
     def test_write_first_round_writes_all_artifacts(self) -> None:
         report = self.report

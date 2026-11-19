@@ -63,9 +63,9 @@ SIGNAL_LABELS = {
     "margin": "top1−top2 margin",
 }
 VARIANT_LABELS = {
-    "bm25": "BM25-only",
-    "vector": "Vector-only",
-    "hybrid": "Hybrid",
+    "bm25": "E02 BM25-only",
+    "vector": "E03 Vector-only",
+    "hybrid": "E01 Hybrid",
 }
 
 

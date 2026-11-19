@@ -5,6 +5,9 @@ lexical and BM25 rows call no model and open no network connection; the vector
 and hybrid rows call the configured local embedding service. It is a
 measurement harness, not a CI pass/fail gate.
 
+Experiment IDs, run coverage, and the old-to-new mapping live in
+[`EXPERIMENTS.md`](EXPERIMENTS.md); the old `S1`–`S6` names are retired.
+
 ## Dataset
 
 The set is local: `.scratch/` is not committed. A run reads
@@ -59,13 +62,14 @@ python -m evals.rag --dataset path/to/queries.jsonl --corpus path/to/project \
 - `--matrix channel` runs `lexical`, `bm25`, `vector` and `hybrid` in both
   scopes and writes one report with a main (wiki-only) and a secondary
   (wiki+notes) table. One base index is built and reused across the eight runs.
-- `--matrix swaps` runs the hybrid reference and S1/S2/S3/S4/S6 in both
-  scopes; S5 is recorded as skipped. S1 gets a separate whole-page index.
+- `--matrix swaps` runs the hybrid reference and the single-module ablations
+  E04–E08 in both scopes; E09 is recorded as skipped. E04 gets a separate
+  whole-page index.
 - `--matrix gate` records BM25 term coverage and raw vector cosine/margin for
   the wiki scope and sweeps thresholds offline. The ranking tables stay
   ungated; the six-gap curves are exploratory.
-- `--matrix first-round` runs channel, swaps and gate on one shared index
-  cache, writes the raw JSON under `--raw-dir` (default
+- `--matrix first-round` runs channel rows, module ablations, and the gate on
+  one shared index cache, writes the raw JSON under `--raw-dir` (default
   `build/evals/rag/ablation/`), updates the tracked `--ablation` file (default
   `evals/rag/ABLATION.md`), and writes the combined JSON to `--report`.
 - `--embedding-endpoint` / `--embedding-model` / `--embedding-dim` /

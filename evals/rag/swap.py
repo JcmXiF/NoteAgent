@@ -1,8 +1,8 @@
-"""The swap matrix: the hybrid reference and its implementation swaps.
+"""The module-ablation matrix: the reference and its single-module ablations.
 
-Every row keeps the reference pipeline except the one implementation named by
-the row. S1 needs its own whole-page index; S2, S3, S4 and S6 are query-time
-and share the base index. S5 is recorded as skipped rather than omitted.
+Every row keeps the reference pipeline except the one module named by the row.
+E04 needs its own whole-page index; E05–E08 are query-time and share the base
+index. E09 is recorded as skipped rather than omitted.
 """
 
 from __future__ import annotations
@@ -41,16 +41,16 @@ __all__ = [
 ]
 
 SWAP_VARIANTS = (
-    ("hybrid", "reference"),
-    ("hybrid_s2_max", "S2 max aggregation"),
-    ("hybrid_s3_minmax", "S3 min-max + equal weight"),
-    ("hybrid_s4_no_prefix", "S4 prefix off"),
-    ("hybrid_s6_no_exact", "S6 exact tier off"),
-    ("hybrid_s1_whole_page", "S1 whole-page"),
+    ("hybrid", "E01 reference"),
+    ("hybrid_s1_whole_page", "E04 whole-page"),
+    ("hybrid_s2_max", "E05 max aggregation"),
+    ("hybrid_s3_minmax", "E06 min-max + equal weight"),
+    ("hybrid_s4_no_prefix", "E07 prefix off"),
+    ("hybrid_s6_no_exact", "E08 exact tier off"),
 )
 
 SKIPPED_SWAPS = (
-    ("S5 tokenizer", "skipped"),
+    ("E09 tokenizer", "skipped"),
 )
 
 
@@ -76,7 +76,8 @@ def run_swap_matrix(
     """Run the reference and the five swap rows in both scopes."""
     if query_embedder is None:
         raise ValueError(
-            "the swap matrix needs a no-prefix query embedder for S4"
+            "the module-ablation matrix needs a no-prefix query "
+            "embedder for E07"
         )
     base_key = index_key or CHANNEL_INDEX_KEY
     cache = indexes or IndexCache(base_index_builder(embedder))
@@ -144,7 +145,7 @@ def swap_markdown(runs: tuple[SwapRun, ...]) -> str:
     """The swap matrix as two tables plus the skipped row."""
     first = runs[0].evaluation
     lines = [
-        "# Retrieval ablation — swap rows",
+        "# Retrieval ablation — module ablation rows",
         "",
         (
             f"- Dataset: `{first.dataset.path.as_posix()}` — "

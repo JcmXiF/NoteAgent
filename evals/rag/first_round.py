@@ -66,10 +66,10 @@ GATE_SAMPLE = (0.1, 0.2, 0.3, 0.4, 0.5)
 DEFAULT_REPORT_PATH = Path("build/evals/rag/report.json")
 DEFAULT_RAW_DIR = Path("build/evals/rag/ablation")
 CHANNEL_LABELS = {
-    "lexical": "lexical (historical)",
-    "bm25": "BM25-only",
-    "vector": "Vector-only",
-    "hybrid": "Hybrid (reference)",
+    "lexical": "E00 lexical (historical)",
+    "bm25": "E02 BM25-only (remove vector)",
+    "vector": "E03 vector-only (remove BM25)",
+    "hybrid": "E01 hybrid (reference)",
 }
 
 
@@ -214,10 +214,12 @@ def ablation_markdown(
     *,
     report_path: Path = DEFAULT_REPORT_PATH,
     raw_dir: Path = DEFAULT_RAW_DIR,
+    run_label: str = "first round",
+    run_note: str = "",
 ) -> str:
     """The tracked protocol and summary: two tables per matrix plus the gate."""
     lines = [
-        "# Retrieval ablation — first round",
+        f"# Retrieval ablation — {run_label}",
         "",
         (
             f"- Dataset: `{report.dataset.path.as_posix()}` — "
@@ -241,8 +243,10 @@ def ablation_markdown(
             "- Exploratory: per-bucket CIs and gate curves; no "
             "operating point or decision rule is validated."
         ),
-        "",
     ]
+    if run_note:
+        lines.append(f"- Run note: {run_note}")
+    lines.append("")
     channel = _channel_measures(report.channel)
     swap = _swap_measures(report.swap)
     channel_deltas = [
@@ -257,7 +261,7 @@ def ablation_markdown(
         channel,
         channel_deltas,
     )
-    _matrix_table(lines, "Swap rows", swap, swap_deltas)
+    _matrix_table(lines, "Module ablation rows", swap, swap_deltas)
     _gate_summary(lines, report.gate)
     if report.index_builds:
         lines.extend(
@@ -286,7 +290,7 @@ def ablation_markdown(
                 "- Gate curves are exploratory; their full points are in "
                 f"`{_display_path(Path(raw_dir) / 'gate.json')}`."
             ),
-            "- S5 tokenizer is skipped; `hybrid+rerank` is deferred.",
+            "- E09 tokenizer is skipped; E10 rerank is deferred.",
             "- No p-values; no decision rule is pre-registered.",
         ]
     )
@@ -299,6 +303,8 @@ def write_first_round(
     ablation_path: Path,
     raw_dir: Path,
     report_path: Path,
+    run_label: str = "first round",
+    run_note: str = "",
 ) -> Path:
     """Write the tracked summary, the raw matrices, and the combined JSON."""
     raw = Path(raw_dir)
@@ -307,14 +313,20 @@ def write_first_round(
     write_swap_matrix(report.swap, raw / "swaps.json")
     write_gate(report.gate, raw / "gate.json")
     text = ablation_markdown(
-        report, report_path=Path(report_path), raw_dir=raw
+        report,
+        report_path=Path(report_path),
+        raw_dir=raw,
+        run_label=run_label,
+        run_note=run_note,
     )
     ablation = Path(ablation_path)
     ablation.parent.mkdir(parents=True, exist_ok=True)
     ablation.write_text(text, encoding="utf-8")
-    return write_json_markdown(
-        Path(report_path), first_round_payload(report), text
-    )
+    payload = first_round_payload(report)
+    payload["runLabel"] = run_label
+    if run_note:
+        payload["runNote"] = run_note
+    return write_json_markdown(Path(report_path), payload, text)
 
 
 def _measure(

@@ -1,4 +1,4 @@
-"""The swap rows: S1 whole-page, S2 max, S3 weighted, S4 prefix, S6 exact."""
+"""The module ablation rows: E04–E08, with E09 recorded as skipped."""
 
 from __future__ import annotations
 
@@ -212,9 +212,9 @@ class SwapMatrixTests(unittest.TestCase):
         self.assertEqual(len(payload["secondary"]), 6)
         self.assertEqual(
             payload["skipped"],
-            [{"row": "S5 tokenizer", "status": "skipped"}],
+            [{"row": "E09 tokenizer", "status": "skipped"}],
         )
-        self.assertIn("S5 tokenizer", text)
+        self.assertIn("E09 tokenizer", text)
         self.assertIn("Skipped", text)
 
 
@@ -454,7 +454,7 @@ class CliSwapTests(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertIn("swap matrix", out)
         self.assertEqual(len(stored["main"]), 6)
-        self.assertIn("S5 tokenizer", summary)
+        self.assertIn("E09 tokenizer", summary)
 
 
 if __name__ == "__main__":
