@@ -421,6 +421,38 @@ export type IngestRecoveryPayload = {
   last: CompletedRoundPayload | null;
 };
 
+/* ------------------------------------------------------------- Writing task */
+
+/** One resource card in the writing task. */
+export type TaskCard = {
+  id: string;
+  title: string;
+  url: string;
+  snippet?: string;
+  site?: string;
+};
+
+/** The task as metadata: what it is, how much it holds, and its revision. */
+export type TaskSummaryView = {
+  view: "summary";
+  rev: number;
+  id: string;
+  kind: string;
+  intent: string;
+  status: string;
+  updatedAt: string;
+  counts: { cards: number; materials: number; frames: number };
+};
+
+/** A bounded list of the cards the task has collected. */
+export type TaskCardsView = {
+  view: "cards";
+  rev: number;
+  cards: TaskCard[];
+  /** Cards beyond the view's bound. */
+  omitted: number;
+};
+
 /* ----------------------------------------------------------------- Sessions */
 
 /** One visible turn of a JSONL session, as the core projects it. */

@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronRight, Hammer, ListChecks, PanelRightClose, Play, Sparkles } from "lucide-react";
+import { AlertCircle, ChevronRight, ClipboardList, Hammer, ListChecks, PanelRightClose, Play, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { PlanBoard } from "@/components/plan/PlanBoard";
 import { CompilePanel } from "@/components/plan/CompilePanel";
 import { AttentionInbox } from "@/components/plan/AttentionInbox";
 import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
+import { TaskView } from "@/components/task/TaskView";
 import { shortcut } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +22,7 @@ import { useSectionCounts } from "@/stores/right-sections";
 
 /** What draws each section: the block itself. */
 const SECTION_BODY: Record<RightSectionId, () => React.ReactNode> = {
+  task: () => <TaskView />,
   attention: () => <AttentionInbox />,
   selection: () => <CollectionList />,
   pipeline: () => <PipelineRunPanel />,
@@ -36,6 +38,7 @@ const SECTION_BODY: Record<RightSectionId, () => React.ReactNode> = {
  * section is folded.
  */
 const SECTION_LOOK: Record<RightSectionId, { icon: typeof AlertCircle; tone?: string; hint?: string }> = {
+  task: { icon: ClipboardList },
   attention: { icon: AlertCircle, tone: "text-warning", hint: "attention.hint" },
   selection: { icon: ListChecks },
   pipeline: { icon: Play },

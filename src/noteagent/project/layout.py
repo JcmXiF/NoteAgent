@@ -131,6 +131,21 @@ class ProjectLayout:
         return self.meta / "materials.jsonl"
 
     @property
+    def task(self) -> Path:
+        """The one writing task of this project: its state and its lock."""
+        return self.meta / "task"
+
+    @property
+    def task_file(self) -> Path:
+        """The task as one atomically replaced JSON document."""
+        return self.task / "task.json"
+
+    @property
+    def task_lock(self) -> Path:
+        """Who is writing the task; one core process holds it at a time."""
+        return self.task / "task.lock"
+
+    @property
     def capture_inbox(self) -> Path:
         """Pages a run could not read behind a sign-in, for the attention panel."""
         return self.meta / "capture-inbox.json"

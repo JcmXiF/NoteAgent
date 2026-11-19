@@ -224,6 +224,7 @@
     },
     "storedHint": "尚未保存。需先将这一页的正文存入资料库，才能据此写页面。",
     "fromRound": "来自深搜",
+    "task": "写作任务",
     "scope": {
       "label": "看哪些选中的内容",
       "mine": "本次深搜",
@@ -653,7 +654,8 @@
       "truncated": "已截断",
       "timeout": "超时",
       "omitted": "部分命中未显示",
-      "hits": "{{count}} 个命中"
+      "hits": "{{count}} 个命中",
+      "searching": "仍在搜索"
     },
     "wait": {
       "title": "等待你开始",
@@ -1652,6 +1654,22 @@
         "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
         "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
       }
+    }
+  },
+  "task": {
+    "title": "写作任务",
+    "rev": "修订 {{rev}}",
+    "loading": "正在读取任务",
+    "empty": "还没有资料卡片",
+    "cards": "{{count}} 张卡片",
+    "loadFailed": "无法读取写作任务",
+    "retry": "重试",
+    "status": {
+      "idle": "空闲",
+      "running": "进行中",
+      "needs_approval": "待批准",
+      "done": "完成",
+      "failed": "失败"
     }
   }
 }

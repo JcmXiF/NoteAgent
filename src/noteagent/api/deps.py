@@ -28,6 +28,8 @@ from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
+from noteagent.task.model import SearchFn
+from noteagent.task.service import TaskRegistry, TaskService
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,20 @@ class AppDeps:
     #: What an approved run calls to write its pages. ``None`` compiles through
     #: the existing write path; a test scripts it and inspects what it was given.
     pipeline_compile: CompileFn | None = None
+    #: The writing task's service, when a test hands one in; otherwise it is
+    #: built from the active project on each request.
+    tasks: TaskService | None = None
+    #: The pure search node behind ``web_search``. ``None`` uses the project's
+    #: configured web search; a test scripts the hits and never touches a network.
+    task_search: SearchFn | None = None
+    #: The task's active revision per session, shared by every request in this
+    #: process, so the wrapper can name the revision the run observed.
+    task_registry: TaskRegistry = field(default_factory=TaskRegistry)
+    #: How the task executor is taken off the request thread. A test passes a
+    #: synchronous launcher so the op finishes before the handler waits.
+    task_spawn: Callable[[Callable[[], None]], None] | None = None
+    #: The bounded wait a task tool gives its executor, in seconds.
+    task_wait_s: float = 15.0
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

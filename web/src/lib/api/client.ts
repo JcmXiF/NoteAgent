@@ -386,6 +386,18 @@ export type ObservationPayload = {
   /** For a write action: which one it was, and whether it actually wrote. */
   action?: string;
   wrote_wiki?: boolean;
+  /** The writing task revision this result belongs to. */
+  rev?: number;
+  /** A long operation that has not reached an answer yet. */
+  status?: string;
+  /** The resource cards a search put in the writing task. */
+  cards?: {
+    id?: string;
+    title: string;
+    url: string;
+    snippet?: string;
+    site?: string;
+  }[];
   /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
   diagnostics?: { severity: string; code: string; message: string }[];
 };
