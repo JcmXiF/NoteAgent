@@ -24,7 +24,9 @@ from evals.rag.variants import (
 from noteagent.rag.config import (
     DEFAULT_DIM,
     DEFAULT_MODEL,
+    DEFAULT_PAGE_TIMEOUT,
     DEFAULT_QUERY_PREFIX,
+    DEFAULT_QUERY_TIMEOUT,
     EmbeddingConfig,
     EmbeddingError,
 )
@@ -44,8 +46,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m evals.rag",
         description=(
             "Measure a retrieval variant against the annotated query set. "
-            "Lexical and BM25 are offline; vector and hybrid use the "
-            "configured embedding endpoint."
+            "Lexical is offline; BM25, vector, and hybrid need the "
+            "configured embedding endpoint for index construction."
         ),
     )
     parser.add_argument(
@@ -102,6 +104,34 @@ def _parser() -> argparse.ArgumentParser:
         help="embedding endpoint API key, if it asks for one",
     )
     parser.add_argument(
+        "--embedding-page-timeout",
+        type=float,
+        default=DEFAULT_PAGE_TIMEOUT,
+        help=(
+            "seconds allowed for one document embedding call "
+            f"(default: {DEFAULT_PAGE_TIMEOUT:g})"
+        ),
+    )
+    parser.add_argument(
+        "--embedding-query-timeout",
+        type=float,
+        default=DEFAULT_QUERY_TIMEOUT,
+        help=(
+            "seconds allowed for one query embedding call "
+            f"(default: {DEFAULT_QUERY_TIMEOUT:g})"
+        ),
+    )
+    parser.add_argument(
+        "--run-label",
+        default="first round",
+        help="report title for --matrix first-round (default: first round)",
+    )
+    parser.add_argument(
+        "--run-note",
+        default="",
+        help="optional protocol note for --matrix first-round",
+    )
+    parser.add_argument(
         "--dataset",
         default=DEFAULT_DATASET,
         help=f"JSONL eval set (default: {DEFAULT_DATASET})",
@@ -130,6 +160,8 @@ def _embedding_config(
         dim=args.embedding_dim,
         query_prefix=query_prefix,
         api_key=args.embedding_api_key,
+        page_timeout_s=args.embedding_page_timeout,
+        query_timeout_s=args.embedding_query_timeout,
     )
 
 
@@ -260,9 +292,11 @@ def main(
                 ablation_path=Path(args.ablation),
                 raw_dir=Path(args.raw_dir),
                 report_path=Path(args.report),
+                run_label=args.run_label,
+                run_note=args.run_note,
             )
             print(
-                f"first round: channel {len(report.channel)}, "
+                f"{args.run_label}: channel {len(report.channel)}, "
                 f"swaps {len(report.swap)}, "
                 f"gate {len(report.gate.curves)} curves"
             )
@@ -277,7 +311,7 @@ def main(
             )
             return 2
         if (
-            variant.name == "hybrid_s4_no_prefix"
+            variant.name == "hybrid_e07_no_prefix"
             and selected_query_embedder is None
         ):
             print(

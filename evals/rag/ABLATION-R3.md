@@ -1,6 +1,6 @@
 # Retrieval ablation — R3 300-page control
 
-- Dataset: `D:/curdev/noteagent/.claude/worktrees/rag/.scratch/rag/round2/data/scale300/queries.jsonl` — 65 queries, sha256 `7b05ea089ca0005fda0ed6a81db66674bb33579e15dd28ec055c818791755871`
+- Dataset: `.scratch/rag/round2/data/scale300/queries.jsonl` — 65 queries, sha256 `7b05ea089ca0005fda0ed6a81db66674bb33579e15dd28ec055c818791755871`
 - Corpus: `.scratch/rag/round2/data/scale300` — sha256 `57da0c21f5848541bb9785b0878ad60bcd1fbd50cf048ff526dd096556fa6517`
 - Scope: main **wiki-only**; secondary **wiki+notes**. The notes queries are excluded from the main table.
 - Bootstrap: paired, 10,000 resamples, 95% percentile CI, seed 20261119; no p-values.
@@ -129,6 +129,7 @@ Threshold sample; full points in the raw gate report; 5 gap queries; exploratory
 ## Notes
 
 - Per-bucket CIs are in `build/evals/rag/r3.json` under `deltas[].byType`; they are exploratory.
+- The tables print Recall@5 buckets; per-bucket Hit@5, nDCG@10 and MRR, and every delta, are in the combined JSON.
 - Gate curves are exploratory; their full points are in `build/evals/rag/ablation-r3/gate.json`.
 - E09 tokenizer is skipped; E10 rerank is deferred.
 - No p-values; no decision rule is pre-registered.

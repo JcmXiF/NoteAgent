@@ -171,6 +171,8 @@ class CliFirstRoundTests(unittest.TestCase):
                 "--report", str(combined),
                 "--ablation", str(ablation),
                 "--raw-dir", str(raw),
+                "--run-label", "R3 test",
+                "--run-note", "40 labeled + 260 distractors.",
                 "--embedding-model", "fake",
                 "--embedding-dim", "8",
                 embedder=FakeEmbedder(dim=8),
@@ -180,8 +182,10 @@ class CliFirstRoundTests(unittest.TestCase):
             text = ablation.read_text(encoding="utf-8")
 
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("first round", out)
+        self.assertIn("R3 test", out)
         self.assertEqual(len(stored["channel"]["main"]), 4)
+        self.assertIn("# Retrieval ablation — R3 test", text)
+        self.assertIn("Run note: 40 labeled + 260 distractors.", text)
         self.assertIn("Channel rows — main", text)
 
     def test_the_first_round_needs_both_embedding_endpoints(self) -> None:

@@ -1,9 +1,10 @@
 # Retrieval evaluation
 
 A deterministic measurement of the retrieval layer behind `search`. The
-lexical and BM25 rows call no model and open no network connection; the vector
-and hybrid rows call the configured local embedding service. It is a
-measurement harness, not a CI pass/fail gate.
+lexical row calls no model and opens no network connection. The BM25 row
+builds an embedding index and therefore needs the configured local embedding
+service, though its query scoring is offline; vector and hybrid use the same
+service. It is a measurement harness, not a CI pass/fail gate.
 
 Experiment IDs, run coverage, and the old-to-new mapping live in
 [`EXPERIMENTS.md`](EXPERIMENTS.md); the old `S1`–`S6` names are retired.
@@ -48,6 +49,18 @@ python -m evals.rag --matrix first-round \
   --raw-dir build/evals/rag/ablation \
   --embedding-endpoint http://127.0.0.1:11434/v1 \
   --embedding-model qwen3-embedding:0.6b --embedding-dim 1024
+# R3 300-page control (local .scratch corpus; 40 labeled pages + 260 distractors)
+python -m evals.rag --matrix first-round \
+  --dataset .scratch/rag/round2/data/scale300/queries.jsonl \
+  --corpus .scratch/rag/round2/data/scale300 \
+  --report build/evals/rag/r3.json \
+  --ablation evals/rag/ABLATION-R3.md \
+  --raw-dir build/evals/rag/ablation-r3 \
+  --run-label "R3 300-page control" \
+  --run-note "40 labeled pages + 260 distractors; 55 answerable wiki queries; exploratory." \
+  --embedding-endpoint http://127.0.0.1:11434/v1 \
+  --embedding-model qwen3-embedding:0.6b --embedding-dim 1024 \
+  --embedding-page-timeout 3600
 python -m evals.rag --dataset path/to/queries.jsonl --corpus path/to/project \
   --report build/evals/rag/report.json
 ```
@@ -76,6 +89,10 @@ python -m evals.rag --dataset path/to/queries.jsonl --corpus path/to/project \
   `--embedding-api-key` configure the OpenAI-compatible embedding service. The
   endpoint and model can also come from the `NOTEAGENT_RAG_EMBEDDING_*`
   environment variables.
+- `--embedding-page-timeout` / `--embedding-query-timeout` raise the embedding
+  budgets; a large corpus such as R3 needs a page budget above the default 300 s.
+- `--run-label` / `--run-note` set the title and protocol note of a
+  `--matrix first-round` report; R3 uses `--run-label "R3 300-page control"`.
 - `--dataset` defaults to `.scratch/rag/dataset/queries.jsonl` (the old
   25-query smoke set); `--corpus` defaults to its sibling `corpus/`. The
   10-page channel corpus is local at `.scratch/rag/prototype/`; pass it

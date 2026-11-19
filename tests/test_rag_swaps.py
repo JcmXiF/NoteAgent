@@ -152,21 +152,21 @@ class SwapMatrixTests(unittest.TestCase):
             {run.variant for run in main},
             {
                 "hybrid",
-                "hybrid_s1_whole_page",
-                "hybrid_s2_max",
-                "hybrid_s3_minmax",
-                "hybrid_s4_no_prefix",
-                "hybrid_s6_no_exact",
+                "hybrid_e04_whole_page",
+                "hybrid_e05_max",
+                "hybrid_e06_minmax",
+                "hybrid_e07_no_prefix",
+                "hybrid_e08_no_exact",
             },
         )
 
-    def test_s1_uses_a_separate_whole_page_index(self) -> None:
+    def test_e04_uses_a_separate_whole_page_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runs = self.build(Path(tmp))
 
         by_key = {(run.variant, run.scope): run for run in runs}
         reference = by_key[("hybrid", Scope.WIKI)]
-        whole = by_key[("hybrid_s1_whole_page", Scope.WIKI)]
+        whole = by_key[("hybrid_e04_whole_page", Scope.WIKI)]
         self.assertEqual(
             [build.key.chunking for build in reference.evaluation.index_builds],
             ["heading"],
@@ -176,7 +176,7 @@ class SwapMatrixTests(unittest.TestCase):
             ["whole-page"],
         )
 
-    def test_s1_standalone_uses_the_whole_page_index(self) -> None:
+    def test_e04_standalone_uses_the_whole_page_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             corpus = make_project(root)
@@ -187,7 +187,7 @@ class SwapMatrixTests(unittest.TestCase):
             evaluation = evaluate(
                 dataset,
                 corpus,
-                get_variant("hybrid_s1_whole_page"),
+                get_variant("hybrid_e04_whole_page"),
                 scope=Scope.WIKI,
                 embedder=FakeEmbedder(dim=8),
                 index_key=INDEX_KEY,
@@ -219,7 +219,7 @@ class SwapMatrixTests(unittest.TestCase):
 
 
 class SwapVariantTests(unittest.TestCase):
-    def test_s2_removes_the_tail_term(self) -> None:
+    def test_e05_removes_the_tail_term(self) -> None:
         chunks = (
             EvalChunk(
                 chunk_id="wiki:p#0",
@@ -267,7 +267,7 @@ class SwapVariantTests(unittest.TestCase):
 
         self.assertGreater(default[0].score, maxed[0].score)
 
-    def test_s3_equal_weight_keeps_pages_found_by_both_sides(self) -> None:
+    def test_e06_equal_weight_keeps_pages_found_by_both_sides(self) -> None:
         lexical = [
             hit("a", 0.9),
             hit("b", 0.8),
@@ -280,7 +280,7 @@ class SwapVariantTests(unittest.TestCase):
         self.assertEqual({key[1] for key in keys[:2]}, {"a", "b"})
         self.assertEqual(keys[-1][1], "c")
 
-    def test_s3_applies_the_exact_tier_once(self) -> None:
+    def test_e06_applies_the_exact_tier_once(self) -> None:
         lexical = [
             hit("a", 0.1, exact=True),
             hit("b", 0.9),
@@ -295,7 +295,7 @@ class SwapVariantTests(unittest.TestCase):
         self.assertEqual(without[0][1], "b")
         self.assertEqual(with_exact[0][1], "a")
 
-    def test_s6_removes_the_whole_exact_tier(self) -> None:
+    def test_e08_removes_the_whole_exact_tier(self) -> None:
         lexical = [
             hit("plain", 0.9),
             hit("named", 0.1, exact=True),
@@ -353,7 +353,7 @@ class SwapVariantTests(unittest.TestCase):
 
 
 class PrefixSwapTests(unittest.TestCase):
-    def test_s4_uses_the_no_prefix_query_embedder(self) -> None:
+    def test_e07_uses_the_no_prefix_query_embedder(self) -> None:
         class TaggingEmbedder:
             dim = 2
 
@@ -382,7 +382,7 @@ class PrefixSwapTests(unittest.TestCase):
             evaluation = evaluate(
                 dataset,
                 corpus,
-                get_variant("hybrid_s4_no_prefix"),
+                get_variant("hybrid_e07_no_prefix"),
                 scope=Scope.WIKI,
                 embedder=prefix,
                 query_embedder=no_prefix,
@@ -405,6 +405,8 @@ class CliConfigTests(unittest.TestCase):
             embedding_model="fake",
             embedding_dim=8,
             embedding_api_key="",
+            embedding_page_timeout=300.0,
+            embedding_query_timeout=8.0,
         )
 
         self.assertEqual(

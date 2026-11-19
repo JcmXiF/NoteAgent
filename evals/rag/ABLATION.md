@@ -12,7 +12,7 @@
 
 | Row | Queries | Recall@5 | Δ Recall@5 [95% CI] | Hit@5 | nDCG@10 | Δ nDCG@10 [95% CI] | MRR |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| lexical (historical) | 34 | 0.357 | — | 0.357 | 0.357 | — | 0.357 |
+| E00 lexical (historical) | 34 | 0.357 | — | 0.357 | 0.357 | — | 0.357 |
 | E02 BM25-only | 34 | 0.970 | -0.012 [-0.036, +0.000] | 1.000 | 0.961 | -0.017 [-0.037, -0.002] | 0.973 |
 | E03 vector-only | 34 | 1.000 | +0.018 [+0.000, +0.054] | 1.000 | 0.993 | +0.016 [-0.002, +0.045] | 1.000 |
 | E01 hybrid (reference) | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.978 | +0.000 [+0.000, +0.000] | 0.982 |
@@ -21,7 +21,7 @@
 
 | Row | exact | paraphrase | cross_page | notes |
 |---|---:|---:|---:|---:|
-| lexical (historical) | 1.000 | 0.000 | 0.000 | — |
+| E00 lexical (historical) | 1.000 | 0.000 | 0.000 | — |
 | E02 BM25-only | 1.000 | 1.000 | 0.861 | — |
 | E03 vector-only | 1.000 | 1.000 | 1.000 | — |
 | E01 hybrid (reference) | 1.000 | 1.000 | 0.917 | — |
@@ -30,7 +30,7 @@
 
 | Row | Queries | Recall@5 | Δ Recall@5 [95% CI] | Hit@5 | nDCG@10 | Δ nDCG@10 [95% CI] | MRR |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| lexical (historical) | 40 | 0.294 | — | 0.294 | 0.294 | — | 0.294 |
+| E00 lexical (historical) | 40 | 0.294 | — | 0.294 | 0.294 | — | 0.294 |
 | E02 BM25-only | 40 | 0.946 | -0.039 [-0.108, +0.000] | 0.971 | 0.939 | -0.043 [-0.108, -0.003] | 0.949 |
 | E03 vector-only | 40 | 1.000 | +0.015 [+0.000, +0.044] | 1.000 | 0.994 | +0.013 [-0.001, +0.037] | 1.000 |
 | E01 hybrid (reference) | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.982 | +0.000 [+0.000, +0.000] | 0.985 |
@@ -39,7 +39,7 @@
 
 | Row | exact | paraphrase | cross_page | notes |
 |---|---:|---:|---:|---:|
-| lexical (historical) | 1.000 | 0.000 | 0.000 | 0.000 |
+| E00 lexical (historical) | 1.000 | 0.000 | 0.000 | 0.000 |
 | E02 BM25-only | 1.000 | 1.000 | 0.861 | 0.833 |
 | E03 vector-only | 1.000 | 1.000 | 1.000 | 1.000 |
 | E01 hybrid (reference) | 1.000 | 1.000 | 0.917 | 1.000 |
@@ -48,45 +48,45 @@
 
 | Row | Queries | Recall@5 | Δ Recall@5 [95% CI] | Hit@5 | nDCG@10 | Δ nDCG@10 [95% CI] | MRR |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| reference | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.978 | +0.000 [+0.000, +0.000] | 0.982 |
+| E01 reference | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.978 | +0.000 [+0.000, +0.000] | 0.982 |
+| E04 whole-page | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.959 | -0.019 [-0.050, +0.000] | 0.958 |
 | E05 max aggregation | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.978 | +0.000 [+0.000, +0.000] | 0.982 |
 | E06 min-max + equal weight | 34 | 1.000 | +0.018 [+0.000, +0.054] | 1.000 | 0.980 | +0.002 [+0.000, +0.006] | 0.982 |
 | E07 prefix off | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.977 | -0.001 [-0.003, +0.000] | 0.982 |
 | E08 exact tier off | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.965 | -0.013 [-0.040, +0.000] | 0.964 |
-| E04 whole-page | 34 | 0.982 | +0.000 [+0.000, +0.000] | 1.000 | 0.959 | -0.019 [-0.050, +0.000] | 0.958 |
 
 ## Module ablation rows — per-bucket Recall@5 — main (wiki-only)
 
 | Row | exact | paraphrase | cross_page | notes |
 |---|---:|---:|---:|---:|
-| reference | 1.000 | 1.000 | 0.917 | — |
+| E01 reference | 1.000 | 1.000 | 0.917 | — |
+| E04 whole-page | 1.000 | 1.000 | 0.917 | — |
 | E05 max aggregation | 1.000 | 1.000 | 0.917 | — |
 | E06 min-max + equal weight | 1.000 | 1.000 | 1.000 | — |
 | E07 prefix off | 1.000 | 1.000 | 0.917 | — |
 | E08 exact tier off | 1.000 | 1.000 | 0.917 | — |
-| E04 whole-page | 1.000 | 1.000 | 0.917 | — |
 
 ## Module ablation rows — secondary (wiki+notes)
 
 | Row | Queries | Recall@5 | Δ Recall@5 [95% CI] | Hit@5 | nDCG@10 | Δ nDCG@10 [95% CI] | MRR |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| reference | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.982 | +0.000 [+0.000, +0.000] | 0.985 |
+| E01 reference | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.982 | +0.000 [+0.000, +0.000] | 0.985 |
+| E04 whole-page | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.966 | -0.016 [-0.041, +0.000] | 0.966 |
 | E05 max aggregation | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.982 | +0.000 [+0.000, +0.000] | 0.985 |
 | E06 min-max + equal weight | 40 | 1.000 | +0.015 [+0.000, +0.044] | 1.000 | 0.983 | +0.002 [+0.000, +0.005] | 0.985 |
 | E07 prefix off | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.981 | -0.001 [-0.003, +0.000] | 0.985 |
 | E08 exact tier off | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.971 | -0.011 [-0.033, +0.000] | 0.971 |
-| E04 whole-page | 40 | 0.985 | +0.000 [+0.000, +0.000] | 1.000 | 0.966 | -0.016 [-0.041, +0.000] | 0.966 |
 
 ## Module ablation rows — per-bucket Recall@5 — secondary (wiki+notes)
 
 | Row | exact | paraphrase | cross_page | notes |
 |---|---:|---:|---:|---:|
-| reference | 1.000 | 1.000 | 0.917 | 1.000 |
+| E01 reference | 1.000 | 1.000 | 0.917 | 1.000 |
+| E04 whole-page | 1.000 | 1.000 | 0.917 | 1.000 |
 | E05 max aggregation | 1.000 | 1.000 | 0.917 | 1.000 |
 | E06 min-max + equal weight | 1.000 | 1.000 | 1.000 | 1.000 |
 | E07 prefix off | 1.000 | 1.000 | 0.917 | 1.000 |
 | E08 exact tier off | 1.000 | 1.000 | 0.917 | 1.000 |
-| E04 whole-page | 1.000 | 1.000 | 0.917 | 1.000 |
 
 ## Gate curves (exploratory)
 
@@ -130,6 +130,7 @@ Threshold sample; full points in the raw gate report; 6 gap queries; exploratory
 ## Notes
 
 - Per-bucket CIs are in `build/evals/rag/first-round.json` under `deltas[].byType`; they are exploratory.
+- The tables print Recall@5 buckets; per-bucket Hit@5, nDCG@10 and MRR, and every delta, are in the combined JSON.
 - Gate curves are exploratory; their full points are in `build/evals/rag/ablation/gate.json`.
 - E09 tokenizer is skipped; E10 rerank is deferred.
 - No p-values; no decision rule is pre-registered.

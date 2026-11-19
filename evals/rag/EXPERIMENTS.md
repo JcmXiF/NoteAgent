@@ -43,8 +43,10 @@ Reference configuration: `M1 heading · M2 BM25 · M3 Qwen3 · M4 tail · M5 RRF
 | **R2** | 40-page MIRACL pilot + 5 notes | 40 | 65 (60 wiki + 5 notes) | wiki-only n=60; wiki+notes n=65 | Channel only: E00–E03 |
 | **R3** | 300-page control: 40 pilot pages + 260 unlabeled distractors + 5 notes | 40 | same 65 | wiki-only n=60; wiki+notes n=65 | Full matrix: E00–E08 + G |
 
-R2 and R3 are **data/difficulty controls**, not full matrices. Do not cite an
-R1 module result as if it were measured on R2 or R3.
+R2 is a channel-only data control. R3 now has the full single-module matrix,
+but only **40 labeled pages**; its module and gate results are exploratory at
+those 40 pages, not a 300-page generalization. Do not cite an R1 module result
+as if it were measured on R2 or R3.
 
 Legend: ✓ run · — not run · ⏭ skipped · ⏸ deferred · ⚠️ exploratory.
 
@@ -129,25 +131,25 @@ R2 nDCG@10: E02 0.979 · E03 0.993 · E01 0.990.
 
 ## Results — module ablations on R1 (10 pages, E04–E08)
 
-| ID | Recall@5 | Δ Recall@5 [95% CI] | nDCG@10 | Δ nDCG@10 [95% CI] | MRR | Verdict |
+| ID | Recall@5 | Δ Recall@5 [95% CI] | nDCG@10 | Δ nDCG@10 [95% CI] | MRR | CI reading |
 |---|---:|---:|---:|---:|---:|---|
-| **E04** whole-page | 0.982 | 0.000 [+0.000, +0.000] | 0.959 | -0.019 [-0.050, +0.000] | 0.958 | not established |
-| **E05** max aggregation | 0.982 | 0.000 | 0.978 | 0.000 | 0.982 | no change |
-| **E06** min-max + equal | 1.000 | +0.018 [+0.000, +0.054] | 0.980 | +0.002 [+0.000, +0.006] | 0.982 | not established (one cross-page page) |
-| **E07** prefix off | 0.982 | 0.000 | 0.977 | -0.001 [-0.003, +0.000] | 0.982 | no change |
-| **E08** exact off | 0.982 | 0.000 | 0.965 | -0.013 [-0.040, +0.000] | 0.964 | not established |
+| **E04** whole-page | 0.982 | 0.000 [+0.000, +0.000] | 0.959 | -0.019 [-0.050, +0.000] | 0.958 | CI includes 0 |
+| **E05** max aggregation | 0.982 | 0.000 | 0.978 | 0.000 | 0.982 | point 0 |
+| **E06** min-max + equal | 1.000 | +0.018 [+0.000, +0.054] | 0.980 | +0.002 [+0.000, +0.006] | 0.982 | lower bound 0; one cross-page page |
+| **E07** prefix off | 0.982 | 0.000 | 0.977 | -0.001 [-0.003, +0.000] | 0.982 | CI includes 0 |
+| **E08** exact off | 0.982 | 0.000 | 0.965 | -0.013 [-0.040, +0.000] | 0.964 | CI includes 0 |
 
 E01 reference on R1: Recall@5 0.982 · nDCG@10 0.978 · MRR 0.982.
 
 ## Results — module ablations on R3 (40 labeled + 260 distractors)
 
-| ID | Recall@5 | Δ Recall@5 [95% CI] | nDCG@10 | Δ nDCG@10 [95% CI] | MRR | Verdict |
+| ID | Recall@5 | Δ Recall@5 [95% CI] | nDCG@10 | Δ nDCG@10 [95% CI] | MRR | CI reading |
 |---|---:|---:|---:|---:|---:|---|
-| **E04** whole-page | 0.982 | 0.000 [+0.000, +0.000] | 0.968 | -0.009 [-0.029, +0.005] | 0.964 | not established |
-| **E05** max aggregation | 0.982 | 0.000 | 0.979 | +0.002 [-0.000, +0.007] | 0.982 | no reliable change |
-| **E06** min-max + equal | 0.991 | +0.009 [+0.000, +0.027] | 0.982 | +0.005 [-0.015, +0.025] | 0.982 | not established (one cross-page page) |
-| **E07** prefix off | 0.982 | 0.000 | 0.978 | +0.001 [-0.004, +0.007] | 0.982 | no change |
-| **E08** exact off | 0.982 | 0.000 | 0.977 | 0.000 | 0.979 | no change |
+| **E04** whole-page | 0.982 | 0.000 [+0.000, +0.000] | 0.968 | -0.009 [-0.029, +0.005] | 0.964 | CI includes 0 |
+| **E05** max aggregation | 0.982 | 0.000 | 0.979 | +0.002 [-0.000, +0.007] | 0.982 | CI includes 0; point +0.002 |
+| **E06** min-max + equal | 0.991 | +0.009 [+0.000, +0.027] | 0.982 | +0.005 [-0.015, +0.025] | 0.982 | lower bound 0; one cross-page page |
+| **E07** prefix off | 0.982 | 0.000 | 0.978 | +0.001 [-0.004, +0.007] | 0.982 | CI includes 0 |
+| **E08** exact off | 0.982 | 0.000 | 0.977 | 0.000 | 0.979 | point 0 |
 
 E01 reference on R3: Recall@5 0.982 · nDCG@10 0.977 · MRR 0.979.  
 R3 is exploratory at 40 labeled pages / 55 answerable wiki queries.

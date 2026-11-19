@@ -618,40 +618,40 @@ VARIANTS: dict[str, Variant] = {
         prepare=_hybrid,
         index_key=CHANNEL_INDEX_KEY,
     ),
-    "hybrid_s1_whole_page": Variant(
-        name="hybrid_s1_whole_page",
+    "hybrid_e04_whole_page": Variant(
+        name="hybrid_e04_whole_page",
         description=(
             "E04: hybrid over one whole-page chunk per wiki page"
         ),
         prepare=_hybrid,
         index_key=WHOLE_PAGE_INDEX_KEY,
     ),
-    "hybrid_s2_max": Variant(
-        name="hybrid_s2_max",
+    "hybrid_e05_max": Variant(
+        name="hybrid_e05_max",
         description=(
             "E05: hybrid with max page aggregation (tail weight 0)"
         ),
         prepare=_hybrid_max,
         index_key=CHANNEL_INDEX_KEY,
     ),
-    "hybrid_s3_minmax": Variant(
-        name="hybrid_s3_minmax",
+    "hybrid_e06_minmax": Variant(
+        name="hybrid_e06_minmax",
         description=(
             "E06: hybrid with per-query min-max + equal-weight fusion"
         ),
         prepare=_hybrid_weighted,
         index_key=CHANNEL_INDEX_KEY,
     ),
-    "hybrid_s4_no_prefix": Variant(
-        name="hybrid_s4_no_prefix",
+    "hybrid_e07_no_prefix": Variant(
+        name="hybrid_e07_no_prefix",
         description=(
             "E07: hybrid with the query instruction prefix off"
         ),
         prepare=_hybrid_no_prefix,
         index_key=CHANNEL_INDEX_KEY,
     ),
-    "hybrid_s6_no_exact": Variant(
-        name="hybrid_s6_no_exact",
+    "hybrid_e08_no_exact": Variant(
+        name="hybrid_e08_no_exact",
         description=(
             "E08: hybrid with the whole exact-title tier off"
         ),

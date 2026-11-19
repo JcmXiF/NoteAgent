@@ -222,7 +222,7 @@ def ablation_markdown(
         f"# Retrieval ablation — {run_label}",
         "",
         (
-            f"- Dataset: `{report.dataset.path.as_posix()}` — "
+            f"- Dataset: `{_display_path(report.dataset.path)}` — "
             f"{len(report.dataset.queries)} queries, "
             f"sha256 `{report.dataset.sha256}`"
         ),
@@ -285,6 +285,11 @@ def ablation_markdown(
             (
                 f"- Per-bucket CIs are in `{_display_path(report_path)}` "
                 "under `deltas[].byType`; they are exploratory."
+            ),
+            (
+                "- The tables print Recall@5 buckets; per-bucket Hit@5, "
+                "nDCG@10 and MRR, and every delta, are in the combined "
+                "JSON."
             ),
             (
                 "- Gate curves are exploratory; their full points are in "

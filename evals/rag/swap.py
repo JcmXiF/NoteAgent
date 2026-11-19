@@ -42,11 +42,11 @@ __all__ = [
 
 SWAP_VARIANTS = (
     ("hybrid", "E01 reference"),
-    ("hybrid_s1_whole_page", "E04 whole-page"),
-    ("hybrid_s2_max", "E05 max aggregation"),
-    ("hybrid_s3_minmax", "E06 min-max + equal weight"),
-    ("hybrid_s4_no_prefix", "E07 prefix off"),
-    ("hybrid_s6_no_exact", "E08 exact tier off"),
+    ("hybrid_e04_whole_page", "E04 whole-page"),
+    ("hybrid_e05_max", "E05 max aggregation"),
+    ("hybrid_e06_minmax", "E06 min-max + equal weight"),
+    ("hybrid_e07_no_prefix", "E07 prefix off"),
+    ("hybrid_e08_no_exact", "E08 exact tier off"),
 )
 
 SKIPPED_SWAPS = (
