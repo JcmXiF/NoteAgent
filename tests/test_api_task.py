@@ -782,7 +782,10 @@ class HumanPickTests(TaskApiCase):
 
         gate.set()
         probe = threading.Event()
-        for _ in range(200):
+        # The op lands on a background thread; a loaded CI machine can be slow
+        # to finish the staging write. Wait for the material, not for a fixed
+        # two seconds, or this test flakes on timing rather than behaviour.
+        for _ in range(1000):
             task = TaskStore(self.layout).load()
             if task is not None and task.materials:
                 break
