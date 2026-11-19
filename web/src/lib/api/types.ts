@@ -5,7 +5,11 @@
  * a rename on either side has to be mirrored here.
  */
 
-import type { ObservationPayload, WaitPayload } from "@/lib/api/client";
+import type {
+  ObservationPayload,
+  ObservedMaterial,
+  WaitPayload,
+} from "@/lib/api/client";
 
 export type ProjectInfo = {
   name: string;
@@ -451,6 +455,26 @@ export type TaskCardsView = {
   cards: TaskCard[];
   /** Cards beyond the view's bound. */
   omitted: number;
+};
+
+/** One staged material, with the bounded block index a frame can name. */
+export type TaskMaterial = ObservedMaterial;
+
+/** A bounded list of the task's materials and their block indexes. */
+export type TaskMaterialsView = {
+  view: "materials";
+  rev: number;
+  materials: TaskMaterial[];
+  /** Materials beyond the view's bound. */
+  omitted: number;
+};
+
+/** What a person's pick answers with: the op's state and its material. */
+export type TaskPickResult = {
+  opId: string;
+  status: string;
+  rev: number;
+  material?: TaskMaterial;
 };
 
 /* ----------------------------------------------------------------- Sessions */

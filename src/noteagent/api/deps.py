@@ -28,7 +28,7 @@ from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
-from noteagent.task.model import SearchFn
+from noteagent.task.model import FetchFn, SearchFn, StageFn
 from noteagent.task.service import TaskRegistry, TaskService
 
 
@@ -80,14 +80,21 @@ class AppDeps:
     #: The pure search node behind ``web_search``. ``None`` uses the project's
     #: configured web search; a test scripts the hits and never touches a network.
     task_search: SearchFn | None = None
+    #: The pure fetch and stage nodes behind ``pick_card``. ``None`` uses the
+    #: project's fetch and staging area; a test scripts both and keeps the
+    #: network and the filesystem out of the pick.
+    task_fetch: FetchFn | None = None
+    task_stage: StageFn | None = None
     #: The task's active revision per session, shared by every request in this
     #: process, so the wrapper can name the revision the run observed.
     task_registry: TaskRegistry = field(default_factory=TaskRegistry)
     #: How the task executor is taken off the request thread. A test passes a
     #: synchronous launcher so the op finishes before the handler waits.
     task_spawn: Callable[[Callable[[], None]], None] | None = None
-    #: The bounded wait a task tool gives its executor, in seconds.
+    #: The bounded wait a search tool gives its executor, in seconds.
     task_wait_s: float = 15.0
+    #: The bounded wait a pick tool gives its executor, in seconds.
+    task_pick_wait_s: float = 90.0
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

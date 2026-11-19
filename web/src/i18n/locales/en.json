@@ -655,7 +655,9 @@
       "timeout": "timed out",
       "omitted": "some left out",
       "hits": "{{count}} hits",
-      "searching": "still searching"
+      "searching": "still searching",
+      "picking": "still fetching",
+      "blocks": "{{count}} blocks"
     },
     "wait": {
       "title": "Waiting on you",
@@ -1480,6 +1482,9 @@
     "openFolder": "Could not open that folder",
     "deleteProject": "Could not delete the project",
     "code": {
+      "conflict": "The writing task changed since this view was read. Re-read it and try again.",
+      "not_found": "That card is no longer in the writing task.",
+      "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
       "busy": "This conversation is already answering. Wait for it to finish.",
@@ -1662,6 +1667,13 @@
     "loading": "Loading the task",
     "empty": "No cards yet",
     "cards": "{{count}} cards",
+    "materials": "Materials {{count}}",
+    "blocks": "{{count}} blocks",
+    "moreBlocks": "{{count}} more",
+    "pick": "Pick",
+    "picking": "Picking…",
+    "pickFailed": "The card could not be picked",
+    "pickRunning": "The pick is still running; read the task again later.",
     "loadFailed": "The writing task could not be read",
     "retry": "Retry",
     "status": {

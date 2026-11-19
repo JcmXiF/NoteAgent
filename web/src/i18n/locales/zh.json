@@ -655,7 +655,9 @@
       "timeout": "超时",
       "omitted": "部分命中未显示",
       "hits": "{{count}} 个命中",
-      "searching": "仍在搜索"
+      "searching": "仍在搜索",
+      "picking": "仍在抓取",
+      "blocks": "{{count}} 段"
     },
     "wait": {
       "title": "等待你开始",
@@ -1480,6 +1482,9 @@
     "openFolder": "无法打开这个文件夹",
     "deleteProject": "删除项目失败",
     "code": {
+      "conflict": "写作任务在你读到它之后有变化，请重新读取后再试。",
+      "not_found": "这张卡片已经不在写作任务里了。",
+      "op_failed": "材料抓取或暂存失败，请先读取任务再决定是否重试。",
       "model_error": "助手没有作答，请重试。",
       "cancelled": "已停止。",
       "busy": "这个会话正在作答，请等它结束。",
@@ -1662,6 +1667,13 @@
     "loading": "正在读取任务",
     "empty": "还没有资料卡片",
     "cards": "{{count}} 张卡片",
+    "materials": "{{count}} 份材料",
+    "blocks": "{{count}} 段",
+    "moreBlocks": "还有 {{count}} 段",
+    "pick": "选为材料",
+    "picking": "选择中…",
+    "pickFailed": "无法选择这张卡片",
+    "pickRunning": "选择仍在进行，稍后重新读取任务。",
     "loadFailed": "无法读取写作任务",
     "retry": "重试",
     "status": {

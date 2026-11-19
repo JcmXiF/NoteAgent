@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Event, Lock
 from typing import Iterator
 
+from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import ToolError
@@ -28,17 +29,29 @@ from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
 from noteagent.task.model import (
     ACTIVE_OP_STATUSES,
+    MAX_BLOCK_PREVIEW,
+    MAX_MATERIAL_TITLE,
+    MAX_VIEW_BLOCKS,
+    TASK_VIEWS,
     Card,
+    FetchFn,
     Op,
     SearchCard,
     SearchFn,
+    StagedMaterial,
+    StageFn,
     Task,
     task_view,
 )
 from noteagent.task.store import TaskStore
 
-#: How long a tool waits for its op before it says requested/running.
+#: How long a search waits for its op before it says requested/running.
 DEFAULT_WAIT_S = 15.0
+
+#: How long a pick waits: fetching a page and staging it is a network round
+#: trip, not a local read, so the tool blocks longer before it hands the turn
+#: back to the model with ``requested``/``running``.
+DEFAULT_PICK_WAIT_S = 90.0
 
 #: How often the wait looks for the executor's write. It is a local file, so
 #: this is a poll between two boundaries, not a network retry.
@@ -63,6 +76,13 @@ class TaskOpFailed(TaskToolError):
         super().__init__(message, code="op_failed")
 
 
+class TaskNotFound(TaskToolError):
+    """The thing an op names is not in the task any more."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="not_found")
+
+
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
     """What a tool gets back from a search: cards, or where the op stands."""
@@ -72,6 +92,17 @@ class SearchOutcome:
     status: str
     rev: int
     cards: tuple[Card, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PickOutcome:
+    """What a tool or a route gets back from a pick: a material, or a status."""
+
+    op_id: str
+    card_id: str
+    status: str
+    rev: int
+    material: Mapping[str, object] = field(default_factory=dict)
 
 
 class TaskRegistry:
@@ -105,7 +136,7 @@ class TaskRegistry:
 
 
 class TaskService:
-    """One project's task: inspect it, request a search, and wait at the edge."""
+    """One project's task: inspect it, request an op, and wait at the edge."""
 
     def __init__(
         self,
@@ -114,22 +145,28 @@ class TaskService:
         clock: Clock,
         ids: Ids,
         search: SearchFn,
+        fetch: FetchFn,
+        stage: StageFn,
         registry: TaskRegistry | None = None,
         lock: ProjectLock | None = None,
         spawn: Callable[[Callable[[], None]], None] | None = None,
         wait_s: float = DEFAULT_WAIT_S,
+        pick_wait_s: float = DEFAULT_PICK_WAIT_S,
         poll_s: float = DEFAULT_POLL_S,
     ) -> None:
-        if wait_s < 0:
+        if wait_s < 0 or pick_wait_s < 0:
             raise ValueError("a bounded wait cannot be negative")
         self._layout = layout
         self._clock = clock
         self._ids = ids
         self._search = search
+        self._fetch = fetch
+        self._stage = stage
         self._registry = registry or TaskRegistry()
         self._lock = lock or ProjectLock(layout.task_lock, clock=clock)
         self._spawn = spawn or _spawn_thread
         self._wait_s = wait_s
+        self._pick_wait_s = pick_wait_s
         self._poll_s = poll_s
         self._project_key = str(layout.root.resolve())
         self._owner = f"task-{id(self)}"
@@ -137,14 +174,19 @@ class TaskService:
 
     @property
     def wait_s(self) -> float:
-        """How long a tool waits before it reports the op as still running."""
+        """How long a search waits before it reports the op as still running."""
         return self._wait_s
+
+    @property
+    def pick_wait_s(self) -> float:
+        """How long a pick waits before it reports the op as still running."""
+        return self._pick_wait_s
 
     def inspect(
         self, view: str, *, session_id: str = ""
     ) -> tuple[dict[str, object], int]:
         """A bounded view and its rev; a missing task is made on first read."""
-        if view not in ("summary", "cards"):
+        if view not in TASK_VIEWS:
             raise ValueError(f"unknown task view: {view!r}")
         task = self._store.load()
         if task is None:
@@ -171,11 +213,106 @@ class TaskService:
         if not cleaned:
             raise ValueError("a search needs a query")
         expected = self._registry.observed(self._project_key, session_id)
+        op_id = self._request(
+            kind="search",
+            actor="agent",
+            input={"query": cleaned},
+            expected_rev=expected,
+            session_id=session_id,
+        )
+        observed = self._wait(
+            op_id, f'the web search "{cleaned}"', cancel, wait_s=self._wait_s
+        )
+        # A finished search moved the task; the session now knows that revision.
+        self._registry.observe(self._project_key, session_id, observed.rev)
+        cards: tuple[Card, ...] = ()
+        if (
+            observed.status == "done"
+            and observed.task is not None
+            and observed.op is not None
+        ):
+            ids = observed.op.result.get("cardIds")
+            wanted = (
+                {item for item in ids if isinstance(item, str)}
+                if isinstance(ids, list)
+                else set()
+            )
+            cards = tuple(card for card in observed.task.cards if card.id in wanted)
+        return SearchOutcome(op_id, cleaned, observed.status, observed.rev, cards)
+
+    def pick(
+        self,
+        card_id: str,
+        *,
+        session_id: str = "",
+        expected_rev: int | None = None,
+        actor: str = "agent",
+        cancel: Event | None = None,
+    ) -> PickOutcome:
+        """Write a ``pick`` op and wait for the fetch and stage behind it.
+
+        The agent names a card; the wrapper attaches the revision the session
+        last saw. A person names the revision of the view they clicked from, so
+        a change made since then is a ``conflict`` rather than a pick over it.
+        """
+        cleaned = (card_id or "").strip()
+        if not cleaned:
+            raise ValueError("a pick needs a card id")
+        if actor not in ("agent", "human"):
+            raise ValueError(f"unknown pick actor: {actor!r}")
+        if actor == "human" and expected_rev is None:
+            raise ValueError("a human pick names the revision it saw")
+        expected = (
+            expected_rev
+            if expected_rev is not None
+            else self._registry.observed(self._project_key, session_id)
+        )
+        op_id = self._request(
+            kind="pick",
+            actor=actor,  # type: ignore[arg-type]
+            input={"cardId": cleaned},
+            expected_rev=expected,
+            session_id=session_id,
+        )
+        observed = self._wait(
+            op_id,
+            f'the pick of card "{cleaned}"',
+            cancel,
+            wait_s=self._pick_wait_s,
+        )
+        self._registry.observe(self._project_key, session_id, observed.rev)
+        material: Mapping[str, object] = {}
+        if (
+            observed.status == "done"
+            and observed.task is not None
+            and observed.op is not None
+        ):
+            material_id = observed.op.result.get("materialId")
+            material = next(
+                (
+                    item
+                    for item in observed.task.materials
+                    if item.get("id") == material_id
+                ),
+                {},
+            )
+        return PickOutcome(op_id, cleaned, observed.status, observed.rev, material)
+
+    def _request(
+        self,
+        *,
+        kind: str,
+        actor: str,
+        input: Mapping[str, object],
+        expected_rev: int | None,
+        session_id: str,
+    ) -> str:
+        """Write one typed op, after refusing a revision the caller never saw."""
         op_id = self._ids.new_id("op")
         now = iso_timestamp(self._clock)
         with self._writing():
             task = self._store.load() or self._create_locked()
-            expected = task.rev if expected is None else expected
+            expected = task.rev if expected_rev is None else expected_rev
             if expected != task.rev:
                 raise TaskConflict(
                     "the writing task changed since this session last saw it "
@@ -184,10 +321,10 @@ class TaskService:
                 )
             op = Op(
                 id=op_id,
-                kind="search",
-                actor="agent",
+                kind=kind,  # type: ignore[arg-type]
+                actor=actor,  # type: ignore[arg-type]
                 status="requested",
-                input={"query": cleaned},
+                input=dict(input),
                 expected_rev=expected,
                 created_at=now,
                 updated_at=now,
@@ -196,86 +333,132 @@ class TaskService:
                 replace(task, ops=task.ops + (op,), updated_at=now)
             )
             self._registry.observe(self._project_key, session_id, expected)
-        self._spawn(lambda: self._run_search(op_id, cleaned))
-        outcome = self._wait(op_id, cleaned, cancel)
-        # A finished search moved the task; the session now knows that revision.
-        self._registry.observe(self._project_key, session_id, outcome.rev)
-        return outcome
+        self._spawn(lambda: self._run_op(op_id))
+        return op_id
 
-    def _run_search(self, op_id: str, query: str) -> None:
-        """The executor's side: claim, call the node, write the answer back."""
+    def _run_op(self, op_id: str) -> None:
+        """The executor's side: claim, run the typed node(s), write the answer."""
         try:
-            if not self._claim(op_id):
+            claimed = self._claim(op_id)
+            if claimed is None:
                 return
             try:
-                cards = list(self._search(query))
-            except Exception as err:  # noqa: BLE001 - the op records the failure
-                self._finish_failed(op_id, f"{type(err).__name__}: {err}")
+                answer = self._execute(*claimed)
+            except _OpFailure as err:
+                self._finish_failed(op_id, err.code, str(err))
                 return
-            self._finish_done(op_id, cards)
+            except Exception as err:  # noqa: BLE001 - the op records the failure
+                self._finish_failed(
+                    op_id, "op_failed", f"{type(err).__name__}: {err}"
+                )
+                return
+            self._finish_done(op_id, answer)
         except Exception as err:  # noqa: BLE001 - a writer error must not vanish
             try:
-                self._finish_failed(op_id, f"{type(err).__name__}: {err}")
+                self._finish_failed(
+                    op_id, "op_failed", f"{type(err).__name__}: {err}"
+                )
             except Exception:
                 pass
 
-    def _claim(self, op_id: str) -> bool:
-        """Move the op to running; false when it is no longer claimable."""
+    def _execute(self, task: Task, op: Op) -> "_OpAnswer":
+        """Dispatch one claimed op to its pure node(s). No task writes here."""
+        if op.kind == "search":
+            query = _input_text(op.input, "query")
+            try:
+                cards = list(self._search(query))
+            except Exception as err:  # noqa: BLE001 - named in the op
+                raise _OpFailure(
+                    "op_failed", f"{type(err).__name__}: {err}"
+                ) from err
+            return _OpAnswer("search", {"hits": len(cards)}, cards=tuple(cards))
+        if op.kind == "pick":
+            card_id = _input_text(op.input, "cardId")
+            card = next((item for item in task.cards if item.id == card_id), None)
+            if card is None:
+                raise _OpFailure(
+                    "not_found",
+                    f"the writing task has no card {card_id!r}; call "
+                    'inspect("cards") for the ids it holds',
+                )
+            capture = self._fetch(card.url)
+            if capture.fidelity == FIDELITY_FAILED:
+                raise _OpFailure(
+                    "op_failed",
+                    f"the page at {card.url} failed the quality gate and was "
+                    "not staged",
+                )
+            staged = self._stage(capture, task.id)
+            row = _material_row(staged, run_id=task.id)
+            return _OpAnswer(
+                "pick",
+                {
+                    "materialId": row["id"],
+                    "title": row["title"],
+                    "fidelity": row["fidelity"],
+                    "blocks": row["blockCount"],
+                },
+                material=row,
+            )
+        raise _OpFailure("op_failed", f"unknown op kind: {op.kind!r}")
+
+    def _claim(self, op_id: str) -> tuple[Task, Op] | None:
+        """Move the op to running; ``None`` when it is no longer claimable."""
         with self._writing():
             task = self._store.load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
-                return False
+                return None
             now = iso_timestamp(self._clock)
+            claimed = replace(op, status="running", updated_at=now)
             self._store.save(
                 replace(
                     task,
-                    ops=_replace_op(
-                        task, replace(op, status="running", updated_at=now)
-                    ),
+                    ops=_replace_op(task, claimed),
                     updated_at=now,
                 )
             )
-            return True
+            return task, claimed
 
-    def _finish_done(self, op_id: str, cards: list[SearchCard]) -> None:
+    def _finish_done(self, op_id: str, answer: "_OpAnswer") -> None:
         with self._writing():
             task = self._store.load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
             now = iso_timestamp(self._clock)
-            new_cards = tuple(
-                Card(
-                    id=self._ids.new_id("card"),
-                    title=_text(card.title) or card.url,
-                    url=_text(card.url),
-                    snippet=_text(card.snippet),
-                    site=_text(card.site),
+            cards = task.cards
+            materials = task.materials
+            result = dict(answer.result)
+            if answer.kind == "search":
+                new_cards = tuple(
+                    Card(
+                        id=self._ids.new_id("card"),
+                        title=_text(card.title) or card.url,
+                        url=_text(card.url),
+                        snippet=_text(card.snippet),
+                        site=_text(card.site),
+                    )
+                    for card in answer.cards
+                    if _text(card.url)
                 )
-                for card in cards
-                if _text(card.url)
-            )
-            done = replace(
-                op,
-                status="done",
-                result={
-                    "hits": len(new_cards),
-                    "cardIds": [card.id for card in new_cards],
-                },
-                updated_at=now,
-            )
+                cards = task.cards + new_cards
+                result["cardIds"] = [card.id for card in new_cards]
+            elif answer.material is not None:
+                materials = _upsert_material(task.materials, answer.material)
+            done = replace(op, status="done", result=result, updated_at=now)
             self._store.save(
                 replace(
                     task,
-                    cards=task.cards + new_cards,
+                    cards=cards,
+                    materials=materials,
                     ops=_replace_op(task, done),
                     rev=task.rev + 1,
                     updated_at=now,
                 )
             )
 
-    def _finish_failed(self, op_id: str, error: str) -> None:
+    def _finish_failed(self, op_id: str, code: str, error: str) -> None:
         with self._writing():
             task = self._store.load()
             op = task.op(op_id) if task is not None else None
@@ -291,6 +474,7 @@ class TaskService:
                             op,
                             status="failed",
                             error=error[:1000],
+                            error_code=code,
                             updated_at=now,
                         ),
                     ),
@@ -299,11 +483,19 @@ class TaskService:
             )
 
     def _wait(
-        self, op_id: str, query: str, cancel: Event | None
-    ) -> SearchOutcome:
-        deadline = time.monotonic() + self._wait_s
+        self,
+        op_id: str,
+        what: str,
+        cancel: Event | None,
+        *,
+        wait_s: float,
+    ) -> "_Observed":
+        """Wait for the op's boundary; a failure is raised, a wait is returned."""
+        deadline = time.monotonic() + wait_s
         status = "requested"
         rev = 0
+        task: Task | None = None
+        op: Op | None = None
         while True:
             if cancel is not None and cancel.is_set():
                 raise RunCancelled("the run was cancelled")
@@ -314,28 +506,22 @@ class TaskService:
             if op is not None:
                 status = op.status
             if op is not None and op.status == "failed":
+                detail = op.error or "the node behind it failed"
+                if op.error_code == "not_found":
+                    raise TaskNotFound(
+                        f"{detail}. not_found. Do not retry blindly; call "
+                        "inspect and use an id it shows."
+                    )
                 raise TaskOpFailed(
-                    "the web search could not finish: "
-                    f"{op.error or 'the search node failed'}. "
+                    f"{what} could not finish: {detail}. op_failed. "
                     "Do not retry blindly; call inspect before deciding "
-                    "whether to search again."
+                    "whether to try again."
                 )
             if op is not None and op.status == "done":
-                ids = op.result.get("cardIds")
-                wanted = (
-                    {item for item in ids if isinstance(item, str)}
-                    if isinstance(ids, list)
-                    else set()
-                )
-                cards = (
-                    tuple(card for card in task.cards if card.id in wanted)
-                    if task is not None
-                    else ()
-                )
-                return SearchOutcome(op_id, query, "done", rev, cards)
+                return _Observed("done", rev, task, op)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return SearchOutcome(op_id, query, status, rev)
+                return _Observed(status, rev, task, op)
             time.sleep(min(self._poll_s, remaining))
 
     def _create_locked(self) -> Task:
@@ -366,6 +552,82 @@ class TaskService:
                 self._lock.release(self._owner)
 
 
+class _OpFailure(RuntimeError):
+    """A named failure the executor records on the op it was running."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class _OpAnswer:
+    """What a finished op writes back, in the shape its kind produces."""
+
+    kind: str
+    result: Mapping[str, object]
+    cards: tuple[SearchCard, ...] = ()
+    material: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Observed:
+    """The task and op as they stood when the wait reached its boundary."""
+
+    status: str
+    rev: int
+    task: Task | None
+    op: Op | None
+
+
+def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
+    """The task's record of one staged material, with a bounded block index.
+
+    The source text stays in the staging area. What the task keeps is the
+    identity and the id/preview pairs a frame will name later.
+    """
+    material = staged.material.strip()
+    blocks = tuple(staged.blocks[:MAX_VIEW_BLOCKS])
+    count = max(staged.block_count, len(staged.blocks))
+    return {
+        "id": material,
+        "title": (staged.title.strip() or material)[:MAX_MATERIAL_TITLE],
+        "url": staged.url.strip(),
+        "kind": staged.kind.strip(),
+        "fidelity": staged.fidelity.strip(),
+        "state": staged.state.strip() or "staged",
+        "runId": run_id,
+        "blockCount": count,
+        "blocks": [
+            {
+                "id": block.id.strip(),
+                "tag": block.tag.strip(),
+                "preview": block.preview.strip()[:MAX_BLOCK_PREVIEW],
+            }
+            for block in blocks
+            if block.id.strip()
+        ],
+    }
+
+
+def _upsert_material(
+    materials: tuple[Mapping[str, object], ...],
+    row: Mapping[str, object] | None,
+) -> tuple[Mapping[str, object], ...]:
+    """A material is one object: picking it again replaces its reading."""
+    if row is None:
+        return materials
+    for index, item in enumerate(materials):
+        if item.get("id") == row.get("id"):
+            return materials[:index] + (row,) + materials[index + 1 :]
+    return materials + (row,)
+
+
+def _input_text(values: Mapping[str, object], key: str) -> str:
+    value = values.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _replace_op(task: Task, op: Op) -> tuple[Op, ...]:
     return tuple(op if item.id == op.id else item for item in task.ops)
 
@@ -379,10 +641,13 @@ def _spawn_thread(work: Callable[[], None]) -> None:
 
 
 __all__ = [
+    "DEFAULT_PICK_WAIT_S",
     "DEFAULT_POLL_S",
     "DEFAULT_WAIT_S",
+    "PickOutcome",
     "SearchOutcome",
     "TaskConflict",
+    "TaskNotFound",
     "TaskOpFailed",
     "TaskRegistry",
     "TaskService",

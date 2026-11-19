@@ -46,6 +46,7 @@ from noteagent.pipeline.run import PipelineRun, is_run_id
 from noteagent.project.identity import source_identity
 from noteagent.project.layout import ProjectLayout
 from noteagent.project.raw_kinds import raw_kind
+from noteagent.task.store import TaskStore
 
 #: How many runs of un-promoted staging are kept. Older ones are removed.
 DEFAULT_KEEP_RUNS = 3
@@ -613,10 +614,29 @@ class Materials:
         )
         return self._log.state_for(material)
 
-    def clean(self, runs: Sequence[PipelineRun], keep: int = DEFAULT_KEEP_RUNS) -> int:
-        """Remove old staging, recording what was dropped with it."""
+    def clean(
+        self,
+        runs: Sequence[PipelineRun],
+        keep: int = DEFAULT_KEEP_RUNS,
+        *,
+        keep_ids: Sequence[str] = (),
+    ) -> int:
+        """Remove old staging, recording what was dropped with it.
+
+        Retention is about a pipeline run's staging, not about every folder
+        under ``staging/``: the active writing task stages its materials under
+        its own id, and a later pipeline run must not expire the material the
+        task and the agent are still reading. The active task is protected
+        here, beside the caller's own *keep_ids*, so no pipeline caller has to
+        know about the task to keep it safe.
+        """
         started = {run.id: run.started_at for run in runs}
-        doomed = self._staging.expired(keep, started)
+        protected = set(keep_ids) | self._active_task_ids()
+        doomed = [
+            (run_id, path)
+            for run_id, path in self._staging.expired(keep, started)
+            if run_id not in protected
+        ]
         at = iso_timestamp(self._clock)
         for run_id, path in doomed:
             for state in self.for_run(run_id):
@@ -640,6 +660,11 @@ class Materials:
                 )
             self._staging.remove(path)
         return len(doomed)
+
+    def _active_task_ids(self) -> set[str]:
+        """The task whose staging this project must keep, if it has one."""
+        task = TaskStore(self._layout).load()
+        return {task.id} if task is not None else set()
 
 
 def _blocks_for(capture: Capture, kind: str) -> list[dict[str, str]]:

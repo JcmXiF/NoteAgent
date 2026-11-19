@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -21,6 +22,8 @@ from noteagent.pipeline.materials import (
 )
 from noteagent.pipeline.run import PipelineRun
 from noteagent.project.init import init_project
+from noteagent.task.model import Task
+from noteagent.task.store import TaskStore
 
 try:
     from pdf_fixtures import HELLO_PDF
@@ -380,6 +383,63 @@ class RetentionTests(unittest.TestCase):
                 if state.run_id == "pr-9"
             ]
             self.assertEqual([state.state for state in pruned], ["dropped"])
+
+
+class TaskRetentionTests(unittest.TestCase):
+    def test_the_active_tasks_staging_survives_a_pipeline_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            TaskStore(layout).save(
+                Task(
+                    id="task-1",
+                    created_at="2026-11-10T09:00:00Z",
+                    updated_at="2026-11-10T09:00:00Z",
+                )
+            )
+            materials = Materials(layout, clock=_clock())
+            kept = materials.stage(_capture(), run_id="task-1")
+            # The task staged its material before the runs; without protection
+            # retention would see it as the oldest folder and drop it.
+            old = datetime(2026, 11, 10, 8, tzinfo=timezone.utc).timestamp()
+            os.utime(layout.staging / "task-1", (old, old))
+            for hour in (10, 11, 12, 13):
+                materials.stage(
+                    _capture(url=f"https://example.com/{hour}"),
+                    run_id=f"pr-{hour}",
+                )
+
+            removed = materials.clean(
+                [_run(f"pr-{hour}", hour) for hour in (10, 11, 12, 13)],
+                keep=1,
+            )
+
+            # The three old runs go; the newest run and the task's staging stay.
+            self.assertEqual(removed, 3)
+            self.assertTrue((layout.staging / "task-1").is_dir())
+            self.assertTrue((layout.staging / "pr-13").is_dir())
+            for hour in (10, 11, 12):
+                self.assertFalse((layout.staging / f"pr-{hour}").exists())
+            # The material is still staged, not dropped with a pipeline run.
+            self.assertEqual(materials.states()[kept.material].state, "staged")
+
+    def test_without_a_task_old_staging_is_still_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            materials = Materials(layout, clock=_clock())
+            dropped = materials.stage(
+                _capture(url="https://example.com/old"), run_id="pr-9"
+            )
+            materials.stage(
+                _capture(url="https://example.com/new"), run_id="pr-13"
+            )
+
+            removed = materials.clean(
+                [_run("pr-9", 9), _run("pr-13", 13)], keep=1
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertFalse((layout.staging / "pr-9").exists())
+            self.assertEqual(materials.states()[dropped.material].state, "dropped")
 
 
 if __name__ == "__main__":

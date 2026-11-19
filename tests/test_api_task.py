@@ -1,9 +1,9 @@
-"""The writing task through the API seam: a search, its cards, and inspect.
+"""The writing task through the API seam: search, pick, materials and inspect.
 
-The model is scripted, the search node is a fake, and the executor runs on the
-calling thread unless a test needs the bounded wait to expire. The task is the
-core's object: every assertion below reads it through HTTP or its stored shape,
-never through a handler's scratch space.
+The model is scripted, the nodes are fakes, and the executor runs on the calling
+thread unless a test needs a bounded wait to expire. The task is the core's
+object: every assertion below reads it through HTTP or its stored shape, never
+through a handler's scratch space.
 """
 
 from __future__ import annotations
@@ -17,9 +17,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
+from noteagent.acquire.types import Capture
 from noteagent.agent.faux import FauxModelClient
 from noteagent.project.init import init_project
-from noteagent.task.model import SearchCard
+from noteagent.task.model import (
+    Card,
+    MaterialBlock,
+    SearchCard,
+    StagedMaterial,
+    Task,
+)
 from noteagent.task.store import TaskStore
 
 try:
@@ -49,6 +56,11 @@ CARDS = (
         site="example.com",
     ),
 )
+
+
+#: Tells an omitted node (use the test fake) from an explicit ``None`` (let the
+#: core build its production node).
+_UNSET = object()
 
 
 def _sse(text: str) -> list[tuple[str, dict]]:
@@ -86,6 +98,90 @@ class FakeSearch:
         return list(self.cards)
 
 
+def _capture(
+    url: str = "https://example.com/entropy",
+    *,
+    title: str = "Entropy",
+    fidelity: str = "ok",
+) -> Capture:
+    return Capture(
+        url=url,
+        title=title,
+        markdown="熵衡量不确定性。",
+        html=(
+            "<html><head><title>Entropy</title></head><body><article>"
+            '<p data-na-block="b1">熵衡量不确定性。</p>'
+            '<p data-na-block="b2">信息是不确定性的减少。</p>'
+            "</article></body></html>"
+        ),
+        capture_method="test",
+        fidelity=fidelity,
+        reasons=(),
+    )
+
+
+def _staged(
+    material: str = "raw/web/entropy-a1.html",
+    *,
+    title: str = "Entropy",
+    url: str = "https://example.com/entropy",
+    fidelity: str = "ok",
+    blocks: tuple[MaterialBlock, ...] = (
+        MaterialBlock(id="b1", tag="p", preview="熵衡量不确定性。"),
+        MaterialBlock(id="b2", tag="p", preview="信息是不确定性的减少。"),
+    ),
+    block_count: int | None = None,
+) -> StagedMaterial:
+    return StagedMaterial(
+        material=material,
+        title=title,
+        url=url,
+        kind="html",
+        fidelity=fidelity,
+        state="staged",
+        block_count=len(blocks) if block_count is None else block_count,
+        blocks=blocks,
+    )
+
+
+class FakeFetch:
+    """A pure fetch node whose page, failure or wait the test chooses."""
+
+    def __init__(self, capture=None, *, error=None, gate=None) -> None:
+        self.capture = _capture() if capture is None else capture
+        self.error = error
+        self.gate = gate
+        self.urls: list[str] = []
+
+    def __call__(self, url: str):
+        self.urls.append(url)
+        if self.gate is not None:
+            self.gate.wait(5)
+        if self.error is not None:
+            raise self.error
+        return self.capture
+
+
+class FakeStage:
+    """A pure stage node whose material, failure or wait the test chooses."""
+
+    def __init__(self, material=None, *, error=None, gate=None) -> None:
+        self.material = _staged() if material is None else material
+        self.error = error
+        self.gate = gate
+        self.run_ids: list[str] = []
+        self.captures: list[Capture] = []
+
+    def __call__(self, capture: Capture, run_id: str):
+        self.captures.append(capture)
+        self.run_ids.append(run_id)
+        if self.gate is not None:
+            self.gate.wait(5)
+        if self.error is not None:
+            raise self.error
+        return self.material
+
+
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class TaskApiCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -102,17 +198,26 @@ class TaskApiCase(unittest.TestCase):
         self,
         *scripts,
         search=None,
+        fetch=_UNSET,
+        stage=_UNSET,
         spawn=None,
         wait_s=15.0,
+        pick_wait_s=0.05,
         ids=None,
     ) -> "TestClient":
+        # ``None`` means "let the core build the production node"; leaving the
+        # argument out gives the test fake. A test that wants the real staging
+        # area passes ``stage=None``.
         deps = AppDeps(
             clock=FixedClock(),
             ids=ids or SequentialIds(),
             model=FauxModelClient(*scripts),
             task_search=search if search is not None else FakeSearch(),
+            task_fetch=FakeFetch() if fetch is _UNSET else fetch,
+            task_stage=FakeStage() if stage is _UNSET else stage,
             task_spawn=spawn,
             task_wait_s=wait_s,
+            task_pick_wait_s=pick_wait_s,
         )
         return TestClient(create_app(deps))
 
@@ -268,6 +373,481 @@ class WebSearchTests(TaskApiCase):
         task = self.task()
         self.assertEqual(task.cards, ())
         self.assertEqual(task.ops[0].status, "done")
+
+
+class PickCardTests(TaskApiCase):
+    def test_a_pick_fetches_and_stages_the_card_into_the_task(self) -> None:
+        fetch = FakeFetch()
+        stage = FakeStage()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("材料好了。").script,
+            fetch=fetch,
+            stage=stage,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        picked = observations[1]
+        self.assertEqual(picked["tool"], "pick_card")
+        self.assertEqual(picked["rev"], 2)
+        self.assertEqual(picked["fidelity"], "ok")
+        self.assertEqual(
+            [item["id"] for item in picked["materials"]],
+            ["raw/web/entropy-a1.html"],
+        )
+        self.assertEqual(picked["materials"][0]["title"], "Entropy")
+        self.assertEqual(picked["materials"][0]["state"], "staged")
+        self.assertEqual(picked["materials"][0]["blockCount"], 2)
+        # The chat card carries the summary, not the whole block index.
+        self.assertNotIn("blocks", picked["materials"][0])
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual([op.kind for op in task.ops], ["search", "pick"])
+        pick = task.ops[1]
+        self.assertEqual(pick.actor, "agent")
+        self.assertEqual(pick.status, "done")
+        self.assertEqual(pick.expected_rev, 1)
+        self.assertEqual(pick.input["cardId"], "card-1")
+
+        self.assertEqual(len(task.materials), 1)
+        material = task.materials[0]
+        self.assertEqual(material["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(material["title"], "Entropy")
+        self.assertEqual(material["url"], "https://example.com/entropy")
+        self.assertEqual(material["fidelity"], "ok")
+        self.assertEqual(material["state"], "staged")
+        self.assertEqual(material["runId"], "task-1")
+        self.assertEqual(material["blockCount"], 2)
+        self.assertEqual(
+            [block["id"] for block in material["blocks"]], ["b1", "b2"]
+        )
+        self.assertEqual(material["blocks"][0]["preview"], "熵衡量不确定性。")
+
+        self.assertEqual(fetch.urls, ["https://example.com/entropy"])
+        self.assertEqual(stage.run_ids, ["task-1"])
+
+        content = self.last_tool_result_content(session_id, "pick_card")
+        self.assertIn("rev 2", content)
+        self.assertIn("Entropy", content)
+        self.assertIn("inspect", content)
+
+        done = events[-1][1]
+        steps = [
+            message
+            for message in done["session"]["messages"]
+            if message.get("isStep")
+        ]
+        self.assertEqual(steps[-1]["cards"][0]["tool"], "pick_card")
+        self.assertEqual(
+            steps[-1]["cards"][0]["materials"][0]["id"],
+            "raw/web/entropy-a1.html",
+        )
+
+    def test_inspect_materials_returns_a_bounded_block_index(self) -> None:
+        blocks = tuple(
+            MaterialBlock(id=f"b{index}", tag="p", preview=f"第{index}块的预览")
+            for index in range(1, 131)
+        )
+        stage = FakeStage(_staged(blocks=blocks, block_count=130))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3", "inspect", '{"view": "materials"}'
+            ).script,
+            FauxModelClient.text("读到了材料。").script,
+            stage=stage,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        picked = observations[1]
+        self.assertEqual(picked["materials"][0]["blockCount"], 130)
+
+        inspected = observations[2]
+        self.assertEqual(inspected["tool"], "inspect")
+        self.assertEqual(inspected["rev"], 2)
+        material = inspected["materials"][0]
+        self.assertEqual(material["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(material["blockCount"], 130)
+        self.assertEqual(material["blocksOmitted"], 10)
+        # The event card is a summary; the index stays in the model's content.
+        self.assertNotIn("blocks", material)
+
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("[b1]", content)
+        self.assertIn("第1块的预览", content)
+        self.assertIn("[b120]", content)
+        self.assertNotIn("[b121]", content)
+        self.assertIn("10 more block(s)", content)
+
+        task = self.task()
+        self.assertEqual(len(task.materials[0]["blocks"]), 120)
+        self.assertEqual(task.materials[0]["blockCount"], 130)
+
+    def test_an_unknown_card_is_not_found_and_writes_no_material(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-999"}'
+            ).script,
+            FauxModelClient.text("卡片不存在。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        picked = observations[1]
+        self.assertTrue(picked["error"])
+        self.assertEqual(picked["diagnostics"][0]["code"], "not_found")
+        content = self.last_tool_result_content(session_id, "pick_card")
+        self.assertIn("not_found", content)
+        self.assertIn("do not retry blindly", content.lower())
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(task.ops[1].status, "failed")
+        self.assertEqual(task.ops[1].error_code, "not_found")
+
+    def test_a_fetch_failure_is_op_failed_and_writes_no_material(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("抓取失败了。").script,
+            fetch=FakeFetch(error=RuntimeError("the route refused")),
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        picked = [data for kind, data in events if kind == "observation"][1]
+        self.assertTrue(picked["error"])
+        self.assertEqual(picked["diagnostics"][0]["code"], "op_failed")
+        content = self.last_tool_result_content(session_id, "pick_card")
+        self.assertIn("op_failed", content)
+        self.assertIn("do not retry blindly", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertIn("the route refused", task.ops[1].error)
+        self.assertEqual(task.ops[1].error_code, "op_failed")
+
+    def test_a_stage_failure_writes_no_half_material(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("暂存失败了。").script,
+            stage=FakeStage(error=RuntimeError("the disk refused")),
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        picked = [data for kind, data in events if kind == "observation"][1]
+        self.assertEqual(picked["diagnostics"][0]["code"], "op_failed")
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertEqual(task.ops[1].status, "failed")
+
+    def test_a_failed_capture_stages_nothing_even_with_the_real_staging(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("页面质量不合格。").script,
+            fetch=FakeFetch(_capture(fidelity="failed")),
+            stage=None,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        picked = [data for kind, data in events if kind == "observation"][1]
+        self.assertTrue(picked["error"])
+        self.assertEqual(picked["diagnostics"][0]["code"], "op_failed")
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertEqual(task.ops[1].status, "failed")
+        # No manifest means no material; the staging area did not get a folder.
+        self.assertFalse((self.layout.staging / task.id).exists())
+        self.assertEqual(
+            list(self.layout.staging.glob(f"{task.id}/*/manifest.json")), []
+        )
+
+    def test_a_pick_that_outlives_the_wait_returns_requested_or_running(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        fetch = FakeFetch(gate=gate)
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("还在抓。").script,
+            fetch=fetch,
+            pick_wait_s=0.05,
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        picked = [data for kind, data in events if kind == "observation"][1]
+        self.assertNotIn("error", picked)
+        self.assertIn(picked["status"], ("requested", "running"))
+        self.assertEqual(picked["rev"], 1)
+        content = self.last_tool_result_content(session_id, "pick_card")
+        self.assertIn("still", content.lower())
+        self.assertIn("do not pick it again", content.lower())
+
+        # The executor is still the writer: letting the fetch finish lands the
+        # material in the task even though the model already got its answer.
+        gate.set()
+        probe = threading.Event()
+        task = None
+        for _ in range(200):
+            task = TaskStore(self.layout).load()
+            if task is not None and task.materials:
+                break
+            probe.wait(0.01)
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(len(task.materials), 1)
+        self.assertEqual(task.ops[1].status, "done")
+
+    def test_the_real_staging_writes_the_manifest_block_index_into_the_task(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.text("材料已暂存。").script,
+            fetch=FakeFetch(_capture()),
+            # Explicit None builds the core's staging node over the temp project.
+            stage=None,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        picked = [data for kind, data in events if kind == "observation"][1]
+        self.assertEqual(picked["materials"][0]["blockCount"], 2)
+
+        task = self.task()
+        material = task.materials[0]
+        self.assertTrue(material["id"].startswith("raw/web/"))
+        self.assertTrue(material["id"].endswith(".html"))
+        self.assertEqual(material["title"], "Entropy")
+        self.assertEqual(material["fidelity"], "ok")
+        self.assertEqual(
+            [block["id"] for block in material["blocks"]], ["b1", "b2"]
+        )
+        manifests = list(
+            (self.layout.staging / task.id).glob("*/manifest.json")
+        )
+        self.assertEqual(len(manifests), 1)
+
+
+class HumanPickTests(TaskApiCase):
+    def seed_task(self) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=0,
+                cards=(
+                    Card(
+                        id="card-1",
+                        title="Entropy",
+                        url="https://example.com/entropy",
+                        snippet="熵衡量不确定性。",
+                        site="example.com",
+                    ),
+                ),
+            )
+        )
+
+    def test_a_person_picks_a_card_and_the_chat_inspect_sees_the_material(self) -> None:
+        self.seed_task()
+        stage = FakeStage()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "materials"}'
+            ).script,
+            FauxModelClient.text("看到材料了。").script,
+            stage=stage,
+            spawn=lambda work: work(),
+        )
+
+        viewed = client.get("/api/v1/task", params={"view": "cards"})
+        self.assertEqual(viewed.status_code, 200, viewed.text)
+        self.assertEqual(viewed.json()["rev"], 0)
+        self.assertEqual(viewed.json()["cards"][0]["id"], "card-1")
+
+        picked = client.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-1", "expectedRev": 0},
+        )
+        self.assertEqual(picked.status_code, 200, picked.text)
+        body = picked.json()
+        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["rev"], 1)
+        self.assertEqual(body["material"]["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(body["material"]["title"], "Entropy")
+        self.assertEqual(body["material"]["state"], "staged")
+
+        # The same one task: the chat reads the material the person picked.
+        session_id = self.new_session(client)
+        events = self.ask(client, session_id)
+        observation = next(
+            data for kind, data in events if kind == "observation"
+        )
+        self.assertEqual(observation["tool"], "inspect")
+        self.assertEqual(observation["rev"], 1)
+        self.assertEqual(
+            [item["id"] for item in observation["materials"]],
+            ["raw/web/entropy-a1.html"],
+        )
+
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual([op.kind for op in task.ops], ["pick"])
+        self.assertEqual(task.ops[0].actor, "human")
+        self.assertEqual(task.ops[0].status, "done")
+        self.assertEqual(task.ops[0].expected_rev, 0)
+        self.assertEqual(task.materials[0]["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(stage.run_ids, ["task-7"])
+
+    def test_a_pick_that_outlives_the_wait_returns_the_op_status(self) -> None:
+        self.seed_task()
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        client = self.client(
+            fetch=FakeFetch(gate=gate),
+            pick_wait_s=0.05,
+        )
+
+        response = client.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-1", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertIn(body["status"], ("requested", "running"))
+        self.assertEqual(body["rev"], 0)
+        self.assertNotIn("material", body)
+
+        gate.set()
+        probe = threading.Event()
+        for _ in range(200):
+            task = TaskStore(self.layout).load()
+            if task is not None and task.materials:
+                break
+            probe.wait(0.01)
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(task.ops[0].status, "done")
+        self.assertEqual(task.materials[0]["id"], "raw/web/entropy-a1.html")
+
+    def test_a_person_picking_an_unknown_card_is_not_found(self) -> None:
+        self.seed_task()
+        client = self.client(spawn=lambda work: work())
+
+        response = client.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-999", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["code"], "not_found")
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertEqual(task.ops[0].status, "failed")
+        self.assertEqual(task.ops[0].error_code, "not_found")
+
+    def test_a_person_picking_a_page_that_fails_to_fetch_gets_op_failed(self) -> None:
+        self.seed_task()
+        client = self.client(
+            fetch=FakeFetch(error=RuntimeError("no route")),
+            spawn=lambda work: work(),
+        )
+
+        response = client.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-1", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.json()["code"], "op_failed")
+        task = self.task()
+        self.assertEqual(task.materials, ())
+        self.assertEqual(task.ops[0].status, "failed")
+        self.assertEqual(task.ops[0].error_code, "op_failed")
+
+    def test_a_stale_view_is_a_conflict_and_writes_no_op(self) -> None:
+        self.seed_task()
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, rev=1, intent="a person edited it"))
+        stage = FakeStage()
+        client = self.client(stage=stage, spawn=lambda work: work())
+
+        response = client.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-1", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(task.ops, ())
+        self.assertEqual(task.materials, ())
+        self.assertEqual(stage.run_ids, [])
 
 
 class TaskSurvivalTests(TaskApiCase):

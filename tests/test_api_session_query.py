@@ -297,12 +297,12 @@ class DefaultToolTests(unittest.TestCase):
             layout = ProjectLayout(Path(tmp))
             tools = session_tools(AppDeps(sessions=None), layout)
 
-        # The wiki's two read tools, then the writing task's search and its
+        # The wiki's two read tools, then the writing task's search, pick and
         # bounded read. The order is also the toolset fingerprint a resume
         # records, so it is asserted rather than left to sort itself out.
         self.assertEqual(
             [tool.name for tool in tools.enabled()],
-            ["wiki_read", "search", "web_search", "inspect"],
+            ["wiki_read", "search", "web_search", "pick_card", "inspect"],
         )
         # The model names a query and nothing else; the observed revision is
         # attached by the wrapper, not guessed by the model.
@@ -311,12 +311,24 @@ class DefaultToolTests(unittest.TestCase):
         self.assertEqual(search.parameters["required"], ["query"])
         self.assertFalse(search.parameters["additionalProperties"])
         self.assertEqual(search.side_effect, "network")
+        # A pick names exactly one card id; the revision travels on the op.
+        pick = tools.require("pick_card")
+        self.assertEqual(set(pick.parameters["properties"]), {"cardId"})
+        self.assertEqual(pick.parameters["required"], ["cardId"])
+        self.assertFalse(pick.parameters["additionalProperties"])
+        self.assertEqual(pick.side_effect, "network")
+        # The registry wall clock sits above the bounded wait, or a slow fetch
+        # would be reported as a registry timeout instead of requested/running.
+        self.assertGreater(pick.timeout_s, 90.0)
         inspect = tools.require("inspect")
         self.assertEqual(
             inspect.parameters["properties"]["view"]["enum"],
-            ["summary", "cards"],
+            ["summary", "cards", "materials"],
         )
         self.assertEqual(inspect.side_effect, "read")
+
+    def test_a_pick_gets_its_own_ninety_second_bounded_wait(self) -> None:
+        self.assertEqual(AppDeps().task_pick_wait_s, 90.0)
 
     def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:
         tools = session_tools(AppDeps(sessions=FakeSessionStore()), None)

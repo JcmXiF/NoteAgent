@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { FileText, Globe, Search, Wrench } from "lucide-react";
+import { FileText, Globe, Layers, Search, Wrench } from "lucide-react";
 import type { ObservationPayload } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -73,9 +73,9 @@ export function SessionCards({
 
 type Row = {
   key: string;
-  kind: "page" | "search" | "web" | "other";
+  kind: "page" | "search" | "web" | "material" | "other";
   label: string;
-  /** The page's file or the result's url, for the tooltip. */
+  /** The page's file, the result's url or the material's id, for the tooltip. */
   path: string | null;
   /** What opening this row means to the rest of the app: a page slug. */
   open: string | null;
@@ -86,6 +86,7 @@ const ICONS = {
   page: FileText,
   search: Search,
   web: Globe,
+  material: Layers,
   other: Wrench,
 } as const;
 
@@ -96,6 +97,14 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
   for (const observation of observations) {
     if (observation.tool === "web_search") {
       webSearchRows(observation, rows, seen);
+      continue;
+    }
+    if (observation.tool === "pick_card") {
+      materialRows(observation, rows, seen);
+      continue;
+    }
+    if (observation.materials && observation.materials.length > 0) {
+      materialRows(observation, rows, seen);
       continue;
     }
     const path = observation.path?.trim() || null;
@@ -170,6 +179,58 @@ function webSearchRows(
   }
 }
 
+/**
+ * A pick (or an inspect of the materials) is one row per material: what it is,
+ * and how much of it there is. A pick still running has no material yet, so it
+ * is one row named by the card or the tool.
+ */
+function materialRows(
+  observation: ObservationPayload,
+  rows: Row[],
+  seen: Set<string>,
+): void {
+  const materials = observation.materials ?? [];
+  if (materials.length === 0) {
+    const label = (
+      observation.title ||
+      observation.query ||
+      observation.target ||
+      observation.tool
+    ).trim();
+    if (!label) return;
+    const key = `pick:${label}:${observation.rev ?? ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      key,
+      kind: "material",
+      label,
+      path: null,
+      open: null,
+      note: noteFor(observation),
+    });
+    return;
+  }
+  for (const material of materials) {
+    const label = (material.title || material.id || "").trim();
+    if (!label) continue;
+    const key = `material:${material.id || label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      key,
+      kind: "material",
+      label,
+      path: material.id || material.url || null,
+      open: null,
+      note:
+        material.blockCount > 0
+          ? { key: "chat.looked.blocks", count: material.blockCount }
+          : null,
+    });
+  }
+}
+
 function linkTarget(target: string | undefined): string | null {
   const text = target?.trim() ?? "";
   if (!text) return null;
@@ -182,7 +243,12 @@ function noteFor(observation: ObservationPayload): Row["note"] {
   if (observation.timeout) return { key: "chat.looked.timeout" };
   if (observation.error) return { key: "chat.looked.failed" };
   if (observation.status === "requested" || observation.status === "running") {
-    return { key: "chat.looked.searching" };
+    return {
+      key:
+        observation.tool === "pick_card"
+          ? "chat.looked.picking"
+          : "chat.looked.searching",
+    };
   }
   if (observation.omitted) return { key: "chat.looked.omitted" };
   if (observation.truncated) return { key: "chat.looked.truncated" };
