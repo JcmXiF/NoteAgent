@@ -41,6 +41,7 @@ const DEFAULT_LEFT_WIDTHS: Record<ModuleId, number> = {
  * from several views — but which parts matter does follow from what is being read.
  */
 export const RIGHT_SECTIONS = [
+  "task",
   "attention",
   "selection",
   "pipeline",
@@ -51,6 +52,7 @@ export type RightSectionId = (typeof RIGHT_SECTIONS)[number];
 
 /** i18n key per section, used for its heading and its fold control. */
 export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
+  task: "selections.task",
   attention: "selections.attention",
   selection: "selections.selection",
   pipeline: "selections.pipeline",
@@ -67,9 +69,9 @@ export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
  * count on a heading means nothing folded away is lost.
  */
 const DEFAULT_OPEN: Record<ModuleId, RightSectionId[]> = {
-  chat: ["selection"],
+  chat: ["task", "selection"],
   // Selecting, planning and compiling is the one sitting the workbench exists for.
-  sources: ["selection", "pipeline", "plan", "compile"],
+  sources: ["task", "selection", "pipeline", "plan", "compile"],
   docs: ["selection", "plan"],
   // Writing a remark is not part of planning or compiling anything, so nothing of
   // the right panel has a claim on it and the panel starts empty.

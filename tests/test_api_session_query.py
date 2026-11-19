@@ -292,14 +292,31 @@ class WikiToolApiTests(unittest.TestCase):
 
 
 class DefaultToolTests(unittest.TestCase):
-    def test_the_default_run_offers_the_projects_wiki_tools(self) -> None:
+    def test_the_default_run_offers_the_projects_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = ProjectLayout(Path(tmp))
             tools = session_tools(AppDeps(sessions=None), layout)
 
+        # The wiki's two read tools, then the writing task's search and its
+        # bounded read. The order is also the toolset fingerprint a resume
+        # records, so it is asserted rather than left to sort itself out.
         self.assertEqual(
-            [tool.name for tool in tools.enabled()], ["wiki_read", "search"]
+            [tool.name for tool in tools.enabled()],
+            ["wiki_read", "search", "web_search", "inspect"],
         )
+        # The model names a query and nothing else; the observed revision is
+        # attached by the wrapper, not guessed by the model.
+        search = tools.require("web_search")
+        self.assertEqual(set(search.parameters["properties"]), {"query"})
+        self.assertEqual(search.parameters["required"], ["query"])
+        self.assertFalse(search.parameters["additionalProperties"])
+        self.assertEqual(search.side_effect, "network")
+        inspect = tools.require("inspect")
+        self.assertEqual(
+            inspect.parameters["properties"]["view"]["enum"],
+            ["summary", "cards"],
+        )
+        self.assertEqual(inspect.side_effect, "read")
 
     def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:
         tools = session_tools(AppDeps(sessions=FakeSessionStore()), None)

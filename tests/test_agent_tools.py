@@ -17,6 +17,7 @@ from noteagent.agent.tools import (
     Diagnostic,
     OutputLimits,
     ToolContext,
+    ToolError,
     ToolRegistry,
     ToolResult,
     ToolSpec,
@@ -122,6 +123,22 @@ class DispatchTests(unittest.TestCase):
         self.assertIn("the page exploded", result.content)
         self.assertEqual(result.diagnostics[0].code, "handler_error")
 
+    def test_a_coded_refusal_keeps_its_code_for_the_model(self) -> None:
+        def refused(_arguments, _context):
+            raise ToolError(
+                "the task changed; call inspect before deciding",
+                code="conflict",
+            )
+
+        registry = ToolRegistry([_spec(refused)])
+
+        result = registry.dispatch("echo", '{"text": "hi"}', ToolContext("s1"))
+
+        self.assertTrue(result.meta["error"])
+        self.assertEqual(result.diagnostics[0].code, "conflict")
+        self.assertIn("conflict", result.content)
+        self.assertIn("call inspect before deciding", result.content)
+
     def test_a_handler_that_runs_too_long_is_stopped_and_reported(self) -> None:
         release = threading.Event()
 
@@ -183,6 +200,30 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(
             card,
             {"tool": "wiki_read", "path": "wiki/entropy.md", "slug": "entropy"},
+        )
+
+    def test_a_task_result_passes_cards_and_its_revision_but_not_the_task(self) -> None:
+        result = ToolResult(
+            content="cards stay with the model",
+            meta={
+                "rev": 3,
+                "status": "running",
+                "cards": [{"id": "card-1", "url": "https://example.com"}],
+                "ops": [{"id": "op-1"}],
+                "expectedRev": 2,
+            },
+        )
+
+        card = result.observation("web_search")
+
+        self.assertEqual(
+            card,
+            {
+                "tool": "web_search",
+                "rev": 3,
+                "status": "running",
+                "cards": [{"id": "card-1", "url": "https://example.com"}],
+            },
         )
 
 

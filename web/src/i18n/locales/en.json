@@ -224,6 +224,7 @@
     },
     "storedHint": "Not stored yet. The page's text must be saved before pages can be written from it.",
     "fromRound": "from a deep search",
+    "task": "Writing task",
     "scope": {
       "label": "Which selections to show",
       "mine": "This search",
@@ -653,7 +654,8 @@
       "truncated": "cut short",
       "timeout": "timed out",
       "omitted": "some left out",
-      "hits": "{{count}} hits"
+      "hits": "{{count}} hits",
+      "searching": "still searching"
     },
     "wait": {
       "title": "Waiting on you",
@@ -1652,6 +1654,22 @@
         "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
         "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
       }
+    }
+  },
+  "task": {
+    "title": "Writing task",
+    "rev": "rev {{rev}}",
+    "loading": "Loading the task",
+    "empty": "No cards yet",
+    "cards": "{{count}} cards",
+    "loadFailed": "The writing task could not be read",
+    "retry": "Retry",
+    "status": {
+      "idle": "idle",
+      "running": "running",
+      "needs_approval": "needs approval",
+      "done": "done",
+      "failed": "failed"
     }
   }
 }

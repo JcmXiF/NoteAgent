@@ -128,6 +128,7 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
+from noteagent.api.task import task_view_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -917,6 +918,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             run_id,
             [page.model_dump() for page in body.pages],
         )
+
+    @app.get("/api/v1/task")
+    def kernel_task(
+        view: Literal["summary", "cards"] = Query("summary"),
+    ) -> dict[str, object]:
+        """The active project's writing task, as a bounded view with its rev."""
+        return task_view_payload(deps, view)
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:

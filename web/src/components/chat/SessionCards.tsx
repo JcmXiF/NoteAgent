@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { FileText, Search, Wrench } from "lucide-react";
+import { FileText, Globe, Search, Wrench } from "lucide-react";
 import type { ObservationPayload } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -73,9 +73,9 @@ export function SessionCards({
 
 type Row = {
   key: string;
-  kind: "page" | "search" | "other";
+  kind: "page" | "search" | "web" | "other";
   label: string;
-  /** The page's file, for the tooltip. */
+  /** The page's file or the result's url, for the tooltip. */
   path: string | null;
   /** What opening this row means to the rest of the app: a page slug. */
   open: string | null;
@@ -85,6 +85,7 @@ type Row = {
 const ICONS = {
   page: FileText,
   search: Search,
+  web: Globe,
   other: Wrench,
 } as const;
 
@@ -93,6 +94,10 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
   const rows: Row[] = [];
   const seen = new Set<string>();
   for (const observation of observations) {
+    if (observation.tool === "web_search") {
+      webSearchRows(observation, rows, seen);
+      continue;
+    }
     const path = observation.path?.trim() || null;
     const label = (
       observation.title ||
@@ -124,6 +129,47 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
   return rows;
 }
 
+/**
+ * A web search is two things: the query that ran, and the cards it brought
+ * back. The query row says how many arrived (or that the search is still
+ * running); each result is its own row, named so a reader can recognize it.
+ */
+function webSearchRows(
+  observation: ObservationPayload,
+  rows: Row[],
+  seen: Set<string>,
+): void {
+  const query = (observation.query || observation.title || "").trim();
+  const headerKey = `web_search:${query}:${observation.rev ?? ""}`;
+  if (!seen.has(headerKey)) {
+    seen.add(headerKey);
+    rows.push({
+      key: headerKey,
+      kind: "search",
+      label: query || observation.tool,
+      path: null,
+      open: null,
+      note: noteFor(observation),
+    });
+  }
+  for (const card of observation.cards ?? []) {
+    const url = card.url?.trim() || "";
+    const label = (card.title || url || card.site || "").trim();
+    if (!label) continue;
+    const key = `web:${url || label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      key,
+      kind: "web",
+      label,
+      path: url || null,
+      open: null,
+      note: null,
+    });
+  }
+}
+
 function linkTarget(target: string | undefined): string | null {
   const text = target?.trim() ?? "";
   if (!text) return null;
@@ -135,6 +181,9 @@ function noteFor(observation: ObservationPayload): Row["note"] {
   if (observation.missing) return { key: "chat.looked.missing" };
   if (observation.timeout) return { key: "chat.looked.timeout" };
   if (observation.error) return { key: "chat.looked.failed" };
+  if (observation.status === "requested" || observation.status === "running") {
+    return { key: "chat.looked.searching" };
+  }
   if (observation.omitted) return { key: "chat.looked.omitted" };
   if (observation.truncated) return { key: "chat.looked.truncated" };
   if (typeof observation.hits === "number") {

@@ -54,6 +54,11 @@ OBSERVATION_FIELDS = (
     "http_status",
     "action",
     "wrote_wiki",
+    # A writing-task result: the cards it found, the revision they belong to,
+    # and whether a long op is still requested/running.
+    "cards",
+    "rev",
+    "status",
 )
 
 
@@ -142,6 +147,20 @@ class ToolSpec:
 
 class UnknownToolError(LookupError):
     """A name the registry does not hold."""
+
+
+class ToolError(Exception):
+    """A handler refusing a call, with a situation the model can act on.
+
+    A plain exception is the handler's own fault; this one names a situation
+    the model is expected to recover from (``conflict``, ``op_failed``, ...).
+    The registry keeps the code in the error observation, so the loop's one
+    failure channel carries it too; no tool invents a second result shape.
+    """
+
+    def __init__(self, message: str, *, code: str = "handler_error") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ToolRegistry:
@@ -329,10 +348,12 @@ class _PendingCall:
                 raise failure
             if not isinstance(failure, Exception):
                 raise failure
+            named = getattr(failure, "code", "")
+            code = named if isinstance(named, str) and named else "handler_error"
             return _error(
                 self._spec.name,
-                f"tool error: {failure}",
-                code="handler_error",
+                f"tool {self._spec.name} failed ({code}): {failure}",
+                code=code,
             )
         if self._result is None:
             return _error(
