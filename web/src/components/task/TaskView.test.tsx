@@ -3,15 +3,27 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
+import { ApiError } from "@/lib/api/client";
 import { TaskView } from "@/components/task/TaskView";
-import { fetchTaskCards, fetchTaskSummary } from "@/lib/api/task";
-import type { TaskCardsView, TaskSummaryView } from "@/lib/api/types";
+import {
+  fetchTaskCards,
+  fetchTaskMaterials,
+  fetchTaskSummary,
+  pickTaskCard,
+} from "@/lib/api/task";
+import type {
+  TaskCardsView,
+  TaskMaterialsView,
+  TaskSummaryView,
+} from "@/lib/api/types";
 import { useTaskStore } from "@/stores/task-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
 vi.mock("@/lib/api/task", () => ({
   fetchTaskCards: vi.fn(),
+  fetchTaskMaterials: vi.fn(),
   fetchTaskSummary: vi.fn(),
+  pickTaskCard: vi.fn(),
 }));
 
 const summary: TaskSummaryView = {
@@ -47,6 +59,35 @@ const cards: TaskCardsView = {
   ],
 };
 
+const noMaterials: TaskMaterialsView = {
+  view: "materials",
+  rev: 2,
+  omitted: 0,
+  materials: [],
+};
+
+const oneMaterial: TaskMaterialsView = {
+  view: "materials",
+  rev: 3,
+  omitted: 0,
+  materials: [
+    {
+      id: "raw/web/entropy-a1.html",
+      title: "Entropy",
+      url: "https://example.com/entropy",
+      kind: "html",
+      fidelity: "ok",
+      state: "staged",
+      blockCount: 12,
+      blocksOmitted: 10,
+      blocks: [
+        { id: "b1", tag: "p", preview: "熵衡量不确定性。" },
+        { id: "b2", tag: "p", preview: "信息是不确定性的减少。" },
+      ],
+    },
+  ],
+};
+
 let host: HTMLDivElement;
 let root: Root;
 
@@ -59,10 +100,17 @@ beforeEach(() => {
     status: "idle",
     summary: null,
     cards: null,
+    materials: null,
     error: "",
+    picking: "",
+    pickError: "",
+    pickNotice: "",
   });
   vi.mocked(fetchTaskSummary).mockReset();
   vi.mocked(fetchTaskCards).mockReset();
+  vi.mocked(fetchTaskMaterials).mockReset();
+  vi.mocked(pickTaskCard).mockReset();
+  vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
 });
 
 afterEach(() => {
@@ -93,6 +141,80 @@ describe("the writing task view", () => {
     expect(host.textContent).toContain("Entropy");
     expect(host.textContent).toContain("Information");
     expect(host.textContent).toContain("example.com");
+  });
+
+  it("shows the task's materials with a bounded block index", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      rev: 3,
+      counts: { cards: 2, materials: 1, frames: 0 },
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+
+    await draw();
+
+    expect(host.textContent).toContain("raw/web/entropy-a1.html");
+    expect(host.textContent).toContain(i18n.t("task.blocks", { count: 12 }));
+    expect(host.textContent).toContain("熵衡量不确定性。");
+    expect(host.textContent).toContain("信息是不确定性的减少。");
+    expect(host.textContent).toContain(i18n.t("task.moreBlocks", { count: 10 }));
+  });
+
+  it("picks a card as a person with the revision of the view they saw", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue(summary);
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(pickTaskCard).mockResolvedValue({
+      opId: "op-3",
+      status: "done",
+      rev: 3,
+      material: oneMaterial.materials[0],
+    });
+    // The view is re-read after the pick; the second read has the material.
+    vi.mocked(fetchTaskMaterials)
+      .mockResolvedValueOnce(noMaterials)
+      .mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValue({
+        ...summary,
+        rev: 3,
+        counts: { cards: 2, materials: 1, frames: 0 },
+      });
+
+    await draw();
+    const pick = [...host.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes(i18n.t("task.pick")),
+    );
+    expect(pick).toBeTruthy();
+    await act(async () => {
+      pick?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(pickTaskCard)).toHaveBeenCalledWith("card-1", 2);
+    expect(host.textContent).toContain("raw/web/entropy-a1.html");
+  });
+
+  it("says a pick lost the race in the reader's words and re-reads the task", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue(summary);
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(pickTaskCard).mockRejectedValue(
+      new ApiError("stale", 409, "conflict"),
+    );
+
+    await draw();
+    const pick = [...host.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes(i18n.t("task.pick")),
+    );
+    await act(async () => {
+      pick?.click();
+    });
+    await act(async () => {});
+
+    expect(host.textContent).toContain(i18n.t("error.code.conflict"));
+    // A conflict is about a stale view: the view is read again.
+    expect(vi.mocked(fetchTaskSummary).mock.calls.length).toBeGreaterThan(1);
   });
 
   it("says the task could not be read in the reader's words", async () => {

@@ -17,10 +17,18 @@ from noteagent.agent.tools import (
     ToolResult,
     ToolSpec,
 )
-from noteagent.task.model import MAX_CARD_SNIPPET, MAX_VIEW_CARDS, Card
-from noteagent.task.service import SearchOutcome, TaskService
+from noteagent.task.model import (
+    MAX_CARD_SNIPPET,
+    MAX_VIEW_BLOCKS,
+    MAX_VIEW_CARDS,
+    MAX_VIEW_MATERIALS,
+    Card,
+    material_summary,
+)
+from noteagent.task.service import PickOutcome, SearchOutcome, TaskService
 
 WEB_SEARCH = "web_search"
+PICK_CARD = "pick_card"
 INSPECT = "inspect"
 
 _WEB_SEARCH_DESCRIPTION = (
@@ -29,11 +37,19 @@ _WEB_SEARCH_DESCRIPTION = (
     "One query per call. If the task changed since your last look, call inspect "
     "before searching again."
 )
+_PICK_CARD_DESCRIPTION = (
+    "Turn one card of the current writing task into a material: fetch the card's "
+    "public page and stage it. Returns the material and the task revision, or "
+    "that the pick is still requested/running. Use inspect(\"materials\") for the "
+    "block index afterwards. If the task changed since your last look, call "
+    "inspect before picking."
+)
 _INSPECT_DESCRIPTION = (
     "Read a bounded view of the current writing task. `summary` says what the "
     "task is and how much it holds; `cards` lists the resource cards collected "
-    "so far. Returns the view and the task revision. Call it after a conflict, "
-    "before deciding what to do next."
+    "so far; `materials` lists the staged materials with an id/preview index of "
+    "their blocks. Returns the view and the task revision. Call it after a "
+    "conflict, before deciding what to do next."
 )
 
 WEB_SEARCH_PARAMETERS = {
@@ -50,12 +66,28 @@ WEB_SEARCH_PARAMETERS = {
     "additionalProperties": False,
 }
 
+PICK_CARD_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "cardId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"\S",
+            "description": (
+                "The id of a card the task holds, as inspect(cards) shows it"
+            ),
+        }
+    },
+    "required": ["cardId"],
+    "additionalProperties": False,
+}
+
 INSPECT_PARAMETERS = {
     "type": "object",
     "properties": {
         "view": {
             "type": "string",
-            "enum": ["summary", "cards"],
+            "enum": ["summary", "cards", "materials"],
             "description": "Which bounded view of the writing task to read",
         }
     },
@@ -83,6 +115,22 @@ def task_tools(service: TaskService) -> tuple[ToolSpec, ...]:
             ),
             handler=_search_handler(service),
             argument_hint="query",
+        ),
+        ToolSpec(
+            name=PICK_CARD,
+            description=_PICK_CARD_DESCRIPTION,
+            parameters=PICK_CARD_PARAMETERS,
+            side_effect="network",
+            # A pick fetches a public page and stages it under its own bounded
+            # wait (90s by default); the registry's wall clock must sit above it.
+            timeout_s=max(120.0, service.pick_wait_s + 10.0),
+            output_limits=OutputLimits(
+                max_items=MAX_VIEW_MATERIALS,
+                max_chars_per_item=MAX_CARD_SNIPPET + 400,
+                max_chars_total=24_000,
+            ),
+            handler=_pick_handler(service),
+            argument_hint="cardId",
         ),
         ToolSpec(
             name=INSPECT,
@@ -136,6 +184,42 @@ def _search_handler(service: TaskService):
     return search
 
 
+def _pick_handler(service: TaskService):
+    def pick(
+        arguments: Mapping[str, object], context: ToolContext
+    ) -> ToolResult:
+        card_id = str(arguments["cardId"]).strip()
+        outcome = service.pick(
+            card_id,
+            session_id=context.session_id,
+            cancel=context.cancel,
+        )
+        if outcome.status == "done" and outcome.material:
+            summary = material_summary(outcome.material)
+            return ToolResult(
+                content=_render_picked(outcome, summary),
+                meta={
+                    "title": summary["title"] or card_id,
+                    "url": summary["url"],
+                    "fidelity": summary["fidelity"],
+                    # The chat card reads the same shape as inspect("materials"),
+                    # minus the block index: the card is a summary, not a reader.
+                    "materials": [summary],
+                    "rev": outcome.rev,
+                },
+            )
+        return ToolResult(
+            content=_render_pick_running(outcome),
+            meta={
+                "title": card_id,
+                "status": outcome.status,
+                "rev": outcome.rev,
+            },
+        )
+
+    return pick
+
+
 def _inspect_handler(service: TaskService):
     def inspect(
         arguments: Mapping[str, object], context: ToolContext
@@ -149,6 +233,15 @@ def _inspect_handler(service: TaskService):
         if view == "cards":
             cards = payload.get("cards")
             meta["hits"] = len(cards) if isinstance(cards, list) else 0
+        if view == "materials":
+            materials = payload.get("materials")
+            rows = (
+                [item for item in materials if isinstance(item, Mapping)]
+                if isinstance(materials, list)
+                else []
+            )
+            meta["materials"] = [material_summary(item) for item in rows]
+            meta["hits"] = len(rows)
         return ToolResult(content=_render_view(view, payload), meta=meta)
 
     return inspect
@@ -180,6 +273,27 @@ def _render_running(outcome: SearchOutcome) -> str:
     )
 
 
+def _render_picked(
+    outcome: PickOutcome, material: Mapping[str, object]
+) -> str:
+    return (
+        f"Task rev {outcome.rev}. Card {outcome.card_id} is now the material "
+        f'[{material.get("id", "")}] "{material.get("title", "")}" '
+        f'(fidelity={material.get("fidelity", "")}, '
+        f'state={material.get("state", "")}, '
+        f'{material.get("blockCount", 0)} blocks). '
+        'Call inspect("materials") for the block index before drawing frames.'
+    )
+
+
+def _render_pick_running(outcome: PickOutcome) -> str:
+    return (
+        f'Picking card "{outcome.card_id}" is still {outcome.status} '
+        f"(task rev {outcome.rev}). Call inspect(\"materials\") later; do not "
+        "pick it again."
+    )
+
+
 def _render_card(index: int, card: Card) -> str:
     label = card.site or _host(card.url) or "web"
     lines = [f"{index}. [{card.id}] [{label}] {card.title}", f"   {card.url}"]
@@ -207,6 +321,8 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
         if intent:
             lines.append(f"intent: {intent}")
         return "\n".join(lines)
+    if view == "materials":
+        return _render_materials(rev, payload)
     cards = payload.get("cards")
     shown = [item for item in cards if isinstance(item, Mapping)] if isinstance(cards, list) else []
     if not shown:
@@ -226,6 +342,61 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
                 url=item.get("url", ""),
             )
         )
+    return "\n".join(lines)
+
+
+#: How much of a materials view the model's content may carry. The registry
+#: caps the total as well; this keeps the block index from crowding out the
+#: material headers when there are many blocks.
+_MATERIALS_RENDER_BUDGET = 20_000
+
+
+def _render_materials(rev: object, payload: Mapping[str, object]) -> str:
+    raw = payload.get("materials")
+    rows = (
+        [item for item in raw if isinstance(item, Mapping)]
+        if isinstance(raw, list)
+        else []
+    )
+    if not rows:
+        return f"Task rev {rev}. No materials yet."
+    omitted = payload.get("omitted")
+    header = f"Task rev {rev}. {len(rows)} material(s)"
+    if isinstance(omitted, int) and omitted > 0:
+        header += f" ({omitted} more omitted)"
+    lines = [header + ":"]
+    for index, material in enumerate(rows, 1):
+        blocks = material.get("blocks")
+        shown = (
+            [item for item in blocks if isinstance(item, Mapping)]
+            if isinstance(blocks, list)
+            else []
+        )
+        lines.append(
+            '{index}. [{id}] "{title}" — fidelity={fidelity} state={state} '
+            "{count} block(s), {shown} in this index:".format(
+                index=index,
+                id=material.get("id", ""),
+                title=material.get("title", ""),
+                fidelity=material.get("fidelity", ""),
+                state=material.get("state", ""),
+                count=material.get("blockCount", 0),
+                shown=len(shown),
+            )
+        )
+        for block in shown[:MAX_VIEW_BLOCKS]:
+            lines.append(
+                "   - [{id}] {preview}".format(
+                    id=block.get("id", ""),
+                    preview=block.get("preview", ""),
+                )
+            )
+        more = material.get("blocksOmitted")
+        if isinstance(more, int) and more > 0:
+            lines.append(f"   ({more} more block(s) beyond this index)")
+        if sum(len(line) + 1 for line in lines) >= _MATERIALS_RENDER_BUDGET:
+            lines.append("The rest of the materials view is truncated.")
+            break
     return "\n".join(lines)
 
 
@@ -251,6 +422,8 @@ def _host(url: str) -> str:
 __all__ = [
     "INSPECT",
     "INSPECT_PARAMETERS",
+    "PICK_CARD",
+    "PICK_CARD_PARAMETERS",
     "WEB_SEARCH",
     "WEB_SEARCH_PARAMETERS",
     "task_tools",

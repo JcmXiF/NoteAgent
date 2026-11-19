@@ -16,8 +16,13 @@ export function TaskView() {
   const status = useTaskStore((state) => state.status);
   const summary = useTaskStore((state) => state.summary);
   const cards = useTaskStore((state) => state.cards);
+  const materials = useTaskStore((state) => state.materials);
   const error = useTaskStore((state) => state.error);
+  const picking = useTaskStore((state) => state.picking);
+  const pickError = useTaskStore((state) => state.pickError);
+  const pickNotice = useTaskStore((state) => state.pickNotice);
   const load = useTaskStore((state) => state.load);
+  const pick = useTaskStore((state) => state.pick);
   const reset = useTaskStore((state) => state.reset);
   const project = useWorkspaceStore((state) => state.current);
 
@@ -52,6 +57,7 @@ export function TaskView() {
   if (summary === null) return null;
 
   const shown = cards?.cards ?? [];
+  const staged = materials?.materials ?? [];
   return (
     <div className="px-2 py-1.5 text-[11px]">
       <div className="flex items-center gap-2">
@@ -70,24 +76,91 @@ export function TaskView() {
       {shown.length > 0 ? (
         <ul className="mt-1 flex flex-col gap-0.5">
           {shown.map((card) => (
-            <li key={card.id} className="min-w-0">
-              <span
-                className="block truncate text-foreground"
-                title={card.title || card.url}
-              >
-                {card.title || card.url}
-              </span>
-              {card.site ? (
-                <span className="block truncate text-[10px] text-muted-foreground">
-                  {card.site}
+            <li key={card.id} className="flex min-w-0 items-start gap-1">
+              <span className="min-w-0 flex-1">
+                <span
+                  className="block truncate text-foreground"
+                  title={card.title || card.url}
+                >
+                  {card.title || card.url}
                 </span>
-              ) : null}
+                {card.site ? (
+                  <span className="block truncate text-[10px] text-muted-foreground">
+                    {card.site}
+                  </span>
+                ) : null}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 shrink-0 px-1.5"
+                disabled={picking !== ""}
+                onClick={() => void pick(card.id, cards?.rev ?? summary.rev)}
+              >
+                {picking === card.id ? t("task.picking") : t("task.pick")}
+              </Button>
             </li>
           ))}
         </ul>
       ) : (
         <p className="mt-1 text-muted-foreground">{t("task.empty")}</p>
       )}
+      {pickNotice ? (
+        <p role="status" className="mt-1 text-muted-foreground">
+          {pickNotice}
+        </p>
+      ) : null}
+      {pickError ? (
+        <p role="alert" className="mt-1 text-destructive">
+          {pickError}
+        </p>
+      ) : null}
+      {staged.length > 0 ? (
+        <div className="mt-2 border-t pt-1.5">
+          <p className="font-medium">
+            {t("task.materials", { count: staged.length })}
+          </p>
+          <ul className="mt-1 flex flex-col gap-1.5">
+            {staged.map((material) => (
+              <li key={material.id} className="min-w-0">
+                <span className="block truncate text-foreground">
+                  {material.title || material.id}
+                </span>
+                <span className="block truncate text-[10px] text-muted-foreground">
+                  {material.id}
+                </span>
+                <span className="block text-[10px] text-muted-foreground">
+                  {material.state} · {material.fidelity} ·{" "}
+                  {t("task.blocks", { count: material.blockCount })}
+                </span>
+                {(material.blocks ?? []).length > 0 ? (
+                  <ul className="mt-0.5 flex flex-col gap-px">
+                    {(material.blocks ?? []).slice(0, 6).map((block) => (
+                      <li
+                        key={block.id}
+                        className="truncate text-[10px] text-muted-foreground"
+                        title={block.preview}
+                      >
+                        <span className="text-foreground/70">
+                          [{block.id}]
+                        </span>{" "}
+                        {block.preview}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {(material.blocksOmitted ?? 0) > 0 ? (
+                  <span className="block text-[10px] text-muted-foreground">
+                    {t("task.moreBlocks", {
+                      count: material.blocksOmitted ?? 0,
+                    })}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

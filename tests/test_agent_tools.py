@@ -209,6 +209,8 @@ class ObservationTests(unittest.TestCase):
                 "rev": 3,
                 "status": "running",
                 "cards": [{"id": "card-1", "url": "https://example.com"}],
+                "materials": [{"id": "raw/web/entropy.html", "state": "staged"}],
+                "material": "not a whitelisted field",
                 "ops": [{"id": "op-1"}],
                 "expectedRev": 2,
             },
@@ -223,6 +225,7 @@ class ObservationTests(unittest.TestCase):
                 "rev": 3,
                 "status": "running",
                 "cards": [{"id": "card-1", "url": "https://example.com"}],
+                "materials": [{"id": "raw/web/entropy.html", "state": "staged"}],
             },
         )
 

@@ -59,6 +59,9 @@ OBSERVATION_FIELDS = (
     "cards",
     "rev",
     "status",
+    # A writing-task material (or several), with its identity and state; the
+    # block index is a reader's view, not a chat card's payload.
+    "materials",
 )
 
 

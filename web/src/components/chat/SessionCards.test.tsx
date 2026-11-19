@@ -75,4 +75,45 @@ describe("the cards beside an answer", () => {
 
     expect(host.textContent).toContain(i18n.t("chat.looked.searching"));
   });
+
+  it("draws a picked card as a material with its block count", async () => {
+    await draw([
+      {
+        tool: "pick_card",
+        title: "Entropy",
+        url: "https://example.com/entropy",
+        fidelity: "ok",
+        rev: 3,
+        materials: [
+          {
+            id: "raw/web/entropy-a1.html",
+            title: "Entropy",
+            url: "https://example.com/entropy",
+            kind: "html",
+            fidelity: "ok",
+            state: "staged",
+            blockCount: 12,
+            blocksOmitted: 10,
+          },
+        ],
+      },
+    ]);
+
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain(i18n.t("chat.looked.blocks", { count: 12 }));
+    expect(host.textContent).not.toContain("block-1");
+  });
+
+  it("says when a pick is still fetching", async () => {
+    await draw([
+      {
+        tool: "pick_card",
+        title: "card-1",
+        status: "running",
+        rev: 2,
+      },
+    ]);
+
+    expect(host.textContent).toContain(i18n.t("chat.looked.picking"));
+  });
 });

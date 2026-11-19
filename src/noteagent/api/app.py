@@ -128,7 +128,7 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
-from noteagent.api.task import task_view_payload
+from noteagent.api.task import pick_task_card, task_view_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -260,6 +260,13 @@ class PipelineStartBody(BaseModel):
         if not cleaned:
             raise ValueError("a pipeline run needs an intent")
         return cleaned
+
+
+class TaskPickBody(BaseModel):
+    """A person's pick, from the card view they were looking at."""
+
+    cardId: str = Field(..., min_length=1, max_length=120)
+    expectedRev: int = Field(..., ge=0)
 
 
 class FolderOpenBody(BaseModel):
@@ -921,10 +928,15 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.get("/api/v1/task")
     def kernel_task(
-        view: Literal["summary", "cards"] = Query("summary"),
+        view: Literal["summary", "cards", "materials"] = Query("summary"),
     ) -> dict[str, object]:
         """The active project's writing task, as a bounded view with its rev."""
         return task_view_payload(deps, view)
+
+    @app.post("/api/v1/task/pick")
+    def kernel_task_pick(body: TaskPickBody) -> dict[str, object]:
+        """A person's card pick, on the same task and executor as the agent."""
+        return pick_task_card(deps, body.cardId, body.expectedRev)
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:

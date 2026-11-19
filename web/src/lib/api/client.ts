@@ -352,6 +352,25 @@ export type WaitPayload = {
 };
 
 /**
+ * One material of the writing task, as an event card reads it.
+ *
+ * `blocks` is absent from a chat card on purpose: the block index is the
+ * reader's bounded view, and a card says what the material is and how much of
+ * it there is.
+ */
+export type ObservedMaterial = {
+  id: string;
+  title: string;
+  url?: string;
+  kind?: string;
+  fidelity: string;
+  state: string;
+  blockCount: number;
+  blocks?: { id: string; tag?: string; preview: string }[];
+  blocksOmitted?: number;
+};
+
+/**
  * One thing the assistant looked at.
  *
  * The shape is the core's: `tool` and `target` say what was touched and `title`
@@ -398,6 +417,8 @@ export type ObservationPayload = {
     snippet?: string;
     site?: string;
   }[];
+  /** The materials a pick or an inspect("materials") touched. */
+  materials?: ObservedMaterial[];
   /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
   diagnostics?: { severity: string; code: string; message: string }[];
 };
