@@ -30,6 +30,11 @@ from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
 from noteagent.task.model import FetchFn, SearchFn, StageFn
 from noteagent.task.service import TaskRegistry, TaskService
+from noteagent.task.writing import (
+    ComposePageFn,
+    PageLocks,
+    SavePageFn,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +90,15 @@ class AppDeps:
     #: network and the filesystem out of the pick.
     task_fetch: FetchFn | None = None
     task_stage: StageFn | None = None
+    #: The pure compose and save nodes behind an approved ``compose_page``.
+    #: ``None`` uses the production pair (``write_confirmed_page`` then
+    #: ``write_file_blocks`` + the index); a test scripts them and keeps the
+    #: model and network out of the write.
+    task_compose: ComposePageFn | None = None
+    task_save: SavePageFn | None = None
+    #: The page locks the task's save and the human editor share, so the later
+    #: writer is refused instead of interleaving with the other.
+    task_page_locks: PageLocks = field(default_factory=PageLocks)
     #: The task's active revision per session, shared by every request in this
     #: process, so the wrapper can name the revision the run observed.
     task_registry: TaskRegistry = field(default_factory=TaskRegistry)
@@ -95,6 +109,10 @@ class AppDeps:
     task_wait_s: float = 15.0
     #: The bounded wait a pick tool gives its executor, in seconds.
     task_pick_wait_s: float = 90.0
+    #: The bounded wait an approved compose gives its executor, in seconds. The
+    #: tool's registry timeout sits above it, so a slow write answers
+    #: requested/running instead of a registry timeout.
+    task_compose_wait_s: float = 180.0
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

@@ -25,6 +25,8 @@ from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import ToolError
+from noteagent.ingest.page_history import blob_digest
+from noteagent.ingest.wiki_paths import resolve_wiki_write_path
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
 from noteagent.task.model import (
@@ -48,6 +50,20 @@ from noteagent.task.model import (
     task_view,
 )
 from noteagent.task.store import TaskStore
+from noteagent.task.writing import (
+    ComposePageFn,
+    ComposeRequest,
+    PageBusy,
+    PageLocks,
+    SavePageFn,
+    SaveRequest,
+    TaskPageCompose,
+    TaskPageSave,
+    diff_counts,
+    locators_for_frame,
+    page_diff,
+    page_path_for_spec,
+)
 
 #: How long a search waits for its op before it says requested/running.
 DEFAULT_WAIT_S = 15.0
@@ -56,6 +72,12 @@ DEFAULT_WAIT_S = 15.0
 #: trip, not a local read, so the tool blocks longer before it hands the turn
 #: back to the model with ``requested``/``running``.
 DEFAULT_PICK_WAIT_S = 90.0
+
+#: How long an approved compose waits for the page write. Composing is a model
+#: run and saving is local; three minutes is the budget in which a normal page
+#: finishes. Past it the tool answers requested/running and the executor carries
+#: on (a later ticket resumes the conversation at that boundary).
+DEFAULT_COMPOSE_WAIT_S = 180.0
 
 #: How often the wait looks for the executor's write. It is a local file, so
 #: this is a poll between two boundaries, not a network retry.
@@ -138,11 +160,13 @@ class FrameOutcome:
 
 @dataclass(frozen=True, slots=True)
 class ComposeOutcome:
-    """What ``compose_page`` gets back: the gate's answer, not a written page.
+    """What ``compose_page`` gets back: the gate's answer or the page's fate.
 
-    ``needs_approval`` carries the write request that is now recorded in the
-    task. ``approved`` means a matching person's approval stands; the writing
-    itself belongs to the next ticket, so this outcome never names a page.
+    ``needs_approval`` carries the write request recorded in the task and no op.
+    A matching approval writes one ``write`` op and waits; the outcome then says
+    ``written``/``skipped``/``failed`` with a bounded result, or
+    ``requested``/``running`` when the executor has not finished yet. Effect ids
+    are the op's own record and are never part of this mapping.
     """
 
     status: str
@@ -152,6 +176,8 @@ class ComposeOutcome:
     request: WriteRequest | None = None
     approval: Approval | None = None
     approval_cleared: bool = False
+    op_id: str = ""
+    result: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,9 +236,13 @@ class TaskService:
         spawn: Callable[[Callable[[], None]], None] | None = None,
         wait_s: float = DEFAULT_WAIT_S,
         pick_wait_s: float = DEFAULT_PICK_WAIT_S,
+        compose_wait_s: float = DEFAULT_COMPOSE_WAIT_S,
         poll_s: float = DEFAULT_POLL_S,
+        compose: ComposePageFn | None = None,
+        save: SavePageFn | None = None,
+        page_locks: PageLocks | None = None,
     ) -> None:
-        if wait_s < 0 or pick_wait_s < 0:
+        if wait_s < 0 or pick_wait_s < 0 or compose_wait_s < 0:
             raise ValueError("a bounded wait cannot be negative")
         self._layout = layout
         self._clock = clock
@@ -225,7 +255,11 @@ class TaskService:
         self._spawn = spawn or _spawn_thread
         self._wait_s = wait_s
         self._pick_wait_s = pick_wait_s
+        self._compose_wait_s = compose_wait_s
         self._poll_s = poll_s
+        self._compose = compose or TaskPageCompose()
+        self._save = save or TaskPageSave()
+        self._page_locks = page_locks or PageLocks()
         self._project_key = str(layout.root.resolve())
         self._owner = f"task-{id(self)}"
         self._store = TaskStore(layout)
@@ -239,6 +273,11 @@ class TaskService:
     def pick_wait_s(self) -> float:
         """How long a pick waits before it reports the op as still running."""
         return self._pick_wait_s
+
+    @property
+    def compose_wait_s(self) -> float:
+        """How long an approved compose waits before it says still running."""
+        return self._compose_wait_s
 
     def inspect(
         self, view: str, *, session_id: str = ""
@@ -511,13 +550,17 @@ class TaskService:
         *,
         session_id: str = "",
         expected_rev: int | None = None,
+        cancel: Event | None = None,
     ) -> ComposeOutcome:
         """Ask the gate whether this frame and spec may be written.
 
         A valid spec with no matching approval is recorded as the task's pending
         request and answered ``needs_approval``: no op is written and no page is
-        touched. *expected_rev* is the revision the session last saw; it is
-        compared with the approval's binding, never trusted as a write token.
+        touched. A matching approval writes one ``write`` op and waits at most
+        ``compose_wait_s`` for the executor: a finished write answers with the
+        page's fate and the new revision, a slow one with requested/running.
+        *expected_rev* is the revision the session last saw; it is compared with
+        the approval's binding, never trusted as a write token.
         """
         cleaned = (frame_id or "").strip()
         if not cleaned:
@@ -527,6 +570,11 @@ class TaskService:
             )
         try:
             canonical = canonical_page_spec(spec)
+            wiki_path = page_path_for_spec(canonical)
+            # The page identity the person approved must stay inside the wiki.
+            # Resolving it here answers a traversal or a program-owned page
+            # before any request or op is recorded.
+            resolve_wiki_write_path(self._layout, wiki_path)
         except ValueError as err:
             raise TaskBadSpec(str(err)) from err
         # The wrapper names the revision the session last saw; a caller with no
@@ -537,6 +585,7 @@ class TaskService:
             else self._registry.observed(self._project_key, session_id)
         )
         now = iso_timestamp(self._clock)
+        op_id = ""
         with self._writing():
             task = self._store.load() or self._create_locked()
             expected = task.rev if expected is None else expected
@@ -569,48 +618,94 @@ class TaskService:
                     "frame covers."
                 )
             # The gate: an approval covers exactly this frame, this canonical
-            # spec, at exactly this revision. A match is ready to write, but the
-            # writing itself is the next ticket's step.
+            # spec, at exactly this revision. A match is the one door to a
+            # write op; nothing else here can start a page.
             if _approval_covers(
                 task.approval, cleaned, canonical, task.rev
             ):
+                op = Op(
+                    id=self._ids.new_id("op"),
+                    kind="write",
+                    actor="agent",
+                    status="requested",
+                    input={
+                        "frameId": cleaned,
+                        "spec": canonical,
+                        # The binding the executor re-checks under the writer
+                        # lock after the long compose, not just the frame/spec:
+                        # any task write since this approval makes it stale.
+                        "approvalRev": task.rev,
+                        "sessionId": session_id,
+                    },
+                    expected_rev=task.rev,
+                    created_at=now,
+                    updated_at=now,
+                )
+                # Requesting the write does not move the revision: the op is
+                # the record, and the approval must stay valid until the save.
+                self._store.save(
+                    replace(task, ops=task.ops + (op,), updated_at=now)
+                )
                 self._registry.observe(
                     self._project_key, session_id, task.rev
                 )
-                return ComposeOutcome(
-                    status="approved",
-                    rev=task.rev,
+                op_id = op.id
+            else:
+                # A standing approval did not match this request (or there is
+                # none). It no longer covers what would be written, so it is
+                # cleared rather than left to look usable.
+                approval_cleared = task.approval is not None
+                request = WriteRequest(
                     frame_id=cleaned,
                     spec=canonical,
-                    approval=task.approval,
+                    rev=task.rev + 1,
+                    at=now,
                 )
-            # A standing approval did not match this request (or there is none).
-            # It no longer covers what would be written, so it is cleared rather
-            # than left to look usable.
-            approval_cleared = task.approval is not None
-            request = WriteRequest(
+                saved = replace(
+                    task,
+                    status="needs_approval",
+                    approval=None,
+                    request=request,
+                    rev=task.rev + 1,
+                    updated_at=now,
+                )
+                self._store.save(saved)
+                self._registry.observe(
+                    self._project_key, session_id, saved.rev
+                )
+                return ComposeOutcome(
+                    status="needs_approval",
+                    rev=saved.rev,
+                    frame_id=cleaned,
+                    spec=canonical,
+                    request=request,
+                    approval_cleared=approval_cleared,
+                )
+        # The long part runs outside the task lock; the executor is the only
+        # writer from here on, and the handler only waits at the boundary.
+        self._spawn(lambda: self._run_op(op_id))
+        observed = self._wait(
+            op_id,
+            f'the write of page "{canonical["slug"]}"',
+            cancel,
+            wait_s=self._compose_wait_s,
+        )
+        self._registry.observe(self._project_key, session_id, observed.rev)
+        if observed.status != "done" or observed.op is None:
+            return ComposeOutcome(
+                status=observed.status,
+                rev=observed.rev,
                 frame_id=cleaned,
                 spec=canonical,
-                rev=task.rev + 1,
-                at=now,
+                op_id=op_id,
             )
-            saved = replace(
-                task,
-                status="needs_approval",
-                approval=None,
-                request=request,
-                rev=task.rev + 1,
-                updated_at=now,
-            )
-            self._store.save(saved)
-            self._registry.observe(self._project_key, session_id, saved.rev)
         return ComposeOutcome(
-            status="needs_approval",
-            rev=saved.rev,
+            status=_text(observed.op.result.get("status")) or "failed",
+            rev=observed.rev,
             frame_id=cleaned,
             spec=canonical,
-            request=request,
-            approval_cleared=approval_cleared,
+            op_id=op_id,
+            result=_public_write_result(observed.op.result),
         )
 
     def approve(
@@ -819,7 +914,211 @@ class TaskService:
                 },
                 material=row,
             )
+        if op.kind == "write":
+            return self._execute_write(task, op)
         raise _OpFailure("op_failed", f"unknown op kind: {op.kind!r}")
+
+    def _execute_write(self, task: Task, op: Op) -> "_OpAnswer":
+        """Compose the approved page, then save it if the approval still holds.
+
+        The compose is the long part; nothing is written until it returns. The
+        save runs under the task's writer lock, re-reading the approval binding
+        and comparing the page against the digest captured before composing, so
+        a person's edit during the compose wins and an approval that went stale
+        while the model was working does not write a page.
+        """
+        frame_id = _input_text(op.input, "frameId")
+        session_id = _input_text(op.input, "sessionId")
+        approval_rev = _input_count(op.input.get("approvalRev"))
+        try:
+            spec = canonical_page_spec(op.input.get("spec"))
+            wiki_path = page_path_for_spec(spec)
+            absolute = resolve_wiki_write_path(self._layout, wiki_path)
+        except ValueError as err:
+            raise _OpFailure("bad_spec", str(err)) from err
+        frame = next((item for item in task.frames if item.id == frame_id), None)
+        if frame is None:
+            raise _OpFailure(
+                "not_found",
+                f"the writing task has no frame {frame_id!r} any more; "
+                'call inspect("frames") for the ids it holds',
+            )
+        material = next(
+            (
+                item
+                for item in task.materials
+                if _text(item.get("id")) == frame.doc_id
+            ),
+            None,
+        )
+        if material is None:
+            raise _OpFailure(
+                "not_found",
+                f"the writing task has no material {frame.doc_id!r} any more; "
+                "the frame cannot be composed from it",
+            )
+        action = _text(spec.get("action"))
+        exists = absolute.is_file()
+        if action == "create" and exists:
+            return self._page_answer(
+                spec,
+                wiki_path,
+                status="skipped",
+                summary=(
+                    f"skipped {wiki_path}: the page already exists, and a "
+                    "create does not overwrite it. Use action update."
+                ),
+                reason=(
+                    "the page already exists, and a create does not "
+                    "overwrite it"
+                ),
+            )
+        if action == "update" and not exists:
+            return self._page_answer(
+                spec,
+                wiki_path,
+                status="skipped",
+                summary=(
+                    f"skipped {wiki_path}: the page does not exist, and an "
+                    "update has nothing to change. Use action create."
+                ),
+                reason=(
+                    "the page does not exist, and an update has nothing to "
+                    "change"
+                ),
+            )
+        before = absolute.read_text(encoding="utf-8") if exists else ""
+        base_digest = blob_digest(before) if exists else ""
+        request = ComposeRequest(
+            task_id=task.id,
+            intent=task.intent.strip() or _text(spec.get("title")),
+            slug=_text(spec.get("slug")),
+            page_name=_text(spec.get("title")),
+            action=action,
+            wiki_path=wiki_path,
+            material=frame.doc_id,
+            blocks=tuple(frame.blocks),
+            locators=locators_for_frame(frame.doc_id, frame.blocks),
+            spec=spec,
+        )
+        try:
+            block = self._compose(self._layout, request, None)
+        except Exception as err:  # noqa: BLE001 - named on the op
+            raise _OpFailure(
+                "op_failed", f"the page could not be composed: {err}"
+            ) from err
+        with self._writing():
+            current = self._store.load()
+            if (
+                current is None
+                or current.rev != approval_rev
+                or not _approval_covers(
+                    current.approval, frame_id, spec, current.rev
+                )
+            ):
+                raise _OpFailure(
+                    "conflict",
+                    "the writing task changed while the page was being "
+                    "composed, so the approval no longer covers it. Nothing "
+                    "was written. Do not retry blindly; call inspect and ask "
+                    "the person to approve again.",
+                )
+            now_text = (
+                absolute.read_text(encoding="utf-8") if absolute.is_file() else ""
+            )
+            now_digest = blob_digest(now_text) if absolute.is_file() else ""
+            if now_digest != base_digest:
+                raise _OpFailure(
+                    "conflict",
+                    f"the page {wiki_path} changed while it was being "
+                    "composed. The person's edit was kept and nothing was "
+                    f"written. Do not retry blindly; call inspect and read the "
+                    "page again.",
+                )
+            try:
+                with self._page_locks.holding(self._project_key, wiki_path):
+                    outcome = self._save(
+                        self._layout,
+                        SaveRequest(
+                            task_id=task.id,
+                            op_id=op.id,
+                            session_id=session_id,
+                            wiki_path=wiki_path,
+                            action=action,
+                            content=block.content,
+                            material=frame.doc_id,
+                            locators=request.locators,
+                            expected_rev=approval_rev,
+                        ),
+                        None,
+                    )
+            except PageBusy as err:
+                raise _OpFailure(
+                    "conflict",
+                    f"{err}. A person is writing this page; nothing was "
+                    "written. Do not retry blindly; read the page again before "
+                    "deciding whether to compose.",
+                ) from err
+        after = absolute.read_text(encoding="utf-8") if absolute.is_file() else ""
+        return self._page_answer(
+            spec,
+            wiki_path,
+            status=outcome.status,
+            summary=outcome.summary,
+            reason=outcome.reason,
+            written=outcome.written,
+            skipped=outcome.skipped,
+            failed=outcome.failed,
+            effect_ids=outcome.effect_ids,
+            before=before,
+            after=after,
+        )
+
+    def _page_answer(
+        self,
+        spec: Mapping[str, object],
+        wiki_path: str,
+        *,
+        status: str,
+        summary: str,
+        reason: str = "",
+        written: tuple[str, ...] = (),
+        skipped: tuple[tuple[str, str], ...] = (),
+        failed: tuple[tuple[str, str], ...] = (),
+        effect_ids: tuple[str, ...] = (),
+        before: str = "",
+        after: str = "",
+    ) -> "_OpAnswer":
+        """One page's fate: the op's record (with effect ids) and the task's."""
+        added, removed = diff_counts(before, after)
+        result: dict[str, object] = {
+            "status": status,
+            "page": wiki_path,
+            "slug": _text(spec.get("slug")),
+            "title": _text(spec.get("title")),
+            "action": _text(spec.get("action")),
+            "summary": summary,
+            "reason": reason,
+            "written": list(written),
+            "skipped": [
+                {"path": path, "reason": text} for path, text in skipped
+            ],
+            "failed": [
+                {"path": path, "reason": text} for path, text in failed
+            ],
+            "effectIds": list(effect_ids),
+            "diff": page_diff(before, after),
+            "added": added,
+            "removed": removed,
+        }
+        # The task result is the reader's record of the page; the effect ids are
+        # the op's own business (restore's, later) and never travel with it.
+        task_result = {
+            key: value
+            for key, value in result.items()
+            if key != "effectIds"
+        }
+        return _OpAnswer("write", result, task_result=task_result)
 
     def _claim(self, op_id: str) -> tuple[Task, Op] | None:
         """Move the op to running; ``None`` when it is no longer claimable."""
@@ -870,6 +1169,20 @@ class TaskService:
             # request is bound to the old revision, so it no longer stands: a
             # person's go-ahead must not cover a task they did not approve.
             cleared = task.approval is not None or task.request is not None
+            task_result = task.result
+            status = (
+                "idle"
+                if cleared and task.status == "needs_approval"
+                else task.status
+            )
+            if answer.kind == "write":
+                # The page's fate is the task's result now: written, skipped or
+                # failed, with the identity and a bounded summary/diff. A failed
+                # page write is a failed task; a skip still finished the task.
+                task_result = dict(answer.task_result or result)
+                status = (
+                    "failed" if task_result.get("status") == "failed" else "done"
+                )
             self._store.save(
                 replace(
                     task,
@@ -878,11 +1191,8 @@ class TaskService:
                     ops=_replace_op(task, done),
                     approval=None if cleared else task.approval,
                     request=None if cleared else task.request,
-                    status=(
-                        "idle"
-                        if cleared and task.status == "needs_approval"
-                        else task.status
-                    ),
+                    result=task_result,
+                    status=status,
                     rev=task.rev + 1,
                     updated_at=now,
                 )
@@ -895,6 +1205,14 @@ class TaskService:
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
             now = iso_timestamp(self._clock)
+            result = task.result
+            status = task.status
+            if op.kind == "write":
+                # A compose or save that failed still leaves the attempt on the
+                # task: the reader sees the page it aimed at and why it is not
+                # there. The op carries the same failure for the agent.
+                result = _write_failure_result(op, code, error)
+                status = "failed"
             self._store.save(
                 replace(
                     task,
@@ -908,6 +1226,8 @@ class TaskService:
                             updated_at=now,
                         ),
                     ),
+                    result=result,
+                    status=status,
                     updated_at=now,
                 )
             )
@@ -937,6 +1257,17 @@ class TaskService:
                 status = op.status
             if op is not None and op.status == "failed":
                 detail = op.error or "the node behind it failed"
+                if op.error_code == "conflict":
+                    raise TaskConflict(
+                        f"{what} did not write because the task or the page "
+                        f"changed: {detail}. conflict. Do not retry blindly; "
+                        "call inspect and read the page again."
+                    )
+                if op.error_code == "bad_spec":
+                    raise TaskBadSpec(
+                        f"{detail}. bad_spec. Do not retry blindly; call "
+                        "inspect and use a page name it can write."
+                    )
                 if op.error_code == "not_found":
                     raise TaskNotFound(
                         f"{detail}. not_found. Do not retry blindly; call "
@@ -992,12 +1323,18 @@ class _OpFailure(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class _OpAnswer:
-    """What a finished op writes back, in the shape its kind produces."""
+    """What a finished op writes back, in the shape its kind produces.
+
+    ``result`` is the op's own record; ``task_result`` is what the task keeps as
+    its one-page result. They differ by the effect ids, which are restore's and
+    never the task view's.
+    """
 
     kind: str
     result: Mapping[str, object]
     cards: tuple[SearchCard, ...] = ()
     material: Mapping[str, object] | None = None
+    task_result: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1124,6 +1461,78 @@ def _input_text(values: Mapping[str, object], key: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _input_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+#: What a finished write may tell the model: the page's fate and identity, a
+#: bounded summary, the compile-shaped lists and the diff's size. The diff text
+#: and the effect ids stay behind: the model sees a page it can open, never the
+#: raw storage the writer touched.
+_PUBLIC_WRITE_KEYS = (
+    "status",
+    "page",
+    "slug",
+    "title",
+    "action",
+    "summary",
+    "reason",
+    "written",
+    "skipped",
+    "failed",
+    "added",
+    "removed",
+)
+
+
+def _public_write_result(result: Mapping[str, object]) -> dict[str, object]:
+    return {key: result[key] for key in _PUBLIC_WRITE_KEYS if key in result}
+
+
+def _write_failure_result(
+    op: Op, code: str, error: str
+) -> dict[str, object]:
+    """The task's record of a write that produced no page.
+
+    The page identity still comes from the op's spec, so the interface can say
+    which page the attempt aimed at; the reason is the op's own error, bounded.
+    """
+    spec: Mapping[str, object] = {}
+    try:
+        spec = canonical_page_spec(op.input.get("spec"))
+    except ValueError:
+        pass
+    wiki_path = ""
+    try:
+        if spec:
+            wiki_path = page_path_for_spec(spec)
+    except ValueError:
+        wiki_path = ""
+    reason = error.strip()[:600]
+    summary = (
+        f"could not write {wiki_path}: {reason}"
+        if wiki_path
+        else f"could not write the page: {reason}"
+    )
+    return {
+        "status": "failed",
+        "page": wiki_path,
+        "slug": _text(spec.get("slug")),
+        "title": _text(spec.get("title")),
+        "action": _text(spec.get("action")),
+        "summary": summary[:800],
+        "reason": reason,
+        "written": [],
+        "skipped": [],
+        "failed": [{"path": wiki_path, "reason": reason}] if wiki_path else [],
+        "diff": "",
+        "added": 0,
+        "removed": 0,
+    }
+
+
 def _replace_op(task: Task, op: Op) -> tuple[Op, ...]:
     return tuple(op if item.id == op.id else item for item in task.ops)
 
@@ -1137,6 +1546,7 @@ def _spawn_thread(work: Callable[[], None]) -> None:
 
 
 __all__ = [
+    "DEFAULT_COMPOSE_WAIT_S",
     "DEFAULT_PICK_WAIT_S",
     "DEFAULT_POLL_S",
     "DEFAULT_WAIT_S",

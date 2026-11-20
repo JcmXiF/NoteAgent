@@ -546,6 +546,36 @@ export type TaskApproveResult = {
   approval?: TaskApprovalDetail;
 };
 
+/**
+ * One approved page write, as the writer reported it.
+ *
+ * `diff` is the page's prose before and after; it is the interface's view and
+ * is never handed to the model. Effect ids stay in the op log.
+ */
+export type TaskWriteResult = {
+  status: "written" | "skipped" | "failed";
+  page: string;
+  slug: string;
+  title: string;
+  action: string;
+  summary: string;
+  reason: string;
+  written: string[];
+  skipped: { path: string; reason: string }[];
+  failed: { path: string; reason: string }[];
+  diff: string;
+  added: number;
+  removed: number;
+};
+
+/** The last page write the task recorded, or none. */
+export type TaskResultView = {
+  view: "result";
+  rev: number;
+  status: string;
+  result: TaskWriteResult | null;
+};
+
 /** What a person's frame answers with: the frame, its rev, and the approval. */
 export type TaskFrameResult = {
   opId: string;

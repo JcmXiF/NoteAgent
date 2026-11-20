@@ -11,6 +11,7 @@ import {
   fetchTaskCards,
   fetchTaskFrames,
   fetchTaskMaterials,
+  fetchTaskResult,
   fetchTaskSummary,
   frameTaskMaterial,
   pickTaskCard,
@@ -20,6 +21,7 @@ import type {
   TaskCardsView,
   TaskFramesView,
   TaskMaterialsView,
+  TaskResultView,
   TaskSummaryView,
   TaskWriteRequest,
 } from "@/lib/api/types";
@@ -32,6 +34,7 @@ vi.mock("@/lib/api/task", () => ({
   fetchTaskCards: vi.fn(),
   fetchTaskFrames: vi.fn(),
   fetchTaskMaterials: vi.fn(),
+  fetchTaskResult: vi.fn(),
   fetchTaskSummary: vi.fn(),
   frameTaskMaterial: vi.fn(),
   pickTaskCard: vi.fn(),
@@ -76,6 +79,13 @@ const noMaterials: TaskMaterialsView = {
   rev: 2,
   omitted: 0,
   materials: [],
+};
+
+const noResultView: TaskResultView = {
+  view: "result",
+  rev: 2,
+  status: "idle",
+  result: null,
 };
 
 const oneMaterial: TaskMaterialsView = {
@@ -178,6 +188,7 @@ beforeEach(() => {
     materials: null,
     frames: null,
     approvalView: null,
+    resultView: null,
     error: "",
     picking: "",
     pickError: "",
@@ -194,12 +205,14 @@ beforeEach(() => {
   vi.mocked(fetchTaskMaterials).mockReset();
   vi.mocked(fetchTaskFrames).mockReset();
   vi.mocked(fetchTaskApproval).mockReset();
+  vi.mocked(fetchTaskResult).mockReset();
   vi.mocked(pickTaskCard).mockReset();
   vi.mocked(frameTaskMaterial).mockReset();
   vi.mocked(approveTaskRequest).mockReset();
   vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
   vi.mocked(fetchTaskFrames).mockResolvedValue(noFrames);
   vi.mocked(fetchTaskApproval).mockResolvedValue(noApprovalView);
+  vi.mocked(fetchTaskResult).mockResolvedValue(noResultView);
 });
 
 afterEach(() => {
@@ -236,6 +249,81 @@ describe("the writing task view", () => {
     expect(host.textContent).toContain("Entropy");
     expect(host.textContent).toContain("Information");
     expect(host.textContent).toContain("example.com");
+  });
+
+  it("shows the last approved page write and its diff", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      rev: 4,
+      status: "done",
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskResult).mockResolvedValue({
+      view: "result",
+      rev: 4,
+      status: "done",
+      result: {
+        status: "written",
+        page: "wiki/entropy.md",
+        slug: "entropy",
+        title: "Entropy",
+        action: "create",
+        summary: "written wiki/entropy.md (create, 244 bytes)",
+        reason: "",
+        written: ["wiki/entropy.md"],
+        skipped: [],
+        failed: [],
+        diff: "@@ -0,0 +1,3 @@\n+# Entropy\n+composed from b1",
+        added: 2,
+        removed: 0,
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.writeResult"));
+    expect(host.textContent).toContain("wiki/entropy.md");
+    expect(host.textContent).toContain(
+      "written wiki/entropy.md (create, 244 bytes)",
+    );
+    // The diff is the page's prose as the interface shows it; the task view
+    // is the one place it lives (the chat card carries only the outcome).
+    expect(host.textContent).toContain("+composed from b1");
+    expect(host.textContent).toContain(i18n.t("task.writeStatus.written"));
+  });
+
+  it("says a page write failed and why", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      rev: 4,
+      status: "failed",
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskResult).mockResolvedValue({
+      view: "result",
+      rev: 4,
+      status: "failed",
+      result: {
+        status: "failed",
+        page: "wiki/entropy.md",
+        slug: "entropy",
+        title: "Entropy",
+        action: "create",
+        summary: "could not write wiki/entropy.md: the disk is full",
+        reason: "the disk is full",
+        written: [],
+        skipped: [],
+        failed: [{ path: "wiki/entropy.md", reason: "the disk is full" }],
+        diff: "",
+        added: 0,
+        removed: 0,
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.writeStatus.failed"));
+    expect(host.textContent).toContain("the disk is full");
   });
 
   it("shows the task's materials with a bounded block index", async () => {

@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from noteagent.project.layout import ProjectLayout
+from noteagent.task.writing import PageBusy, PageLocks
+from noteagent.util.refusal import Refusal
 from noteagent.wiki.editing import (
     page_backlinks,
     page_edit_view,
@@ -27,15 +29,44 @@ def page_view_payload(layout: ProjectLayout, path: str) -> dict[str, Any]:
     return page_edit_view(layout, path)
 
 
-def page_save_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, Any]:
-    """Save a page's prose, or preview the change when ``preview`` is set."""
-    return save_page(
-        layout,
-        str(body.get("path") or ""),
-        str(body.get("body") or ""),
-        base_revision=str(body.get("baseRevision") or ""),
-        preview=bool(body.get("preview")),
-    )
+def page_save_payload(
+    layout: ProjectLayout,
+    body: dict[str, Any],
+    *,
+    page_locks: PageLocks | None = None,
+) -> dict[str, Any]:
+    """Save a page's prose, or preview the change when ``preview`` is set.
+
+    A real save shares the page lock with the task's writing executor: the
+    later writer is told the page is busy instead of interleaving with the one
+    already writing it. A preview writes nothing and needs no lock. The editor's
+    own base-revision check still covers a page written since it was opened.
+    """
+    path = str(body.get("path") or "")
+    preview = bool(body.get("preview"))
+    if preview or page_locks is None:
+        return save_page(
+            layout,
+            path,
+            str(body.get("body") or ""),
+            base_revision=str(body.get("baseRevision") or ""),
+            preview=preview,
+        )
+    try:
+        with page_locks.holding(str(layout.root.resolve()), path):
+            return save_page(
+                layout,
+                path,
+                str(body.get("body") or ""),
+                base_revision=str(body.get("baseRevision") or ""),
+            )
+    except PageBusy as err:
+        raise Refusal(
+            "page.busy",
+            str(err),
+            params={"path": path},
+            status=409,
+        ) from err
 
 
 def page_rename_payload(layout: ProjectLayout, body: dict[str, Any]) -> dict[str, Any]:

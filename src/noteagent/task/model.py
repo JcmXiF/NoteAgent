@@ -38,9 +38,11 @@ TASK_STATUSES: tuple[TaskStatus, ...] = (
 #: The kinds of operation the task knows. ``frame`` and ``approve`` are pure
 #: state: the tool or the person applies them themselves and logs them; the
 #: executor never claims them. ``approve`` is written only by a person's route.
-OpKind: TypeAlias = Literal["search", "pick", "frame", "approve"]
+#: ``write`` is the executor's page write: compose one frame's spec and save the
+#: page, after checking the approval that covers it is still the one.
+OpKind: TypeAlias = Literal["search", "pick", "frame", "approve", "write"]
 
-OP_KINDS: tuple[OpKind, ...] = ("search", "pick", "frame", "approve")
+OP_KINDS: tuple[OpKind, ...] = ("search", "pick", "frame", "approve", "write")
 
 #: Where a frame came from. A person and the agent draw frames in this slice;
 #: ``model`` is the auto-framing node the pipeline already has, for later.
@@ -58,15 +60,18 @@ ACTIVE_OP_STATUSES = frozenset({"requested", "running"})
 #: Who asked for an op. ``approve`` is the one kind only a human may write.
 Actor: TypeAlias = Literal["agent", "human"]
 
-#: The views ``inspect`` may ask for. Each is bounded; none is the task file.
+#: The views the task can answer with. Each is bounded; none is the task file.
 #: ``approval`` carries the person's go-ahead (or none) and the pending write
-#: request the confirmation panel shows.
+#: request the confirmation panel shows. ``result`` is the one page the last
+#: approved write produced, with its diff; only the interface's route asks for
+#: it, never the model (``inspect`` does not offer it).
 TASK_VIEWS: tuple[str, ...] = (
     "summary",
     "cards",
     "materials",
     "frames",
     "approval",
+    "result",
 )
 
 #: How many cards one bounded view carries.
@@ -705,6 +710,17 @@ def task_view(task: Task, view: str) -> dict[str, object]:
                 _request_detail(task.request) if request_stands else None
             ),
             "requestStale": task.request is not None and not request_stands,
+        }
+    if view == "result":
+        # The one page the last write produced, as the writer reported it: the
+        # page identity, written/skipped/failed, a bounded summary and the diff
+        # the interface shows. The op's effect ids stay in the op log: they are
+        # restore's business, not the reader's and never the model's.
+        return {
+            "view": "result",
+            "rev": task.rev,
+            "status": task.status,
+            "result": dict(task.result) if task.result is not None else None,
         }
     raise ValueError(f"unknown task view: {view!r}")
 

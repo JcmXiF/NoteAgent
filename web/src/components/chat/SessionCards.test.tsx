@@ -196,19 +196,75 @@ describe("the cards beside an answer", () => {
     );
   });
 
-  it("says a compose_page was approved", async () => {
+  it("says a compose_page wrote its page", async () => {
     await draw([
       {
         tool: "compose_page",
         title: "Entropy",
-        status: "approved",
+        status: "written",
         rev: 5,
+        path: "wiki/entropy.md",
+        slug: "entropy",
+        action: "create",
+        wrote_wiki: true,
       },
     ]);
 
     expect(host.textContent).toContain("Entropy");
-    expect(host.textContent).toContain(i18n.t("chat.looked.approved"));
+    expect(host.textContent).toContain(i18n.t("chat.looked.written"));
     expect(host.textContent).not.toContain(i18n.t("chat.looked.needsApproval"));
+  });
+
+  it("says a compose_page skipped or failed without inventing a page", async () => {
+    await draw([
+      {
+        tool: "compose_page",
+        title: "Entropy",
+        status: "skipped",
+        rev: 5,
+        path: "wiki/entropy.md",
+        slug: "entropy",
+        action: "create",
+      },
+      {
+        tool: "compose_page",
+        title: "Information",
+        status: "failed",
+        rev: 6,
+        path: "wiki/information.md",
+        slug: "information",
+        action: "create",
+      },
+    ]);
+
+    expect(host.textContent).toContain(i18n.t("chat.looked.writeSkipped"));
+    expect(host.textContent).toContain(i18n.t("chat.looked.writeFailed"));
+  });
+
+  it("says a compose_page is still writing", async () => {
+    await draw([
+      {
+        tool: "compose_page",
+        title: "Entropy",
+        status: "running",
+        rev: 5,
+      },
+    ]);
+
+    expect(host.textContent).toContain(i18n.t("chat.looked.writing"));
+  });
+
+  it("draws a refused compose_page as a failed card", async () => {
+    await draw([
+      {
+        tool: "compose_page",
+        title: "compose_page",
+        error: true,
+      },
+    ]);
+
+    expect(host.textContent).toContain("compose_page");
+    expect(host.textContent).toContain(i18n.t("chat.looked.failed"));
   });
 
   it("says when a pick is still fetching", async () => {

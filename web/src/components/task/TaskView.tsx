@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import type { TaskFrame, TaskWriteRequest } from "@/lib/api/types";
+import type {
+  TaskFrame,
+  TaskWriteRequest,
+  TaskWriteResult,
+} from "@/lib/api/types";
 import { useTaskStore } from "@/stores/task-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
@@ -20,6 +24,7 @@ export function TaskView() {
   const materials = useTaskStore((state) => state.materials);
   const frames = useTaskStore((state) => state.frames);
   const approvalView = useTaskStore((state) => state.approvalView);
+  const resultView = useTaskStore((state) => state.resultView);
   const error = useTaskStore((state) => state.error);
   const picking = useTaskStore((state) => state.picking);
   const pickError = useTaskStore((state) => state.pickError);
@@ -129,6 +134,7 @@ export function TaskView() {
           {decisionError}
         </p>
       ) : null}
+      <WriteResultPanel result={resultView?.result ?? null} />
       {shown.length > 0 ? (
         <ul className="mt-1 flex flex-col gap-0.5">
           {shown.map((card) => (
@@ -283,6 +289,59 @@ function FrameList({
         <p className="mt-1 text-muted-foreground">{t("task.framesEmpty")}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The last approved page write: what happened, and how the page changed.
+ *
+ * This is the core's one result, read from the task, not a second copy built
+ * from chat events. The diff is the interface's view of the page; the agent's
+ * observations only carry the page identity and the outcome.
+ */
+function WriteResultPanel({ result }: { result: TaskWriteResult | null }) {
+  const { t } = useTranslation();
+  if (result === null) return null;
+  return (
+    <section
+      aria-label={t("task.writeResult")}
+      className="mt-2 rounded-md border p-1.5"
+    >
+      <div className="flex items-center gap-2">
+        <p className="font-medium">{t("task.writeResult")}</p>
+        <span
+          className={
+            result.status === "failed"
+              ? "ml-auto text-[10px] text-destructive"
+              : "ml-auto text-[10px] text-muted-foreground"
+          }
+        >
+          {t(`task.writeStatus.${result.status}`, {
+            defaultValue: result.status,
+          })}
+        </span>
+      </div>
+      <p className="truncate text-foreground" title={result.page}>
+        {result.page}
+      </p>
+      <p className="text-[10px] text-muted-foreground">{result.summary}</p>
+      {result.reason && result.status !== "written" ? (
+        <p className="mt-0.5 text-[10px] text-destructive">{result.reason}</p>
+      ) : null}
+      {result.diff ? (
+        <details className="mt-1" open>
+          <summary className="cursor-pointer text-[10px] text-muted-foreground">
+            {t("task.writeDiff", {
+              added: result.added,
+              removed: result.removed,
+            })}
+          </summary>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-1 text-[10px]">
+            {result.diff}
+          </pre>
+        </details>
+      ) : null}
+    </section>
   );
 }
 

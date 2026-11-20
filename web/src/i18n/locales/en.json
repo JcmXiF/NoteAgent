@@ -659,7 +659,11 @@
       "picking": "still fetching",
       "blocks": "{{count}} blocks",
       "needsApproval": "needs your approval",
-      "approved": "approved"
+      "approved": "approved",
+      "written": "written",
+      "writeSkipped": "skipped",
+      "writeFailed": "write failed",
+      "writing": "still writing"
     },
     "wait": {
       "title": "Waiting on you",
@@ -1566,6 +1570,7 @@
         "missing": "That page is no longer in the project; it may have been deleted.",
         "notAPage": "That is not a note in this project.",
         "changed": "This page was written again after you opened it. Open it afresh and make your change there.",
+        "busy": "This page is being written right now. Try again when that write has finished.",
         "exists": "A page already has that name. Choose another.",
         "nameEmpty": "A page needs a name.",
         "nameNotAllowed": "That page name cannot be used. Choose another.",
@@ -1697,9 +1702,16 @@
     "reject": "Reject",
     "approving": "Approving…",
     "rejecting": "Rejecting…",
-    "approvedNotice": "Approved. No page is written in this step.",
+    "approvedNotice": "Approved. The agent can now write this page.",
     "rejectedNotice": "Rejected. The agent can propose a revised request.",
     "decisionFailed": "The write request could not be decided",
+    "writeResult": "Page write",
+    "writeDiff": "Diff (+{{added}} / -{{removed}})",
+    "writeStatus": {
+      "written": "written",
+      "skipped": "skipped",
+      "failed": "failed"
+    },
     "action": {
       "create": "new page",
       "update": "update page"

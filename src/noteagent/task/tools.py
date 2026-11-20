@@ -68,13 +68,18 @@ _FRAME_BLOCKS_DESCRIPTION = (
 _COMPOSE_PAGE_DESCRIPTION = (
     "Propose the page to write from one frame: a writing spec with a slug, a "
     "title, an action (create or update) and 1-12 sections, each with a title and "
-    "1-20 block ids that frame covers. compose_page never writes a page by "
-    "itself; without a person's matching approval it records the write request "
-    "and returns needs_approval, with no page and no write op. The person approves "
-    "or rejects the request in the confirmation panel; inspect(\"approval\") says "
-    "what stands. A changed spec, frame or task revision needs a new approval, so "
-    "call compose_page again with the same frame and spec only after the approval "
-    "is visible. If the task changed since your last look, call inspect first."
+    "1-20 block ids that frame covers. Without a person's matching approval it "
+    "records the write request and returns needs_approval, with no page and no "
+    "write op. With a matching approval it writes exactly one page through the "
+    "core and returns written, skipped or failed with the page and the new "
+    "revision; a page that takes longer than three minutes answers "
+    "requested/running and the executor finishes it. A create never overwrites "
+    "an existing page and an update never invents a missing one. The person "
+    "approves or rejects the request in the confirmation panel; inspect(\"approval\") "
+    "says what stands. A changed spec, frame or task revision needs a new "
+    "approval, so call compose_page again with the same frame and spec only after "
+    "the approval is visible. If the task changed since your last look, call "
+    "inspect first."
 )
 _INSPECT_DESCRIPTION = (
     "Read a bounded view of the current writing task. `summary` says what the "
@@ -270,11 +275,15 @@ def task_tools(service: TaskService) -> tuple[ToolSpec, ...]:
             name=COMPOSE_PAGE,
             description=_COMPOSE_PAGE_DESCRIPTION,
             parameters=COMPOSE_PAGE_PARAMETERS,
-            # In this slice it writes local task state (the pending request),
-            # never a wiki page: the actual write is a later ticket. The tool
-            # contract calls a local state write `write`.
+            # It writes local state and, once a person approves, one wiki page
+            # through the core. The contract's `write` means a local write the
+            # core performs, not a fetch and not a page the model writes itself;
+            # the LLM call inside compose is the core's, not this tool's.
             side_effect="write",
-            timeout_s=10.0,
+            # The handler has its own bounded wait (180s by default); the
+            # registry's wall clock must sit above it, or a slow compose would
+            # be reported as a registry timeout instead of requested/running.
+            timeout_s=max(240.0, service.compose_wait_s + 30.0),
             output_limits=OutputLimits(
                 max_items=MAX_SPEC_SECTIONS,
                 max_chars_per_item=MAX_CARD_SNIPPET + 400,
@@ -406,6 +415,7 @@ def _compose_handler(service: TaskService):
             frame_id,
             spec,
             session_id=context.session_id,
+            cancel=context.cancel,
         )
         meta: dict[str, object] = {
             "title": _spec_title(outcome.spec, fallback=frame_id),
@@ -416,6 +426,14 @@ def _compose_handler(service: TaskService):
             # The confirmation card and the task panel read the same request,
             # so the card carries the canonical spec the task stored.
             meta["request"] = request_to_dict(outcome.request)
+        if outcome.result is not None:
+            result = outcome.result
+            # The card gets the page's identity and fate; the diff and the
+            # effect ids stay in the task, which is where the panel reads them.
+            meta["path"] = _text(result.get("page"))
+            meta["slug"] = _text(result.get("slug"))
+            meta["action"] = _text(result.get("action"))
+            meta["wrote_wiki"] = outcome.status == "written"
         return ToolResult(content=_render_compose(outcome), meta=meta)
 
     return compose
@@ -527,13 +545,38 @@ def _render_compose(outcome: ComposeOutcome) -> str:
     for section in sections:
         raw = section.get("blocks")
         blocks += len(raw) if isinstance(raw, list) else 0
-    if outcome.status == "approved":
+    if outcome.status in ("written", "skipped", "failed"):
+        result = outcome.result or {}
+        page = str(result.get("page") or "")
+        summary = str(result.get("summary") or "")
+        reason = str(result.get("reason") or "")
+        if outcome.status == "written":
+            return (
+                f"Task rev {outcome.rev}. compose_page written: {page} "
+                f'("{title}", {slug}, {action}) from frame {outcome.frame_id} '
+                f"with {len(sections)} section(s) and {blocks} block(s). "
+                f"{summary} The page is source-grounded: every section carries "
+                "the marker of the material it was composed from. The write "
+                "result and its diff are recorded in the writing task."
+            )
+        if outcome.status == "skipped":
+            return (
+                f"Task rev {outcome.rev}. compose_page skipped writing {page} "
+                f'("{title}", {slug}, {action}): {reason or summary}. '
+                "Nothing was overwritten. Read the page and the task before "
+                "deciding whether a different spec is right."
+            )
         return (
-            f'Task rev {outcome.rev}. compose_page is approved: a person approved '
-            f'writing page "{title}" ({slug}, {action}) from frame '
-            f"{outcome.frame_id} with {len(sections)} section(s) and {blocks} "
-            "block(s). No wiki page was written and no write op was started in "
-            "this step; the approved request is ready for the writing step."
+            f"Task rev {outcome.rev}. compose_page failed to write {page} "
+            f'("{title}", {slug}, {action}): {reason or summary}. The task '
+            "records the failure; do not retry blindly, call inspect first."
+        )
+    if outcome.status in ("requested", "running"):
+        return (
+            f'Task rev {outcome.rev}. compose_page is still {outcome.status} '
+            f'for page "{title}" ({slug}, {action}) from frame '
+            f"{outcome.frame_id}. The executor is still writing it; call "
+            'inspect("summary") later; do not compose it again.'
         )
     lines = [
         f'Task rev {outcome.rev}. compose_page needs_approval: writing page '
@@ -563,6 +606,10 @@ def _render_compose(outcome: ComposeOutcome) -> str:
         "the gate."
     )
     return "\n".join(lines)
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _spec_title(spec: Mapping[str, object], *, fallback: str = "") -> str:
