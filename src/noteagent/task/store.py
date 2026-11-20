@@ -16,6 +16,15 @@ from noteagent.project.layout import ProjectLayout
 from noteagent.task.model import Task, is_task_id, task_from_dict, task_to_dict
 
 
+class TaskUnreadableError(RuntimeError):
+    """The task file exists but cannot be read as a task.
+
+    A missing file means "no task was made yet"; an unreadable one must never
+    look the same, or the next read would create a fresh task over the person's
+    state. Callers surface it and leave the file untouched.
+    """
+
+
 class TaskStore:
     """The task file, with its id checked before it can name a path."""
 
@@ -27,17 +36,36 @@ class TaskStore:
         return self._path
 
     def load(self) -> Task | None:
-        """The task, or ``None`` when none was made yet or cannot be read."""
+        """The task, or ``None`` when none was made yet.
+
+        An existing file that cannot be read raises ``TaskUnreadableError``: it
+        is not an absent task, and creating one over it would destroy whatever
+        the person had. The file is never rewritten by a read.
+        """
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            text = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return None
+        except (OSError, UnicodeDecodeError) as err:
+            raise TaskUnreadableError(
+                f"the writing task file {self._path} cannot be read: {err}"
+            ) from err
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as err:
+            raise TaskUnreadableError(
+                f"the writing task file {self._path} is not valid JSON: {err}"
+            ) from err
         if not isinstance(raw, Mapping):
-            return None
+            raise TaskUnreadableError(
+                f"the writing task file {self._path} does not hold an object"
+            )
         try:
             return task_from_dict(raw)
-        except ValueError:
-            return None
+        except ValueError as err:
+            raise TaskUnreadableError(
+                f"the writing task file {self._path} is not a task: {err}"
+            ) from err
 
     def save(self, task: Task) -> None:
         if not is_task_id(task.id):
@@ -47,12 +75,4 @@ class TaskStore:
             json.dumps(task_to_dict(task), ensure_ascii=False, indent=2) + "\n",
         )
 
-    def create(self, task: Task) -> None:
-        if self._path.exists():
-            raise FileExistsError(
-                f"the project already has a writing task: {task.id}"
-            )
-        self.save(task)
-
-
-__all__ = ["TaskStore"]
+__all__ = ["TaskStore", "TaskUnreadableError"]

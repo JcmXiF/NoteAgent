@@ -46,7 +46,7 @@ from noteagent.pipeline.run import PipelineRun, is_run_id
 from noteagent.project.identity import source_identity
 from noteagent.project.layout import ProjectLayout
 from noteagent.project.raw_kinds import raw_kind
-from noteagent.task.store import TaskStore
+from noteagent.task.store import TaskStore, TaskUnreadableError
 
 #: How many runs of un-promoted staging are kept. Older ones are removed.
 DEFAULT_KEEP_RUNS = 3
@@ -618,8 +618,6 @@ class Materials:
         self,
         runs: Sequence[PipelineRun],
         keep: int = DEFAULT_KEEP_RUNS,
-        *,
-        keep_ids: Sequence[str] = (),
     ) -> int:
         """Remove old staging, recording what was dropped with it.
 
@@ -627,11 +625,10 @@ class Materials:
         under ``staging/``: the active writing task stages its materials under
         its own id, and a later pipeline run must not expire the material the
         task and the agent are still reading. The active task is protected
-        here, beside the caller's own *keep_ids*, so no pipeline caller has to
-        know about the task to keep it safe.
+        here, so no pipeline caller has to know about the task to keep it safe.
         """
         started = {run.id: run.started_at for run in runs}
-        protected = set(keep_ids) | self._active_task_ids()
+        protected = self._active_task_ids()
         doomed = [
             (run_id, path)
             for run_id, path in self._staging.expired(keep, started)
@@ -662,8 +659,16 @@ class Materials:
         return len(doomed)
 
     def _active_task_ids(self) -> set[str]:
-        """The task whose staging this project must keep, if it has one."""
-        task = TaskStore(self._layout).load()
+        """The task whose staging this project must keep, if it has one.
+
+        An unreadable task file is not a reason to fail a pipeline clean: the
+        retention pass keeps the runs it knows and leaves the task alone. The
+        task surfaces its own error when something reads it.
+        """
+        try:
+            task = TaskStore(self._layout).load()
+        except TaskUnreadableError:
+            return set()
         return {task.id} if task is not None else set()
 
 

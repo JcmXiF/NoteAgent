@@ -981,13 +981,21 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.get("/api/v1/task")
     def kernel_task(
         view: Literal[
-            "summary", "cards", "materials", "frames", "approval", "result"
+            "summary",
+            "cards",
+            "materials",
+            "frames",
+            "approval",
+            "result",
+            "overview",
         ] = Query("summary"),
     ) -> dict[str, object]:
         """The active project's writing task, as a bounded view with its rev.
 
-        ``result`` is the last approved page write with its diff; the model's
-        ``inspect`` tool deliberately does not offer it.
+        ``overview`` reads every view from one task load, at one revision, so
+        the interface never draws a mix of two writes' revisions. ``result`` is
+        the last approved page write with its diff, which the model's
+        ``inspect`` also offers.
         """
         return task_view_payload(deps, view)
 
@@ -1608,8 +1616,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         if not body.preview and result.get("changed"):
             # A real change to the page is a human op on the project's writing
             # task: it moves the revision and invalidates a standing approval.
-            # The page is already saved; a failure to record is logged, never
-            # turned into a failed save.
+            # The page is already saved; if the record cannot be written, the
+            # route answers a coded error saying the page stands and the task
+            # did not record it, rather than reporting a consistent state.
             record_task_page_edit(
                 deps,
                 layout,

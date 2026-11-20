@@ -52,9 +52,10 @@ from noteagent.task.model import (
     WriteRequest,
     canonical_page_spec,
     material_summary,
+    task_overview,
     task_view,
 )
-from noteagent.task.store import TaskStore
+from noteagent.task.store import TaskStore, TaskUnreadableError
 from noteagent.task.writing import (
     ComposePageFn,
     ComposeRequest,
@@ -130,6 +131,13 @@ class TaskNeedsApproval(TaskToolError):
         super().__init__(message, code="needs_approval")
 
 
+class TaskUnreadable(TaskToolError):
+    """The task file exists but cannot be read; it is never replaced."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="task.unreadable")
+
+
 @dataclass(frozen=True, slots=True)
 class OpResumeNotice:
     """A finished op the session was waiting on, with its bounded delta.
@@ -152,6 +160,11 @@ class OpResumeNotice:
 #: resumed. The API composes one over the session store and runtime; a test
 #: records the notice instead of starting a run.
 TaskOpResumeFn: TypeAlias = Callable[[OpResumeNotice], None]
+
+#: The revision a session's own transcript says it last saw. It is the restart
+#: fallback for the in-memory observation, so a write made while the core was
+#: down is still a conflict rather than a silent overwrite.
+ObservedRevFn: TypeAlias = Callable[[str], int | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +327,8 @@ class TaskService:
         save: SavePageFn | None = None,
         page_locks: PageLocks | None = None,
         on_resume: TaskOpResumeFn | None = None,
+        observed: ObservedRevFn | None = None,
+        store: TaskStore | None = None,
     ) -> None:
         if wait_s < 0 or pick_wait_s < 0 or compose_wait_s < 0:
             raise ValueError("a bounded wait cannot be negative")
@@ -337,9 +352,14 @@ class TaskService:
         # ``None`` leaves the op pending for a later trigger (startup recovery
         # or the route that owns the session).
         self._on_resume = on_resume
+        # Where a restarted core recovers the revision a session last saw; the
+        # in-process registry is the fast path that does not need it.
+        self._observed = observed
         self._project_key = str(layout.root.resolve())
         self._owner = f"task-{id(self)}"
-        self._store = TaskStore(layout)
+        # The one task file. A test hands in a store to watch or order its
+        # reads; production uses the project's own.
+        self._store = store or TaskStore(layout)
 
     @property
     def wait_s(self) -> float:
@@ -362,14 +382,53 @@ class TaskService:
         """A bounded view and its rev; a missing task is made on first read."""
         if view not in TASK_VIEWS:
             raise ValueError(f"unknown task view: {view!r}")
-        task = self._store.load()
+        task = self._load()
         if task is None:
             with self._writing():
-                task = self._store.load()
+                task = self._load()
                 if task is None:
                     task = self._create_locked()
         self._registry.observe(self._project_key, session_id, task.rev)
         return task_view(task, view), task.rev
+
+    def overview(self) -> dict[str, object]:
+        """Every bounded interface view from one task load, at one revision.
+
+        The interface reads this instead of six separate views: a write landing
+        between two of those reads would leave the panel a mix of two revisions.
+        The model never asks for it; it calls ``inspect`` for one bounded view.
+        """
+        task = self._load()
+        if task is None:
+            with self._writing():
+                task = self._load()
+                if task is None:
+                    task = self._create_locked()
+        return task_overview(task)
+
+    def _expected_rev(self, session_id: str) -> int | None:
+        """The revision this session last saw, in memory or in its transcript.
+
+        The registry is the fast path within one process. After a restart it is
+        empty, so the last committed task tool result (whose card carried the
+        revision the model read) is used: a person's change made while the core
+        was down is then a ``conflict``, not a silent overwrite. A session that
+        cannot be read keeps the old fallback, the task's current revision.
+        """
+        remembered = self._registry.observed(self._project_key, session_id)
+        if remembered is not None:
+            return remembered
+        if not session_id or self._observed is None:
+            return None
+        try:
+            return self._observed(session_id)
+        except Exception as err:  # noqa: BLE001 - an unreadable session is not fatal
+            logger.debug(
+                "the observed task revision of session %s cannot be read: %s",
+                session_id,
+                err,
+            )
+            return None
 
     def search(
         self,
@@ -396,7 +455,7 @@ class TaskService:
         expected = (
             expected_rev
             if expected_rev is not None
-            else self._registry.observed(self._project_key, session_id)
+            else self._expected_rev(session_id)
         )
         op_id = self._request(
             kind="search",
@@ -456,7 +515,7 @@ class TaskService:
         expected = (
             expected_rev
             if expected_rev is not None
-            else self._registry.observed(self._project_key, session_id)
+            else self._expected_rev(session_id)
         )
         op_id = self._request(
             kind="pick",
@@ -530,12 +589,12 @@ class TaskService:
         expected = (
             expected_rev
             if expected_rev is not None
-            else self._registry.observed(self._project_key, session_id)
+            else self._expected_rev(session_id)
         )
         op_id = self._ids.new_id("op")
         now = iso_timestamp(self._clock)
         with self._writing():
-            task = self._store.load() or self._create_locked()
+            task = self._load() or self._create_locked()
             # A session that has not read the task yet names no revision; the
             # first mutation is accepted at the revision the task is at.
             expected = task.rev if expected is None else expected
@@ -660,7 +719,7 @@ class TaskService:
         op_id = self._ids.new_id("op")
         now = iso_timestamp(self._clock)
         with self._writing():
-            task = self._store.load() or self._create_locked()
+            task = self._load() or self._create_locked()
             approval_cleared = task.approval is not None
             request_cleared = task.request is not None
             op = Op(
@@ -745,12 +804,12 @@ class TaskService:
         expected = (
             expected_rev
             if expected_rev is not None
-            else self._registry.observed(self._project_key, session_id)
+            else self._expected_rev(session_id)
         )
         now = iso_timestamp(self._clock)
         op_id = ""
         with self._writing():
-            task = self._store.load() or self._create_locked()
+            task = self._load() or self._create_locked()
             expected = task.rev if expected is None else expected
             if expected != task.rev:
                 raise TaskConflict(
@@ -903,7 +962,7 @@ class TaskService:
             raise TaskBadSpec(str(err)) from err
         now = iso_timestamp(self._clock)
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             if task is None or task.id != cleaned_task:
                 raise TaskConflict(
                     "there is no active writing task with that id; read the "
@@ -940,6 +999,16 @@ class TaskService:
                     f"the writing task has no frame {cleaned_frame!r}; re-read "
                     "the task before deciding"
                 )
+            approved_digest = ""
+            if decision == "approve":
+                try:
+                    # The page the person is approving against, when it exists.
+                    # A later writer compares this before saving, so an edit
+                    # made after the approval is kept even if the task could
+                    # not record that edit and clear this go-ahead.
+                    approved_digest = _page_digest(self._layout, canonical)
+                except ValueError as err:
+                    raise TaskBadSpec(str(err)) from err
             approval = (
                 Approval(
                     frame_id=cleaned_frame,
@@ -947,6 +1016,7 @@ class TaskService:
                     rev=task.rev + 1,
                     by=by,
                     at=now,
+                    page_digest=approved_digest,
                 )
                 if decision == "approve"
                 else None
@@ -987,7 +1057,7 @@ class TaskService:
         and starts nothing; a cancelled op never resumes at all.
         """
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None:
                 return None
@@ -1008,20 +1078,24 @@ class TaskService:
                 updated_at=now,
             )
             self._store.save(saved)
-            # The resumed run starts from the delta's revision.
-            self._registry.observe(self._project_key, session_id, saved.rev)
+            # The resumed run starts from the delta's revision: the revision the
+            # op completed at, which the op recorded. Falling back to the task's
+            # current revision keeps an older op (one finished before the record
+            # carried it) resumable with the behaviour it was written under.
+            rev = started.resume_rev or saved.rev
+            self._registry.observe(self._project_key, session_id, rev)
             return OpResumeNotice(
                 session_id=session_id,
                 op_id=started.id,
                 kind=started.kind,
                 status=started.status,
-                rev=saved.rev,
+                rev=rev,
                 result=op_delta(saved, started),
             )
 
     def resume_pending(self, op_id: str) -> bool:
         """Whether this op still wants its one continuation (read only)."""
-        task = self._store.load()
+        task = self._load()
         op = task.op(op_id) if task is not None else None
         if task is None or op is None:
             return False
@@ -1041,7 +1115,7 @@ class TaskService:
         in the task the person and the agent read.
         """
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None:
                 return
@@ -1069,7 +1143,7 @@ class TaskService:
         """
         changed = False
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None:
                 raise TaskNotFound(
@@ -1109,7 +1183,7 @@ class TaskService:
         page land once.
         """
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None:
                 raise TaskNotFound(
@@ -1161,7 +1235,7 @@ class TaskService:
         """
         notices: list[OpResumeNotice] = []
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             if task is None:
                 return ()
             now = iso_timestamp(self._clock)
@@ -1195,7 +1269,9 @@ class TaskService:
                         op_id=op.id,
                         kind=op.kind,
                         status=op.status,
-                        rev=saved.rev,
+                        # The completion's revision, like claim_resume: a write
+                        # made while the process was down must not look seen.
+                        rev=op.resume_rev or saved.rev,
                         result=op_delta(saved, op),
                     )
                 )
@@ -1218,7 +1294,7 @@ class TaskService:
         op_id = self._ids.new_id("op")
         now = iso_timestamp(self._clock)
         with self._writing():
-            task = self._store.load() or self._create_locked()
+            task = self._load() or self._create_locked()
             expected = task.rev if expected_rev is None else expected_rev
             if expected != task.rev:
                 raise TaskConflict(
@@ -1422,7 +1498,7 @@ class TaskService:
         after = ""
         with self._writing():
             _check_op_cancel(cancel)
-            current = self._store.load()
+            current = self._load()
             if (
                 current is None
                 or current.rev != approval_rev
@@ -1460,6 +1536,24 @@ class TaskService:
                             "composed. The person's edit was kept and nothing "
                             "was written. Do not retry blindly; call inspect "
                             "and read the page again.",
+                        )
+                    # The approval itself names the page it was given against.
+                    # A page that changed since then (a person's edit, even one
+                    # the task could not record) is not the page the person
+                    # approved, so it is never overwritten.
+                    approved_digest = (
+                        current.approval.page_digest
+                        if current.approval is not None
+                        else ""
+                    )
+                    if approved_digest and now_digest != approved_digest:
+                        raise _OpFailure(
+                            "conflict",
+                            f"the page {wiki_path} changed since the person "
+                            "approved this write. The person's edit was kept "
+                            "and nothing was written. Do not retry blindly; "
+                            "call inspect and ask the person to approve the "
+                            "page as it now stands.",
                         )
                     outcome = self._save(
                         self._layout,
@@ -1553,7 +1647,7 @@ class TaskService:
     def _claim(self, op_id: str) -> tuple[Task, Op] | None:
         """Move the op to running; ``None`` when it is no longer claimable."""
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return None
@@ -1575,7 +1669,7 @@ class TaskService:
     def _finish_done(self, op_id: str, answer: "_OpAnswer") -> None:
         notice: OpResumeNotice | None = None
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
@@ -1599,7 +1693,16 @@ class TaskService:
                 result["cardIds"] = [card.id for card in new_cards]
             elif answer.material is not None:
                 materials = _upsert_material(task.materials, answer.material)
-            done = replace(op, status="done", result=result, updated_at=now)
+            done = replace(
+                op,
+                status="done",
+                result=result,
+                # A finish that owes a resume records the revision it created:
+                # the continuation must observe the completion, even if a person
+                # writes while it is queued behind the session's running turn.
+                resume_rev=task.rev + 1 if op.resume_requested else op.resume_rev,
+                updated_at=now,
+            )
             # Finishing an op moves the revision. An approval or a pending
             # request is bound to the old revision, so it no longer stands: a
             # person's go-ahead must not cover a task they did not approve.
@@ -1640,13 +1743,21 @@ class TaskService:
     def _finish_failed(self, op_id: str, code: str, error: str) -> None:
         notice: OpResumeNotice | None = None
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
             now = iso_timestamp(self._clock)
             result = task.result
             status = task.status
+            # A failed write rewrites the task's result and status, so it is a
+            # state write and moves the revision, exactly like a finished one.
+            # A failed search or pick only changes the op record, which is not
+            # task state: it keeps the no-bump semantics of an op-only
+            # transition, so a wait that ends in failure does not look like a
+            # task change to the views.
+            changes_task = op.kind == "write"
+            completion_rev = task.rev + 1 if changes_task else task.rev
             failed = replace(
                 op,
                 # A cancelled op is terminal under its own name: even if the
@@ -1655,9 +1766,20 @@ class TaskService:
                 status="cancelled" if code == "cancelled" else "failed",
                 error=error[:1000],
                 error_code=code,
+                # An owed resume observes the failure at the revision it wrote,
+                # not at whatever the task has moved to when it is claimed.
+                resume_rev=(
+                    completion_rev if op.resume_requested else op.resume_rev
+                ),
                 updated_at=now,
             )
-            if op.kind == "write":
+            # A revision move makes any approval or pending request stale by
+            # construction; like a finished op, the failure clears them rather
+            # than leaving a go-ahead that no longer covers the task.
+            cleared = changes_task and (
+                task.approval is not None or task.request is not None
+            )
+            if changes_task:
                 # A compose or save that failed still leaves the attempt on the
                 # task: the reader sees the page it aimed at and why it is not
                 # there. The op carries the same failure for the agent.
@@ -1666,8 +1788,11 @@ class TaskService:
             saved = replace(
                 task,
                 ops=_replace_op(task, failed),
+                approval=None if cleared else task.approval,
+                request=None if cleared else task.request,
                 result=result,
                 status=status,
+                rev=completion_rev,
                 updated_at=now,
             )
             self._store.save(saved)
@@ -1731,7 +1856,7 @@ class TaskService:
         while True:
             if cancel is not None and cancel.is_set():
                 raise RunCancelled("the run was cancelled")
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is not None:
                 rev = task.rev
@@ -1761,7 +1886,7 @@ class TaskService:
         if observed.status not in ACTIVE_OP_STATUSES:
             return observed
         with self._writing():
-            task = self._store.load()
+            task = self._load()
             op = task.op(op_id) if task is not None else None
             if task is None or op is None:
                 return observed
@@ -1817,6 +1942,22 @@ class TaskService:
             "Do not retry blindly; call inspect before deciding "
             "whether to try again."
         )
+
+    def _load(self) -> Task | None:
+        """The task, or ``None`` when none was made yet.
+
+        An unreadable task file is an error, never an absent task: creating one
+        over it would replace the person's state with an empty task. Every
+        reader and writer here goes through this one check, and the file is
+        left exactly as it was found.
+        """
+        try:
+            return self._store.load()
+        except TaskUnreadableError as err:
+            raise TaskUnreadable(
+                f"{err}. The task was left untouched and must be repaired, not "
+                "replaced. Do not retry blindly; read the task file."
+            ) from err
 
     def _create_locked(self) -> Task:
         now = iso_timestamp(self._clock)
@@ -1963,6 +2104,16 @@ def _upsert_material(
         if item.get("id") == row.get("id"):
             return materials[:index] + (row,) + materials[index + 1 :]
     return materials + (row,)
+
+
+def _page_digest(
+    layout: ProjectLayout, spec: Mapping[str, object]
+) -> str:
+    """The digest of the page one spec names, or empty when it does not exist."""
+    absolute = resolve_wiki_write_path(layout, page_path_for_spec(spec))
+    if not absolute.is_file():
+        return ""
+    return blob_digest(absolute.read_text(encoding="utf-8"))
 
 
 def _approval_covers(
@@ -2182,6 +2333,7 @@ __all__ = [
     "ComposeOutcome",
     "EditOutcome",
     "FrameOutcome",
+    "ObservedRevFn",
     "OpOutcome",
     "OpResumeNotice",
     "PickOutcome",
@@ -2195,5 +2347,6 @@ __all__ = [
     "TaskRegistry",
     "TaskService",
     "TaskToolError",
+    "TaskUnreadable",
     "op_delta",
 ]

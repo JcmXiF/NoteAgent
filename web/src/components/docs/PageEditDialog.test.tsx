@@ -5,15 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { PageEditDialog } from "@/components/docs/PageEditDialog";
 import { fetchPageEdit, savePageBody } from "@/lib/api/pages";
-import {
-  fetchTaskApproval,
-  fetchTaskCards,
-  fetchTaskFrames,
-  fetchTaskMaterials,
-  fetchTaskResult,
-  fetchTaskSummary,
-} from "@/lib/api/task";
-import type { TaskSummaryView } from "@/lib/api/types";
+import { fetchTaskOverview } from "@/lib/api/task";
+import type { TaskOverviewView, TaskSummaryView } from "@/lib/api/types";
 import { useDocsStore } from "@/stores/docs-store";
 import { useTaskStore } from "@/stores/task-store";
 
@@ -23,12 +16,7 @@ vi.mock("@/lib/api/pages", () => ({
 }));
 
 vi.mock("@/lib/api/task", () => ({
-  fetchTaskSummary: vi.fn(),
-  fetchTaskCards: vi.fn(),
-  fetchTaskMaterials: vi.fn(),
-  fetchTaskFrames: vi.fn(),
-  fetchTaskApproval: vi.fn(),
-  fetchTaskResult: vi.fn(),
+  fetchTaskOverview: vi.fn(),
 }));
 
 const summary: TaskSummaryView = {
@@ -55,6 +43,26 @@ const view = {
   noteCount: 0,
 };
 
+/** The one snapshot the dialog re-reads after recording the person's save. */
+const overview: TaskOverviewView = {
+  view: "overview",
+  rev: 5,
+  summary: { ...summary, rev: 5 },
+  cards: { view: "cards", rev: 5, cards: [], omitted: 0 },
+  materials: { view: "materials", rev: 5, materials: [], omitted: 0 },
+  frames: { view: "frames", rev: 5, frames: [], omitted: 0 },
+  approval: {
+    view: "approval",
+    rev: 5,
+    status: "idle",
+    approval: null,
+    approvalStale: false,
+    request: null,
+    requestStale: false,
+  },
+  result: { view: "result", rev: 5, status: "idle", result: null },
+};
+
 let host: HTMLDivElement;
 let root: Root;
 
@@ -77,47 +85,9 @@ beforeEach(() => {
   });
   vi.mocked(fetchPageEdit).mockReset();
   vi.mocked(savePageBody).mockReset();
-  vi.mocked(fetchTaskSummary).mockReset();
-  vi.mocked(fetchTaskCards).mockReset();
-  vi.mocked(fetchTaskMaterials).mockReset();
-  vi.mocked(fetchTaskFrames).mockReset();
-  vi.mocked(fetchTaskApproval).mockReset();
-  vi.mocked(fetchTaskResult).mockReset();
+  vi.mocked(fetchTaskOverview).mockReset();
   vi.mocked(fetchPageEdit).mockResolvedValue(view);
-  vi.mocked(fetchTaskSummary).mockResolvedValue(summary);
-  vi.mocked(fetchTaskCards).mockResolvedValue({
-    view: "cards",
-    rev: 5,
-    cards: [],
-    omitted: 0,
-  });
-  vi.mocked(fetchTaskMaterials).mockResolvedValue({
-    view: "materials",
-    rev: 5,
-    materials: [],
-    omitted: 0,
-  });
-  vi.mocked(fetchTaskFrames).mockResolvedValue({
-    view: "frames",
-    rev: 5,
-    frames: [],
-    omitted: 0,
-  });
-  vi.mocked(fetchTaskApproval).mockResolvedValue({
-    view: "approval",
-    rev: 5,
-    status: "idle",
-    approval: null,
-    approvalStale: false,
-    request: null,
-    requestStale: false,
-  });
-  vi.mocked(fetchTaskResult).mockResolvedValue({
-    view: "result",
-    rev: 5,
-    status: "idle",
-    result: null,
-  });
+  vi.mocked(fetchTaskOverview).mockResolvedValue(overview);
 });
 
 afterEach(() => {
@@ -193,7 +163,7 @@ describe("the page editor and the writing task", () => {
       baseRevision: "rev-1",
       preview: true,
     });
-    expect(vi.mocked(fetchTaskSummary)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchTaskOverview)).not.toHaveBeenCalled();
 
     // The second press writes with the revision the person opened, then the
     // task is read again: the core recorded the human edit there.
@@ -209,7 +179,7 @@ describe("the page editor and the writing task", () => {
       body: "the person's prose",
       baseRevision: "rev-1",
     });
-    expect(vi.mocked(fetchTaskSummary)).toHaveBeenCalled();
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -234,6 +204,6 @@ describe("the page editor and the writing task", () => {
     expect(vi.mocked(savePageBody).mock.calls[0][1]).toMatchObject({
       preview: true,
     });
-    expect(vi.mocked(fetchTaskSummary)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchTaskOverview)).not.toHaveBeenCalled();
   });
 });

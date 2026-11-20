@@ -22,18 +22,6 @@ MAX_RESUMED_CARD_TEXT = 300
 #: How much of a summary, a reason or an error the resumed model reads.
 MAX_RESUMED_TEXT = 600
 
-#: The scalar fields of a task result that may be shown to the model. The task
-#: stays behind: effect ids, page text, diffs and the op log never travel here.
-_RESULT_TEXT_KEYS = (
-    "summary",
-    "reason",
-    "error",
-    "page",
-    "status",
-    "action",
-    "errorCode",
-)
-
 
 def task_op_result_entry(
     *,
@@ -92,6 +80,31 @@ def task_op_payload(
         "rev": entry.get("rev") if isinstance(entry.get("rev"), int) else 0,
         "result": dict(result) if isinstance(result, Mapping) else {},
     }
+
+
+def task_observed_rev(
+    entries: Sequence[Mapping[str, object]],
+) -> int | None:
+    """The newest task revision a session's committed entries show it saw.
+
+    A task tool result carries the revision in its card meta; a delivered op
+    result carries it at the entry's top level. Scanning backwards finds the
+    revision the conversation last read, which a restarted core uses in place of
+    the in-memory observation it lost: a change made while the core was down is
+    then a ``conflict`` rather than a silent overwrite. ``None`` means the
+    session never saw the task.
+    """
+    for entry in reversed(entries):
+        if entry.get("type") == TASK_OP_RESULT_TYPE:
+            value = entry.get("rev")
+        elif entry.get("role") == "toolResult":
+            meta = entry.get("meta")
+            value = meta.get("rev") if isinstance(meta, Mapping) else None
+        else:
+            continue
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
 
 
 def render_task_op_result(entry: Mapping[str, object]) -> str:
@@ -190,6 +203,7 @@ __all__ = [
     "has_task_op_result",
     "latest_task_op",
     "render_task_op_result",
+    "task_observed_rev",
     "task_op_payload",
     "task_op_result_entry",
 ]

@@ -16,12 +16,14 @@ from noteagent.acquire.run_fetch import run_web_fetch
 from noteagent.acquire.run_search import run_web_search
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock
+from noteagent.agent.task_op import task_observed_rev
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
 from noteagent.pipeline.materials import Materials
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.sessions.jsonl import JsonlSessionStore
 from noteagent.task.model import (
     MAX_CARD_SNIPPET,
     Card,
@@ -37,6 +39,7 @@ from noteagent.task.model import (
     op_to_dict,
 )
 from noteagent.task.service import (
+    ObservedRevFn,
     TaskBadSpec,
     TaskConflict,
     TaskNeedsApproval,
@@ -44,6 +47,7 @@ from noteagent.task.service import (
     TaskOpFailed,
     TaskOpResumeFn,
     TaskService,
+    TaskUnreadable,
 )
 from noteagent.util.run_log import RunLogger
 
@@ -99,6 +103,11 @@ def task_service_for(
             if deps.task_resume is not None
             else _default_task_resume(deps, layout)
         )
+    observed = (
+        deps.task_observed
+        if deps.task_observed is not None
+        else _default_task_observed(deps, layout)
+    )
     return TaskService(
         layout,
         clock=deps.clock,
@@ -115,7 +124,27 @@ def task_service_for(
         save=deps.task_save,
         page_locks=deps.task_page_locks,
         on_resume=on_resume,  # type: ignore[arg-type]
+        observed=observed,
     )
+
+
+def _default_task_observed(
+    deps: AppDeps, layout: ProjectLayout
+) -> ObservedRevFn:
+    """Read the task revision a session's own committed entries last carried.
+
+    The in-memory registry is what a running core uses; this is the fallback
+    that survives a restart, when the session file is the only record of what
+    the conversation already saw.
+    """
+
+    def observed(session_id: str) -> int | None:
+        store = deps.sessions or JsonlSessionStore(
+            layout, clock=deps.clock, ids=deps.ids
+        )
+        return task_observed_rev(store.load(session_id).entries)
+
+    return observed
 
 
 def _default_task_resume(deps: AppDeps, layout: ProjectLayout) -> TaskOpResumeFn:
@@ -126,9 +155,21 @@ def _default_task_resume(deps: AppDeps, layout: ProjectLayout) -> TaskOpResumeFn
 
 
 def task_view_payload(deps: AppDeps, view: str) -> dict[str, object]:
-    """A bounded task view for the interface, with its revision."""
-    payload, _rev = task_service(deps).inspect(view)
-    return payload
+    """A bounded task view for the interface, with its revision.
+
+    ``overview`` is every view from one task load, so the interface can draw the
+    whole task at one revision instead of mixing six separate reads.
+    """
+    service = task_service(deps)
+    try:
+        if view == "overview":
+            return service.overview()
+        payload, _rev = service.inspect(view)
+        return payload
+    except TaskUnreadable as err:
+        # An existing task file that cannot be read is a broken state, not an
+        # empty task: answer an error so no reader believes a fresh one is fine.
+        raise CodedHTTPException(500, str(err), code=err.code) from err
 
 
 def search_task_cards(
@@ -152,6 +193,8 @@ def search_task_cards(
         raise CodedHTTPException(502, str(err), code="op_failed") from err
     except TaskNotFound as err:
         raise CodedHTTPException(404, str(err), code="not_found") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     return {
         "opId": outcome.op_id,
         "query": outcome.query,
@@ -159,6 +202,11 @@ def search_task_cards(
         "rev": outcome.rev,
         "cards": [_public_card(card) for card in outcome.cards],
     }
+
+
+def _task_unreadable(err: TaskUnreadable) -> CodedHTTPException:
+    """A task file that exists but cannot be read is a broken state, not empty."""
+    return CodedHTTPException(500, str(err), code=err.code)
 
 
 def _public_card(card: Card) -> dict[str, object]:
@@ -190,6 +238,8 @@ def pick_task_card(
         raise CodedHTTPException(404, str(err), code="not_found") from err
     except TaskOpFailed as err:
         raise CodedHTTPException(502, str(err), code="op_failed") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     body: dict[str, object] = {
         "opId": outcome.op_id,
         "status": outcome.status,
@@ -222,6 +272,8 @@ def frame_task_material(
         raise CodedHTTPException(404, str(err), code="not_found") from err
     except TaskBadSpec as err:
         raise CodedHTTPException(422, str(err), code="bad_spec") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     return {
         "opId": outcome.op_id,
         "status": outcome.status,
@@ -236,19 +288,28 @@ def record_task_page_edit(
 ) -> None:
     """Record a person's successful page save on that project's task.
 
-    The page write itself has already happened and is the person's; the task
-    record is the part that can fail, and a failure here must not turn the save
-    into an error or suggest the page was not written. It is logged and the page
-    stands. The task revision moves, so a standing approval no longer covers a
-    later write.
+    The page write itself has already happened and is the person's; only the
+    task record can fail. A failure is never swallowed: the page stands, and the
+    caller is answered a coded error that says so and names the missing record.
+    Reading a silent success would let the person believe the task (and any
+    approval on it) moved with the page. The task revision normally moves here,
+    so a standing approval no longer covers a later write.
     """
     try:
         task_service_for(deps, layout).record_page_edit(path, revision)
-    except Exception:  # noqa: BLE001 - the page exists; the record must not lie
+    except Exception as err:  # noqa: BLE001 - the page exists; the record failed
         logger.exception(
             "the page save of %s could not be recorded in the writing task",
             path,
         )
+        raise CodedHTTPException(
+            500,
+            f"the page {path} was saved, but the writing task could not record "
+            f"the edit ({type(err).__name__}: {err}); its approval may no "
+            "longer match the page",
+            code="task.recordFailed",
+            params={"path": path, "revision": revision},
+        ) from err
 
 
 def approve_task_request(
@@ -278,6 +339,8 @@ def approve_task_request(
         raise CodedHTTPException(404, str(err), code="not_found") from err
     except TaskBadSpec as err:
         raise CodedHTTPException(422, str(err), code="bad_spec") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     body: dict[str, object] = {
         "decision": outcome.decision,
         "rev": outcome.rev,
@@ -336,6 +399,8 @@ def cancel_task_op(deps: AppDeps, op_id: str) -> dict[str, object]:
         outcome = task_service(deps).cancel_op(op_id)
     except TaskNotFound as err:
         raise CodedHTTPException(404, str(err), code="not_found") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     return {
         "cancelled": outcome.changed,
         "rev": outcome.rev,
@@ -356,6 +421,8 @@ def resume_task_op(deps: AppDeps, op_id: str) -> dict[str, object]:
         raise CodedHTTPException(404, str(err), code="not_found") from err
     except TaskConflict as err:
         raise CodedHTTPException(409, str(err), code="conflict") from err
+    except TaskUnreadable as err:
+        raise _task_unreadable(err) from err
     return {
         "resumed": outcome.changed,
         "rev": outcome.rev,
