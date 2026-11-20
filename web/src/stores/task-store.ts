@@ -12,6 +12,7 @@ import {
   frameTaskMaterial,
   pickTaskCard,
   resumeTaskOp,
+  searchTaskCards,
 } from "@/lib/api/task";
 import type {
   TaskApprovalView,
@@ -42,6 +43,12 @@ type TaskState = {
   /** The last approved page write: its outcome, summary and page diff. */
   resultView: TaskResultView | null;
   error: string;
+  /** Whether a human web search is in flight. */
+  searching: boolean;
+  /** Why the last search failed, in the reader's words. */
+  searchError: string;
+  /** What the last search left behind, in the reader's words. */
+  searchNotice: string;
   /** The card being picked, while its op is in flight. */
   picking: string;
   /** Why the last pick failed, in the reader's words. */
@@ -67,6 +74,7 @@ type TaskState = {
   /** What the last op action left behind. */
   opNotice: string;
   load: () => Promise<void>;
+  search: (query: string) => Promise<void>;
   pick: (cardId: string, expectedRev: number) => Promise<void>;
   frame: (
     docId: string,
@@ -91,6 +99,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   approvalView: null,
   resultView: null,
   error: "",
+  searching: false,
+  searchError: "",
+  searchNotice: "",
   picking: "",
   pickError: "",
   pickNotice: "",
@@ -133,6 +144,37 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         status: "error",
         error: errorMessage(reason, i18n.t("task.loadFailed")),
       });
+    }
+  },
+
+  search: async (query) => {
+    const cleaned = query.trim();
+    const { summary } = get();
+    if (!cleaned || !summary) return;
+    set({ searching: true, searchError: "", searchNotice: "" });
+    try {
+      const result = await searchTaskCards(cleaned, summary.rev);
+      set({
+        searching: false,
+        // A search that outlived its wait is still the executor's: the reader is
+        // told to read the task again later, not to search a second time.
+        searchNotice:
+          result.status === "done"
+            ? i18n.t("task.searchDone", { count: result.cards.length })
+            : i18n.t("task.searchRunning"),
+      });
+      // The cards and the new revision are the task's; read them, do not patch.
+      await get().load();
+    } catch (reason) {
+      set({
+        searching: false,
+        searchError: errorMessage(reason, i18n.t("task.searchFailed")),
+      });
+      // A conflict means this view's revision is stale; reading it again is
+      // what lets the reader see the change and decide whether to search again.
+      if (reason instanceof ApiError && reason.code === "conflict") {
+        await get().load();
+      }
     }
   },
 
@@ -276,6 +318,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       approvalView: null,
       resultView: null,
       error: "",
+      searching: false,
+      searchError: "",
+      searchNotice: "",
       picking: "",
       pickError: "",
       pickNotice: "",

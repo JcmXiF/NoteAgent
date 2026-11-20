@@ -730,6 +730,25 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
                 if _text(op.get("resumeError")):
                     line += f" — resume failed: {_text(op.get('resumeError'))[:200]}"
                 lines.append(line)
+            # The latest finished ops, bounded: a person's search, pick, frame,
+            # approval or page edit stays visible after it finished, so the
+            # agent can see the steps the shared task has taken without reading
+            # the op log (which never leaves the task file).
+            latest = [
+                op
+                for op in ops
+                if isinstance(op, Mapping)
+                and _text(op.get("status")) in ("done", "failed", "cancelled")
+            ]
+            for op in latest[:3]:
+                lines.append(
+                    "latest op [{id}] {kind} by {actor} {status}.".format(
+                        id=op.get("id", ""),
+                        kind=op.get("kind", ""),
+                        actor=op.get("actor", ""),
+                        status=op.get("status", ""),
+                    )
+                )
         approval = payload.get("approval")
         if isinstance(approval, Mapping):
             lines.append(

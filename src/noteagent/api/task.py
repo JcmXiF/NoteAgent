@@ -23,6 +23,8 @@ from noteagent.pipeline.materials import Materials
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
 from noteagent.task.model import (
+    MAX_CARD_SNIPPET,
+    Card,
     FetchFn,
     MaterialBlock,
     SearchCard,
@@ -30,6 +32,7 @@ from noteagent.task.model import (
     StagedMaterial,
     StageFn,
     approval_to_dict,
+    card_to_dict,
     frame_to_dict,
     op_to_dict,
 )
@@ -128,6 +131,44 @@ def task_view_payload(deps: AppDeps, view: str) -> dict[str, object]:
     return payload
 
 
+def search_task_cards(
+    deps: AppDeps, query: str, expected_rev: int
+) -> dict[str, object]:
+    """A person's web search, as a typed op naming the revision they saw.
+
+    It runs the same pure search node and bounded wait as the agent's
+    ``web_search``; the cards land in the one task both read. A stale view is a
+    ``conflict`` and a node that fails is ``op_failed``; neither writes cards.
+    """
+    try:
+        outcome = task_service(deps).search(
+            query,
+            actor="human",
+            expected_rev=expected_rev,
+        )
+    except TaskConflict as err:
+        raise CodedHTTPException(409, str(err), code="conflict") from err
+    except TaskOpFailed as err:
+        raise CodedHTTPException(502, str(err), code="op_failed") from err
+    except TaskNotFound as err:
+        raise CodedHTTPException(404, str(err), code="not_found") from err
+    return {
+        "opId": outcome.op_id,
+        "query": outcome.query,
+        "status": outcome.status,
+        "rev": outcome.rev,
+        "cards": [_public_card(card) for card in outcome.cards],
+    }
+
+
+def _public_card(card: Card) -> dict[str, object]:
+    """One card as a route carries it: the bounded snippet the views show."""
+    return {
+        **card_to_dict(card),
+        "snippet": card.snippet[:MAX_CARD_SNIPPET],
+    }
+
+
 def pick_task_card(
     deps: AppDeps, card_id: str, expected_rev: int
 ) -> dict[str, object]:
@@ -188,6 +229,26 @@ def frame_task_material(
         "approvalCleared": outcome.approval_cleared,
         "frame": frame_to_dict(outcome.frame),
     }
+
+
+def record_task_page_edit(
+    deps: AppDeps, layout: ProjectLayout, path: str, revision: str
+) -> None:
+    """Record a person's successful page save on that project's task.
+
+    The page write itself has already happened and is the person's; the task
+    record is the part that can fail, and a failure here must not turn the save
+    into an error or suggest the page was not written. It is logged and the page
+    stands. The task revision moves, so a standing approval no longer covers a
+    later write.
+    """
+    try:
+        task_service_for(deps, layout).record_page_edit(path, revision)
+    except Exception:  # noqa: BLE001 - the page exists; the record must not lie
+        logger.exception(
+            "the page save of %s could not be recorded in the writing task",
+            path,
+        )
 
 
 def approve_task_request(
@@ -382,7 +443,9 @@ __all__ = [
     "frame_task_material",
     "pick_task_card",
     "recover_active_project_tasks",
+    "record_task_page_edit",
     "resume_task_op",
+    "search_task_cards",
     "task_service",
     "task_service_for",
     "task_view_payload",

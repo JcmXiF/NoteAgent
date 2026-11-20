@@ -133,8 +133,10 @@ from noteagent.api.task import (
     cancel_task_op,
     frame_task_material,
     pick_task_card,
+    record_task_page_edit,
     recover_active_project_tasks,
     resume_task_op,
+    search_task_cards,
     task_view_payload,
 )
 from noteagent.sessions.recovery import abandon_run, interrupted_run
@@ -267,6 +269,21 @@ class PipelineStartBody(BaseModel):
         cleaned = " ".join(value.split())
         if not cleaned:
             raise ValueError("a pipeline run needs an intent")
+        return cleaned
+
+
+class TaskSearchBody(BaseModel):
+    """A person's web search, from the task view they were looking at."""
+
+    query: str = Field(..., min_length=1, max_length=500)
+    expectedRev: int = Field(..., ge=0)
+
+    @field_validator("query")
+    @classmethod
+    def _query_is_not_blank(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("a search needs a query")
         return cleaned
 
 
@@ -974,6 +991,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """
         return task_view_payload(deps, view)
 
+    @app.post("/api/v1/task/search")
+    def kernel_task_search(body: TaskSearchBody) -> dict[str, object]:
+        """A person's web search, on the same task, node and executor as the agent."""
+        return search_task_cards(deps, body.query, body.expectedRev)
+
     @app.post("/api/v1/task/pick")
     def kernel_task_pick(body: TaskPickBody) -> dict[str, object]:
         """A person's card pick, on the same task and executor as the agent."""
@@ -1572,9 +1594,10 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/projects/{name}/page/save")
     def project_page_save(name: str, body: PageSaveBody) -> dict[str, object]:
+        layout = require_project_layout(name)
         try:
-            return page_save_payload(
-                require_project_layout(name),
+            result = page_save_payload(
+                layout,
                 body.model_dump(),
                 # The task's executor holds the same lock while it writes a
                 # composed page, so whichever writer comes second is refused.
@@ -1582,6 +1605,18 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             )
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
+        if not body.preview and result.get("changed"):
+            # A real change to the page is a human op on the project's writing
+            # task: it moves the revision and invalidates a standing approval.
+            # The page is already saved; a failure to record is logged, never
+            # turned into a failed save.
+            record_task_page_edit(
+                deps,
+                layout,
+                str(result.get("path") or ""),
+                str(result.get("revision") or ""),
+            )
+        return result
 
     @app.post("/api/projects/{name}/page/rename")
     def project_page_rename(name: str, body: PageRenameBody) -> dict[str, object]:

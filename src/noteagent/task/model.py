@@ -35,14 +35,25 @@ TASK_STATUSES: tuple[TaskStatus, ...] = (
     "failed",
 )
 
-#: The kinds of operation the task knows. ``frame`` and ``approve`` are pure
-#: state: the tool or the person applies them themselves and logs them; the
-#: executor never claims them. ``approve`` is written only by a person's route.
-#: ``write`` is the executor's page write: compose one frame's spec and save the
-#: page, after checking the approval that covers it is still the one.
-OpKind: TypeAlias = Literal["search", "pick", "frame", "approve", "write"]
+#: The kinds of operation the task knows. ``frame``, ``approve`` and ``edit``
+#: are pure state: the tool or the person applies them themselves and logs them;
+#: the executor never claims them. ``approve`` is written only by a person's
+#: route. ``edit`` is a deliberate extension of the spec's first-batch kinds: it
+#: records a person's real save through the page editor, which rides the same
+#: task revision so a changed page invalidates a standing approval. It is not
+#: the agent's ``write`` and carries no effect journal. ``write`` is the
+#: executor's page write: compose one frame's spec and save the page, after
+#: checking the approval that covers it is still the one.
+OpKind: TypeAlias = Literal["search", "pick", "frame", "approve", "write", "edit"]
 
-OP_KINDS: tuple[OpKind, ...] = ("search", "pick", "frame", "approve", "write")
+OP_KINDS: tuple[OpKind, ...] = (
+    "search",
+    "pick",
+    "frame",
+    "approve",
+    "write",
+    "edit",
+)
 
 #: Where a frame came from. A person and the agent draw frames in this slice;
 #: ``model`` is the auto-framing node the pipeline already has, for later.
