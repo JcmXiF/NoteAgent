@@ -2,19 +2,22 @@
 
 A tool gives its op a bounded wait and then hands the turn back. When the
 executor later finishes that op, this resumer brings the conversation back with
-the op's bounded delta: it claims the session's one run slot, sets the op's
-once-only ``resume_started`` marker under the task's writer lock, and starts a
-``TaskOpResume`` run on the same session id.
+the op's bounded delta: it claims the session's one run slot, records one
+delivery *attempt* on the op, and starts a ``TaskOpResume`` run on the same
+session id.
 
 Two rules shape the timing:
 
 * a session may only have one run. If the original turn is still finishing, the
-  resumer queues behind it and tries again when the slot is free. The marker is
-  not set while it waits, so a restart still sees the completion as pending;
-* the marker is set before the run, never after. A duplicate completion, a
-  second app instance or a reconnect therefore starts nothing new. If the run
-  cannot start at all (the session was deleted), the op records why and is not
-  retried.
+  resumer queues behind it and tries again when the slot is free. No attempt is
+  recorded while it waits, so a restart still sees the completion as pending;
+* delivery is decided by the session, not by a pre-consumed marker. Before an
+  attempt the resumer looks for a committed ``task_op_result`` for the op: if it
+  is already there, the op is marked delivered and nothing runs. Otherwise the
+  attempt runs and the kernel appends the deduped entry. A crash before that
+  append therefore leaves the completion pending for the next start. A
+  permanent failure (the session was deleted, say) records ``resume_error`` and
+  is not attempted again.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import threading
 import time
 
 from noteagent.agent.runtime import BusyError, TaskOpResume
+from noteagent.agent.task_op import has_task_op_result
 from noteagent.api.deps import AppDeps
 from noteagent.api.session_access import session_runtime
 from noteagent.api.task import task_service_for
@@ -70,7 +74,23 @@ class TaskOpResumer:
         self._start_claimed(notice, claim)
 
     def _start_claimed(self, notice: OpResumeNotice, claim: threading.Event) -> None:
-        """Set the once-only marker, then start the continuation."""
+        """Mark a delivery already in the session, or record one attempt."""
+        try:
+            delivered = self._delivered(notice)
+        except FileNotFoundError:
+            # The session is gone. The attempt below records the permanent
+            # failure on the op, which keeps later starts from retrying it.
+            delivered = False
+        except Exception as err:  # noqa: BLE001 - recorded on the op
+            self._deps.runs.release(notice.session_id)
+            self._record_error(notice.op_id, err)
+            return
+        if delivered:
+            # A previous process appended the delta and died before marking
+            # it; the conversation was continued exactly once.
+            self._mark_delivered(notice.op_id)
+            self._deps.runs.release(notice.session_id)
+            return
         try:
             claimed = self._service().claim_resume(notice.op_id)
         except Exception as err:  # noqa: BLE001 - recorded on the op
@@ -78,7 +98,7 @@ class TaskOpResumer:
             self._record_error(notice.op_id, err)
             return
         if claimed is None:
-            # Already resumed, cancelled, or no longer asking: nothing to start.
+            # Already delivered, cancelled, or no longer asking: nothing to start.
             self._deps.runs.release(notice.session_id)
             return
         try:
@@ -111,6 +131,34 @@ class TaskOpResumer:
                 "the resume run for op %s failed", notice.op_id
             )
             self._record_error(notice.op_id, err)
+            return
+        # The session decides whether this attempt delivered: a run cancelled
+        # before the kernel appended the entry leaves the op pending for a
+        # later start, and one that appended it (or found it there) is done.
+        self._mark_if_delivered(notice)
+
+    def _delivered(self, notice: OpResumeNotice) -> bool:
+        """Whether the session already committed this op's delta."""
+        snapshot = self._store().load(notice.session_id)
+        return has_task_op_result(snapshot.entries, notice.op_id)
+
+    def _mark_if_delivered(self, notice: OpResumeNotice) -> None:
+        try:
+            if self._delivered(notice):
+                self._mark_delivered(notice.op_id)
+        except Exception:  # noqa: BLE001 - the entry stays the authority
+            logger.exception(
+                "the delivered resume for op %s could not be read back",
+                notice.op_id,
+            )
+
+    def _mark_delivered(self, op_id: str) -> None:
+        try:
+            self._service().mark_resume_delivered(op_id)
+        except Exception:  # noqa: BLE001 - the session entry still records it
+            logger.exception(
+                "the delivered resume for op %s could not be recorded", op_id
+            )
 
     def _queue(self, notice: OpResumeNotice) -> None:
         """Wait for the session's current run to end, off every caller thread."""

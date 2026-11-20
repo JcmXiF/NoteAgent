@@ -7,6 +7,7 @@ be read is still surfaced and left untouched.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,99 @@ class _FlakyPath:
 
     def __str__(self) -> str:
         return str(self.inner)
+
+
+class TaskStoreCompatibilityTests(unittest.TestCase):
+    """An older task file loads with defaults and is not rewritten on read."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.layout = init_project(Path(self._tmp.name) / "projects" / "demo")
+        self.layout.task_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def test_a_file_without_the_newer_bindings_loads_with_defaults(self) -> None:
+        legacy = {
+            "version": 1,
+            "id": "task-1",
+            "kind": "writing",
+            "intent": "entropy",
+            "status": "idle",
+            "rev": 2,
+            "createdAt": "2026-11-10T09:00:00Z",
+            "updatedAt": "2026-11-10T09:05:00Z",
+            "cards": [],
+            "materials": [],
+            "frames": [],
+            "plan": [],
+            "approval": {
+                "frameId": "frame-1",
+                "spec": {
+                    "slug": "entropy",
+                    "title": "Entropy",
+                    "action": "create",
+                    "sections": [{"title": "What", "blocks": ["b1"]}],
+                },
+                "rev": 2,
+                "by": "human",
+                "at": "2026-11-10T09:05:00Z",
+            },
+            "ops": [
+                {
+                    "id": "op-1",
+                    "kind": "search",
+                    "actor": "agent",
+                    "status": "done",
+                    "input": {"query": "entropy"},
+                    "expectedRev": 0,
+                    "createdAt": "2026-11-10T09:00:00Z",
+                    "updatedAt": "2026-11-10T09:00:00Z",
+                    "result": {},
+                }
+            ],
+        }
+        text = json.dumps(legacy, ensure_ascii=False, indent=2) + "\n"
+        self.layout.task_file.write_text(text, encoding="utf-8")
+
+        task = TaskStore(self.layout).load()
+
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.approval.page_digest, "")
+        self.assertEqual(task.ops[0].resume_rev, 0)
+        self.assertEqual(task.ops[0].resume_attempt, 0)
+        # Reading never migrates or rewrites the person's file.
+        self.assertEqual(self.layout.task_file.read_text(encoding="utf-8"), text)
+
+    def test_an_old_resume_started_flag_loads_as_delivered(self) -> None:
+        raw = {
+            "version": 1,
+            "id": "task-1",
+            "createdAt": "2026-11-10T09:00:00Z",
+            "updatedAt": "2026-11-10T09:05:00Z",
+            "rev": 1,
+            "ops": [
+                {
+                    "id": "op-1",
+                    "kind": "search",
+                    "actor": "agent",
+                    "status": "done",
+                    "input": {},
+                    "expectedRev": 0,
+                    "createdAt": "2026-11-10T09:00:00Z",
+                    "updatedAt": "2026-11-10T09:00:00Z",
+                    "resumeRequested": True,
+                    "resumeStarted": True,
+                }
+            ],
+        }
+        self.layout.task_file.write_text(
+            json.dumps(raw), encoding="utf-8"
+        )
+
+        task = TaskStore(self.layout).load()
+
+        self.assertTrue(task.ops[0].resume_started)
+        self.assertEqual(task.ops[0].resume_attempt, 0)
 
 
 class TaskStoreReadTests(unittest.TestCase):

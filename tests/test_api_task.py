@@ -21,10 +21,12 @@ from unittest.mock import patch
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import Capture
 from noteagent.agent.faux import FauxModelClient
+from noteagent.agent.task_op import task_op_result_entry
 from noteagent.effects.journal import COMMITTED, WIKI_PAGE_WRITE, EffectJournal
 from noteagent.ingest.page_history import blob_digest
 from noteagent.ingest.parse_file_blocks import FileBlock
 from noteagent.project.init import init_project
+from noteagent.sessions.jsonl import JsonlSessionStore
 from noteagent.task.model import (
     Approval,
     Card,
@@ -277,6 +279,28 @@ class GapPageLocks(PageLocks):
             self.release.wait(5)
         with super().holding(project_key, page):
             yield
+
+
+class ReleasingPageLocks(PageLocks):
+    """Records which task ops exist while the page lock is still held.
+
+    The route must record the person's edit inside the page lock, so a probe at
+    release time still sees it.
+    """
+
+    def __init__(self, layout) -> None:
+        super().__init__()
+        self.layout = layout
+        self.ops_at_release: list[list[str]] = []
+
+    @contextmanager
+    def holding(self, project_key: str, page: str):
+        with super().holding(project_key, page):
+            yield
+            stored = TaskStore(self.layout).load()
+            self.ops_at_release.append(
+                [op.kind for op in stored.ops] if stored is not None else []
+            )
 
 
 class HoldingModel:
@@ -4238,6 +4262,83 @@ class OpCancelTests(TaskApiCase):
         shown = next(item for item in summary["ops"] if item["id"] == op_id)
         self.assertEqual(shown["status"], "cancelled")
 
+    def test_a_cancel_written_by_another_process_stops_the_page_save(self) -> None:
+        """A cancel from another core is seen when the executor re-reads the op.
+
+        The in-process stop signal cannot reach that writer, so the persisted
+        op status is the guarantee: the final save re-reads it under the page
+        and task locks and abandons the page instead of writing over the
+        person's decision.
+        """
+        self.seed()
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        compose = FakeCompose(gate=gate)
+        save = FakeSave()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("还在写。").script,
+            compose=compose,
+            save=save,
+            compose_wait_s=0.05,
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].status == "running"
+        )
+        op_id = task.ops[-1].id
+        self.assertTrue(compose.entered.wait(5))
+
+        # Another process cancels the op by writing the task file; this
+        # process's per-op event is never set.
+        stored = TaskStore(self.layout).load()
+        cancelled = replace(
+            stored,
+            ops=tuple(
+                replace(
+                    op,
+                    status="cancelled",
+                    error="the op was cancelled by a person",
+                    error_code="cancelled",
+                    updated_at="2026-11-10T09:06:00Z",
+                )
+                if op.id == op_id
+                else op
+                for op in stored.ops
+            ),
+        )
+        TaskStore(self.layout).save(cancelled)
+        rev_before = cancelled.rev
+
+        gate.set()
+        self.assertTrue(compose.exited.wait(5))
+        threading.Event().wait(0.1)
+
+        # The composed page was abandoned: no save, no result, and the op keeps
+        # the terminal state the other writer gave it. A cancel is a log write,
+        # so it did not move the content revision.
+        self.assertEqual(save.requests, [])
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+        final = self.task()
+        final_op = next(op for op in final.ops if op.id == op_id)
+        self.assertEqual(final_op.status, "cancelled")
+        self.assertEqual(final_op.error_code, "cancelled")
+        self.assertEqual(final.rev, rev_before)
+        self.assertIsNone(final.result)
+        self.assertEqual(
+            [
+                entry
+                for entry in self.session_entries(session_id)
+                if entry.get("type") == "task_op_result"
+            ],
+            [],
+        )
+
     def test_a_search_that_finishes_after_cancel_writes_no_cards(self) -> None:
         gate = threading.Event()
         self.addCleanup(gate.set)
@@ -4300,6 +4401,8 @@ class OpCancelTests(TaskApiCase):
         body = response.json()
         self.assertFalse(body["cancelled"])
         self.assertEqual(body["op"]["status"], "done")
+        # The delivery counter is internal; the op record shape is unchanged.
+        self.assertNotIn("resumeAttempt", body["op"])
         after = self.task()
         self.assertEqual(after.rev, rev)
         self.assertEqual(len(after.cards), 2)
@@ -4402,7 +4505,11 @@ class TaskRestartTests(TaskApiCase):
                 if entry.get("type") == "task_op_result"
             ]
             self.assertEqual(len(delivered), 1)
-            self.assertTrue(self.task().ops[0].resume_started)
+            # Delivery is recorded after the run commits the entry; poll for it
+            # rather than racing the resumer's last task write.
+            self.wait_for_task(
+                lambda item: bool(item.ops) and item.ops[0].resume_started
+            )
             self.assertEqual(self.task().ops[0].resume_error, "")
 
         # A third start sees the marker and starts nothing; the model has no
@@ -4485,6 +4592,7 @@ class TaskRestartTests(TaskApiCase):
 
             self.assertEqual(resumed.status_code, 200, resumed.text)
             self.assertTrue(resumed.json()["resumed"])
+            self.assertNotIn("resumeAttempt", resumed.json()["op"])
             task = self.task()
             op = next(item for item in task.ops if item.id == "op-99")
             self.assertEqual(op.status, "done")
@@ -4583,7 +4691,9 @@ class OpResumeRunTests(TaskApiCase):
             ["Entropy", "Information"],
         )
 
-        task = self.task()
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].resume_started
+        )
         op = task.ops[0]
         self.assertEqual(op.status, "done")
         self.assertTrue(op.resume_requested)
@@ -4666,8 +4776,10 @@ class OpResumeRunTests(TaskApiCase):
         self.ask(client, session_id)
         gate.set()
         self.wait_for_resume_done(client, session_id, "搜到了。")
-        delta_rev = self.task().rev
-        self.assertTrue(self.task().ops[0].resume_started)
+        finished = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].resume_started
+        )
+        delta_rev = finished.rev
 
         # A person draws a frame from the view they saw, moving the task on.
         human = client.post(
@@ -4732,17 +4844,42 @@ class OpResumeRunTests(TaskApiCase):
             and bool(item.ops[0].resume_error)
         )
 
-        # The completion is inspectable, terminal and not retried: the marker is
-        # consumed and the reason is on the op.
+        # The completion is inspectable, terminal and not retried: the attempt
+        # was made and failed, and the reason is on the op. Delivery was never
+        # recorded, so a restart does not try again either (the error is the
+        # permanent-failure marker).
         op = task.ops[0]
         self.assertTrue(op.resume_requested)
-        self.assertTrue(op.resume_started)
+        self.assertFalse(op.resume_started)
+        self.assertEqual(op.resume_attempt, 1)
         self.assertIn("FileNotFoundError", op.resume_error)
         self.assertEqual(len(task.ops), 1)
         self.assertEqual(len(model.requests), 2)
         # The failure is recorded asynchronously; let the resume thread finish
         # before the temp project is cleaned up.
         threading.Event().wait(0.1)
+
+        # A later core reads the recorded failure and does not attempt again.
+        ids = SequentialIds()
+        again_deps = AppDeps(
+            clock=FixedClock(),
+            ids=ids,
+            model=FauxModelClient(),
+            task_search=FakeSearch(),
+            task_fetch=FakeFetch(),
+            task_stage=FakeStage(),
+            task_compose=FakeCompose(),
+            task_save=None,
+            task_wait_s=0.05,
+            task_pick_wait_s=0.05,
+            task_resume=None,
+            task_spawn=lambda work: work(),
+        )
+        with TestClient(create_app(again_deps)):
+            pass
+        after = self.task()
+        self.assertEqual(after.ops[0].resume_attempt, 1)
+        self.assertEqual(after.ops[0].resume_error, op.resume_error)
 
     def test_a_completion_while_a_turn_is_running_queues_the_resume(self) -> None:
         gate = threading.Event()
@@ -4827,7 +4964,9 @@ class OpResumeRunTests(TaskApiCase):
             entry for entry in entries if entry.get("type") == "task_op_result"
         ]
         self.assertEqual(len(delivered), 1)
-        self.assertTrue(self.task().ops[0].resume_started)
+        self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].resume_started
+        )
 
     def test_a_queued_resume_keeps_the_completion_rev_across_a_human_write(
         self,
@@ -4928,7 +5067,10 @@ class OpResumeRunTests(TaskApiCase):
         ]
         self.assertEqual(len(delivered), 1)
         self.assertEqual(delivered[0]["rev"], completion_rev)
-        op = self.task().ops[0]
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].resume_started
+        )
+        op = task.ops[0]
         self.assertEqual(op.resume_rev, completion_rev)
         self.assertTrue(op.resume_started)
 
@@ -4997,10 +5139,130 @@ class OpResumeRunTests(TaskApiCase):
         # The executor saved the page the composed block described.
         self.assertEqual(len(save.requests), 1)
         self.assertEqual(save.requests[0].wiki_path, "wiki/entropy.md")
-        task = self.task()
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].resume_started
+        )
         self.assertEqual(delivered[0]["rev"], task.rev)
         self.assertEqual(task.result["status"], "written")
         self.assertTrue(task.ops[-1].resume_started)
+
+
+class ResumeDeliveryTests(TaskApiCase):
+    """Delivery is decided by the session's entry, not a pre-consumed marker.
+
+    The op records how many attempts were made; whether the conversation was
+    actually continued is read from the committed ``task_op_result``. A crash
+    between the completion and the append is therefore retried, an entry that
+    is already there is marked delivered without a run, and a permanent failure
+    records ``resume_error`` and is not attempted again.
+    """
+
+    def deps(self, model, *, ids):
+        return AppDeps(
+            clock=FixedClock(),
+            ids=ids,
+            model=model,
+            task_search=FakeSearch(),
+            task_fetch=FakeFetch(),
+            task_stage=FakeStage(),
+            task_compose=FakeCompose(),
+            task_save=None,
+            task_wait_s=0.05,
+            task_pick_wait_s=0.05,
+            task_resume=None,
+            task_spawn=lambda work: work(),
+        )
+
+    def seed_completion(self, session_id: str, *, rev: int = 4) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-1",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=rev,
+                ops=(
+                    Op(
+                        id="op-1",
+                        kind="search",
+                        actor="agent",
+                        status="done",
+                        input={"query": "entropy", "sessionId": session_id},
+                        expected_rev=0,
+                        created_at="2026-11-10T09:00:00Z",
+                        updated_at="2026-11-10T09:00:00Z",
+                        result={"hits": 0, "cardIds": []},
+                        resume_requested=True,
+                        resume_rev=rev,
+                    ),
+                ),
+            )
+        )
+
+    def deliveries(self, session_id: str) -> list[dict]:
+        return [
+            entry
+            for entry in self.session_entries(session_id)
+            if entry.get("type") == "task_op_result"
+        ]
+
+    def test_a_completion_whose_append_crashed_is_retried_once(self) -> None:
+        ids = SequentialIds()
+        first = self.client(ids=ids, resume=RecordingResume())
+        session_id = self.new_session(first)
+        self.seed_completion(session_id)
+        model = FauxModelClient(FauxModelClient.text("继续。").script)
+
+        with TestClient(create_app(self.deps(model, ids=ids))):
+            pass
+
+        task = self.task()
+        op = task.ops[0]
+        self.assertTrue(op.resume_started)
+        self.assertEqual(op.resume_attempt, 1)
+        self.assertEqual(op.resume_error, "")
+        self.assertEqual(len(self.deliveries(session_id)), 1)
+        self.assertEqual(len(model.requests), 1)
+
+        # A later core sees the delivered entry and does not run again.
+        with TestClient(create_app(self.deps(FauxModelClient(), ids=ids))):
+            pass
+        self.assertEqual(len(self.deliveries(session_id)), 1)
+        self.assertEqual(len(model.requests), 1)
+
+    def test_an_entry_already_in_the_session_is_marked_without_a_run(self) -> None:
+        ids = SequentialIds()
+        first = self.client(ids=ids, resume=RecordingResume())
+        session_id = self.new_session(first)
+        self.seed_completion(session_id)
+        JsonlSessionStore(
+            self.layout, clock=FixedClock(), ids=SequentialIds()
+        ).append(
+            session_id,
+            {
+                **task_op_result_entry(
+                    op_id="op-1",
+                    kind="search",
+                    status="done",
+                    rev=4,
+                    result={"status": "done", "hits": 0, "cards": []},
+                ),
+                "id": "e-delivered-1",
+                "ts": "2026-11-10T09:10:00Z",
+            },
+        )
+        model = FauxModelClient()
+
+        with TestClient(create_app(self.deps(model, ids=ids))):
+            pass
+
+        task = self.task()
+        op = task.ops[0]
+        # Delivered: no attempt is charged and the model is never called.
+        self.assertTrue(op.resume_started)
+        self.assertEqual(op.resume_attempt, 0)
+        self.assertEqual(op.resume_error, "")
+        self.assertEqual(model.requests, [])
+        self.assertEqual(len(self.deliveries(session_id)), 1)
 
 
 class HumanSearchTests(TaskApiCase):
@@ -5232,6 +5494,20 @@ class PageEditTaskTests(TaskApiCase):
         self.assertIn("rev 4", content)
         self.assertNotIn("expectedRev", content)
         self.assertNotIn("original prose", content)
+
+    def test_the_route_records_the_edit_before_releasing_the_page_lock(
+        self,
+    ) -> None:
+        self.seed()
+        locks = ReleasingPageLocks(self.layout)
+        client = self.client(spawn=lambda work: work(), page_locks=locks)
+
+        saved = self.save(client)
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        # The edit op exists at the moment the page lock is released: the
+        # route records it inside the lock, not after it.
+        self.assertEqual(locks.ops_at_release[-1], ["edit"])
 
     def test_a_preview_records_no_task_op(self) -> None:
         self.seed()

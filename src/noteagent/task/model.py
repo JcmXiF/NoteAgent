@@ -301,9 +301,16 @@ class Op:
     #: resume is claimed behind a busy turn. Zero when no resume was requested
     #: (or for an older op), where the claim falls back to the task's revision.
     resume_rev: int = 0
-    #: The once-only resume marker. It is set under the task's writer lock
-    #: before the continuation run starts, so a duplicate completion, a
-    #: reconnect or a restart cannot continue the same op twice.
+    #: How many times the executor boundary has tried to deliver this op's
+    #: continuation. An attempt is recorded under the task's writer lock; a
+    #: crash before the session appends its ``task_op_result`` is retried on
+    #: the next start, so this is a count, not a consumed-once flag.
+    resume_attempt: int = 0
+    #: Whether the continuation is known to be in the session. It is set only
+    #: after the resumer reads a committed ``task_op_result`` for this op (or
+    #: after the run that appends it returns); a pre-consumed marker would lose
+    #: a delivery whose process died before the append. Older task files carry
+    #: it as an at-most-once marker; those entries load as delivered.
     resume_started: bool = False
     #: Why a requested resume could not start (the session is gone, say). The
     #: op stays inspectable and is not retried.
@@ -372,8 +379,14 @@ def card_from_dict(raw: Mapping[str, object]) -> Card:
     )
 
 
-def op_to_dict(op: Op) -> dict[str, object]:
-    return {
+def op_to_dict(op: Op, *, storage: bool = False) -> dict[str, object]:
+    """One op as a route or storage record.
+
+    ``resumeAttempt`` is an internal delivery counter; it belongs to the stored
+    task so a restart can keep counting, but it is not part of the op record the
+    cancel/resume routes already return.
+    """
+    body: dict[str, object] = {
         "id": op.id,
         "kind": op.kind,
         "actor": op.actor,
@@ -391,6 +404,9 @@ def op_to_dict(op: Op) -> dict[str, object]:
         "resumeError": op.resume_error,
         "interrupted": op.interrupted,
     }
+    if storage:
+        body["resumeAttempt"] = op.resume_attempt
+    return body
 
 
 def op_from_dict(raw: Mapping[str, object]) -> Op:
@@ -416,6 +432,7 @@ def op_from_dict(raw: Mapping[str, object]) -> Op:
         error_code=_text(raw.get("errorCode")),
         resume_requested=raw.get("resumeRequested") is True,
         resume_rev=_count(raw.get("resumeRev")),
+        resume_attempt=_count(raw.get("resumeAttempt")),
         resume_started=raw.get("resumeStarted") is True,
         resume_error=_text(raw.get("resumeError")),
         interrupted=raw.get("interrupted") is True,
@@ -636,7 +653,7 @@ def task_to_dict(task: Task) -> dict[str, object]:
         "materials": [dict(item) for item in task.materials],
         "frames": [frame_to_dict(frame) for frame in task.frames],
         "plan": [dict(item) for item in task.plan],
-        "ops": [op_to_dict(op) for op in task.ops],
+        "ops": [op_to_dict(op, storage=True) for op in task.ops],
     }
     if task.approval is not None:
         body["approval"] = approval_to_dict(task.approval)

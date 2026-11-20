@@ -56,6 +56,7 @@ from noteagent.task.model import (
     task_view,
 )
 from noteagent.task.store import TaskStore, TaskUnreadableError
+from noteagent.task.writer import TaskWriter
 from noteagent.task.writing import (
     ComposePageFn,
     ComposeRequest,
@@ -360,6 +361,9 @@ class TaskService:
         # The one task file. A test hands in a store to watch or order its
         # reads; production uses the project's own.
         self._store = store or TaskStore(layout)
+        # Every mutation of the task goes through this one seam: content
+        # commits move the revision and clear the gate, log commits do neither.
+        self._writer = TaskWriter(self._store, clock)
 
     @property
     def wait_s(self) -> float:
@@ -673,22 +677,13 @@ class TaskService:
                     "requestCleared": request_cleared,
                 },
             )
-            saved = replace(
+            saved = self._writer.commit_content(
                 task,
-                frames=frames,
-                ops=task.ops + (op,),
-                approval=None if approval_cleared else task.approval,
-                request=None if request_cleared else task.request,
-                status=(
-                    "idle"
-                    if (approval_cleared or request_cleared)
-                    and task.status == "needs_approval"
-                    else task.status
-                ),
-                rev=task.rev + 1,
-                updated_at=now,
+                {
+                    "frames": frames,
+                    "ops": task.ops + (op,),
+                },
             )
-            self._store.save(saved)
             self._registry.observe(self._project_key, session_id, saved.rev)
         return FrameOutcome(
             op_id=op_id,
@@ -738,24 +733,12 @@ class TaskService:
                     "requestCleared": request_cleared,
                 },
             )
-            saved = replace(
-                task,
-                ops=task.ops + (op,),
-                approval=None,
-                request=None,
-                # Clearing the pending request ends the waiting-for-approval
-                # state; the task is idle again. Nothing else of its status is
-                # rewritten by a page edit.
-                status=(
-                    "idle"
-                    if (approval_cleared or request_cleared)
-                    and task.status == "needs_approval"
-                    else task.status
-                ),
-                rev=task.rev + 1,
-                updated_at=now,
+            # A page edit changes the writing basis: the content seam bumps
+            # once and clears a standing approval or pending request. Clearing
+            # the request also ends the waiting-for-approval state.
+            saved = self._writer.commit_content(
+                task, {"ops": task.ops + (op,)}
             )
-            self._store.save(saved)
         return EditOutcome(
             op_id=op_id,
             path=cleaned,
@@ -865,9 +848,7 @@ class TaskService:
                 )
                 # Requesting the write does not move the revision: the op is
                 # the record, and the approval must stay valid until the save.
-                self._store.save(
-                    replace(task, ops=task.ops + (op,), updated_at=now)
-                )
+                self._writer.commit_log(task, {"ops": task.ops + (op,)})
                 self._registry.observe(
                     self._project_key, session_id, task.rev
                 )
@@ -883,15 +864,12 @@ class TaskService:
                     rev=task.rev + 1,
                     at=now,
                 )
-                saved = replace(
+                # A new request is content: it moves the revision once and
+                # clears the approval that did not cover it.
+                saved = self._writer.commit_content(
                     task,
-                    status="needs_approval",
-                    approval=None,
-                    request=request,
-                    rev=task.rev + 1,
-                    updated_at=now,
+                    {"status": "needs_approval", "request": request},
                 )
-                self._store.save(saved)
                 self._registry.observe(
                     self._project_key, session_id, saved.rev
                 )
@@ -1036,83 +1014,91 @@ class TaskService:
                 updated_at=now,
                 result={"decision": decision, "frameId": cleaned_frame},
             )
-            saved = replace(
+            # The decision is content: one bump, and the gate becomes exactly
+            # the new approval (or nothing, for a rejection).
+            saved = self._writer.commit_content(
                 task,
-                status="idle",
-                approval=approval,
-                request=None,
-                ops=task.ops + (op,),
-                rev=task.rev + 1,
-                updated_at=now,
+                {
+                    "status": "idle",
+                    "approval": approval,
+                    "request": None,
+                    "ops": task.ops + (op,),
+                },
             )
-            self._store.save(saved)
         return ApproveOutcome(decision, saved.rev, approval)
 
     def claim_resume(self, op_id: str) -> OpResumeNotice | None:
-        """Set the once-only resume marker and return the op's delta, or none.
+        """Record one delivery attempt and return the op's delta, or none.
 
-        The marker and the delta are read and written under the task's writer
-        lock, before the continuation run starts. A duplicate completion, a
-        second app instance or a reconnect therefore finds ``resume_started``
-        and starts nothing; a cancelled op never resumes at all.
+        The attempt count is written under the task's writer lock before the
+        continuation run starts. It is a count, not a consumed-once flag:
+        whether the conversation was actually continued is read from the
+        session's committed ``task_op_result``. A crash between the attempt and
+        that append is therefore retried on the next start; an op that was
+        already delivered, permanently failed or cancelled is not.
         """
         with self._writing():
             task = self._load()
             op = task.op(op_id) if task is not None else None
-            if task is None or op is None:
-                return None
-            if op.resume_started or not op.resume_requested:
-                return None
-            if op.status == "cancelled" or op.error_code == "cancelled":
-                return None
-            if op.status not in TERMINAL_OP_STATUSES:
-                return None
-            session_id = _input_text(op.input, "sessionId")
-            if not session_id:
+            if task is None or op is None or not _needs_resume(op):
                 return None
             now = iso_timestamp(self._clock)
-            started = replace(op, resume_started=True, updated_at=now)
-            saved = replace(
-                task,
-                ops=_replace_op(task, started),
+            attempted = replace(
+                op,
+                resume_attempt=op.resume_attempt + 1,
                 updated_at=now,
             )
-            self._store.save(saved)
+            saved = self._writer.commit_log(
+                task, {"ops": _replace_op(task, attempted)}
+            )
+            session_id = _input_text(attempted.input, "sessionId")
             # The resumed run starts from the delta's revision: the revision the
             # op completed at, which the op recorded. Falling back to the task's
             # current revision keeps an older op (one finished before the record
             # carried it) resumable with the behaviour it was written under.
-            rev = started.resume_rev or saved.rev
+            rev = attempted.resume_rev or saved.rev
             self._registry.observe(self._project_key, session_id, rev)
             return OpResumeNotice(
                 session_id=session_id,
-                op_id=started.id,
-                kind=started.kind,
-                status=started.status,
+                op_id=attempted.id,
+                kind=attempted.kind,
+                status=attempted.status,
                 rev=rev,
-                result=op_delta(saved, started),
+                result=op_delta(saved, attempted),
+            )
+
+    def mark_resume_delivered(self, op_id: str) -> None:
+        """Record that the session committed this op's ``task_op_result``.
+
+        This is the delivered marker, not a pre-consumed one: it is set after
+        the resumer reads the entry from the session (or after the run that
+        appends it returns), so a crash before the append leaves the completion
+        pending instead of losing it. A log write: no revision, no gate change.
+        """
+        with self._writing():
+            task = self._load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None or op.resume_started:
+                return
+            now = iso_timestamp(self._clock)
+            delivered = replace(op, resume_started=True, updated_at=now)
+            self._writer.commit_log(
+                task, {"ops": _replace_op(task, delivered)}
             )
 
     def resume_pending(self, op_id: str) -> bool:
-        """Whether this op still wants its one continuation (read only)."""
+        """Whether this op still wants its continuation (read only)."""
         task = self._load()
         op = task.op(op_id) if task is not None else None
-        if task is None or op is None:
-            return False
-        if not op.resume_requested or op.resume_started:
-            return False
-        if op.status not in TERMINAL_OP_STATUSES:
-            return False
-        if op.status == "cancelled" or op.error_code == "cancelled":
-            return False
-        return bool(_input_text(op.input, "sessionId"))
+        return task is not None and op is not None and _needs_resume(op)
 
     def record_resume_error(self, op_id: str, message: str) -> None:
-        """Leave why a claimed resume could not run on the op; never retry.
+        """Leave why a resume could not run on the op; it is not retried.
 
         The op is already terminal and keeps its result; this only makes the
         failure (a deleted session, an unreadable model configuration) visible
-        in the task the person and the agent read.
+        in the task the person and the agent read. A recorded error is also
+        what stops a restart from attempting the same doomed delivery again.
         """
         with self._writing():
             task = self._load()
@@ -1125,12 +1111,8 @@ class TaskService:
                 resume_error=(message or "the resume could not start")[:600],
                 updated_at=now,
             )
-            self._store.save(
-                replace(
-                    task,
-                    ops=_replace_op(task, failed),
-                    updated_at=now,
-                )
+            self._writer.commit_log(
+                task, {"ops": _replace_op(task, failed)}
             )
 
     def cancel_op(self, op_id: str) -> OpOutcome:
@@ -1160,12 +1142,10 @@ class TaskService:
                 error_code="cancelled",
                 updated_at=now,
             )
-            saved = replace(
-                task,
-                ops=_replace_op(task, cancelled),
-                updated_at=now,
+            # Cancelling is a log write: it ends the op, not the task content.
+            saved = self._writer.commit_log(
+                task, {"ops": _replace_op(task, cancelled)}
             )
-            self._store.save(saved)
             changed = True
         if changed:
             # After the state write: an executor that checks the signal and
@@ -1214,12 +1194,10 @@ class TaskService:
                 resume_error="",
                 updated_at=now,
             )
-            saved = replace(
-                task,
-                ops=_replace_op(task, resumed),
-                updated_at=now,
+            # Re-running an interrupted op is a log write until it finishes.
+            saved = self._writer.commit_log(
+                task, {"ops": _replace_op(task, resumed)}
             )
-            self._store.save(saved)
         self._spawn(lambda: self._run_op(op_id))
         return OpOutcome(resumed, saved.rev, changed=True)
 
@@ -1248,20 +1226,14 @@ class TaskService:
                     )
                     changed = True
             saved = (
-                replace(task, ops=tuple(ops), updated_at=now)
+                # Marking ops interrupted is a log write: the restart did not
+                # change the task's content.
+                self._writer.commit_log(task, {"ops": tuple(ops)})
                 if changed
                 else task
             )
-            if changed:
-                self._store.save(saved)
             for op in saved.ops:
-                if op.status not in TERMINAL_OP_STATUSES:
-                    continue
-                if op.status == "cancelled" or op.error_code == "cancelled":
-                    continue
-                if not op.resume_requested or op.resume_started:
-                    continue
-                if not _input_text(op.input, "sessionId"):
+                if not _needs_resume(op):
                     continue
                 notices.append(
                     OpResumeNotice(
@@ -1312,9 +1284,9 @@ class TaskService:
                 created_at=now,
                 updated_at=now,
             )
-            self._store.save(
-                replace(task, ops=task.ops + (op,), updated_at=now)
-            )
+            # Requesting an op is a log write: the executor's result is what
+            # will change the task's content and move the revision.
+            self._writer.commit_log(task, {"ops": task.ops + (op,)})
             self._registry.observe(self._project_key, session_id, expected)
         self._spawn(lambda: self._run_op(op_id))
         return op_id
@@ -1329,6 +1301,11 @@ class TaskService:
                 return
             try:
                 answer = self._execute(*claimed, cancel)
+            except _OpAborted:
+                # The persisted op is no longer active (another process
+                # cancelled or finished it). Nothing was written by this
+                # executor and the terminal record stands.
+                return
             except _OpFailure as err:
                 self._finish_failed(op_id, err.code, str(err))
                 return
@@ -1336,6 +1313,12 @@ class TaskService:
                 self._finish_failed(
                     op_id, "op_failed", f"{type(err).__name__}: {err}"
                 )
+                return
+            if answer.finished:
+                # A write commits its page and its task record under the page
+                # and task locks together; only the continuation is left.
+                if answer.notice is not None:
+                    self._notify(answer.notice)
                 return
             self._finish_done(op_id, answer)
         except Exception as err:  # noqa: BLE001 - a writer error must not vanish
@@ -1495,32 +1478,48 @@ class TaskService:
         # Composing is the long part; a person may have cancelled it while the
         # model was working. Nothing is saved in that case.
         _check_op_cancel(cancel)
-        after = ""
-        with self._writing():
-            _check_op_cancel(cancel)
-            current = self._load()
-            if (
-                current is None
-                or current.rev != approval_rev
-                or not _approval_covers(
-                    current.approval, frame_id, spec, current.rev
-                )
-            ):
-                raise _OpFailure(
-                    "conflict",
-                    "the writing task changed while the page was being "
-                    "composed, so the approval no longer covers it. Nothing "
-                    "was written. Do not retry blindly; call inspect and ask "
-                    "the person to approve again.",
-                )
-            try:
-                # The digest is read and compared under the same page lock the
-                # human editor takes, so a save that lands after the compose but
-                # before this point is seen rather than overwritten.
-                with self._page_locks.holding(self._project_key, wiki_path):
+        notice: OpResumeNotice | None = None
+        try:
+            # The page lock is taken first, then the task lock inside it. The
+            # human page save takes the same pair in the same order, so a save
+            # and an edit cannot deadlock. Everything the write depends on is
+            # re-read here, after the long compose: the persisted op (a cancel
+            # from another core), the approval/frame/spec/rev binding and the
+            # page digest the person approved.
+            with self._page_locks.holding(self._project_key, wiki_path):
+                with self._writing():
                     # Last checkpoint before the page lands: the cancel route
-                    # sets the op terminal before it raises this signal.
+                    # persists the terminal state before it raises this signal.
                     _check_op_cancel(cancel)
+                    current = self._load()
+                    persisted = (
+                        current.op(op.id) if current is not None else None
+                    )
+                    if (
+                        current is None
+                        or persisted is None
+                        or persisted.status not in ACTIVE_OP_STATUSES
+                    ):
+                        # The op was cancelled (or finished) by another writer
+                        # while this executor was composing. The terminal
+                        # record stands and no page is written.
+                        raise _OpAborted
+                    if (
+                        current.rev != approval_rev
+                        or not _approval_covers(
+                            current.approval, frame_id, spec, current.rev
+                        )
+                    ):
+                        raise _OpFailure(
+                            "conflict",
+                            "the writing task changed while the page was being "
+                            "composed, so the approval no longer covers it. "
+                            "Nothing was written. Do not retry blindly; call "
+                            "inspect and ask the person to approve again.",
+                        )
+                    # The digest is read and compared under the page lock the
+                    # human editor takes, so a save that lands after the compose
+                    # but before this point is seen rather than overwritten.
                     now_text = (
                         absolute.read_text(encoding="utf-8")
                         if absolute.is_file()
@@ -1570,33 +1569,42 @@ class TaskService:
                         ),
                         cancel,
                     )
-                    # The diff is read before the lock is released, so a later
-                    # person's edit is never reported as part of this write.
+                    # The diff is read before either lock is released, so a
+                    # later person's edit is never reported as part of this
+                    # write.
                     after = (
                         absolute.read_text(encoding="utf-8")
                         if absolute.is_file()
                         else ""
                     )
-            except PageBusy as err:
-                raise _OpFailure(
-                    "conflict",
-                    f"{err}. A person is writing this page; nothing was "
-                    "written. Do not retry blindly; read the page again before "
-                    "deciding whether to compose.",
-                ) from err
-        return self._page_answer(
-            spec,
-            wiki_path,
-            status=outcome.status,
-            summary=outcome.summary,
-            reason=outcome.reason,
-            written=outcome.written,
-            skipped=outcome.skipped,
-            failed=outcome.failed,
-            effect_ids=outcome.effect_ids,
-            before=before,
-            after=after,
-        )
+                    answer = self._page_answer(
+                        spec,
+                        wiki_path,
+                        status=outcome.status,
+                        summary=outcome.summary,
+                        reason=outcome.reason,
+                        written=outcome.written,
+                        skipped=outcome.skipped,
+                        failed=outcome.failed,
+                        effect_ids=outcome.effect_ids,
+                        before=before,
+                        after=after,
+                    )
+                    # The task record is committed while the page lock is still
+                    # held: the page and the task that describes it become
+                    # visible together, and the content seam moves the rev and
+                    # clears the gate in one write.
+                    _saved, notice = self._commit_done_locked(
+                        current, persisted, answer
+                    )
+        except PageBusy as err:
+            raise _OpFailure(
+                "conflict",
+                f"{err}. A person is writing this page; nothing was "
+                "written. Do not retry blindly; read the page again before "
+                "deciding whether to compose.",
+            ) from err
+        return replace(answer, finished=True, notice=notice)
 
     def _page_answer(
         self,
@@ -1657,12 +1665,9 @@ class TaskService:
             claimed = replace(
                 op, status="running", interrupted=False, updated_at=now
             )
-            self._store.save(
-                replace(
-                    task,
-                    ops=_replace_op(task, claimed),
-                    updated_at=now,
-                )
+            # Claiming only moves the record: the node's answer is the content.
+            self._writer.commit_log(
+                task, {"ops": _replace_op(task, claimed)}
             )
             return task, claimed
 
@@ -1673,72 +1678,75 @@ class TaskService:
             op = task.op(op_id) if task is not None else None
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
-            now = iso_timestamp(self._clock)
-            cards = task.cards
-            materials = task.materials
-            result = dict(answer.result)
-            if answer.kind == "search":
-                new_cards = tuple(
-                    Card(
-                        id=self._ids.new_id("card"),
-                        title=_text(card.title) or card.url,
-                        url=_text(card.url),
-                        snippet=_text(card.snippet),
-                        site=_text(card.site),
-                    )
-                    for card in answer.cards
-                    if _text(card.url)
-                )
-                cards = task.cards + new_cards
-                result["cardIds"] = [card.id for card in new_cards]
-            elif answer.material is not None:
-                materials = _upsert_material(task.materials, answer.material)
-            done = replace(
-                op,
-                status="done",
-                result=result,
-                # A finish that owes a resume records the revision it created:
-                # the continuation must observe the completion, even if a person
-                # writes while it is queued behind the session's running turn.
-                resume_rev=task.rev + 1 if op.resume_requested else op.resume_rev,
-                updated_at=now,
-            )
-            # Finishing an op moves the revision. An approval or a pending
-            # request is bound to the old revision, so it no longer stands: a
-            # person's go-ahead must not cover a task they did not approve.
-            cleared = task.approval is not None or task.request is not None
-            task_result = task.result
-            status = (
-                "idle"
-                if cleared and task.status == "needs_approval"
-                else task.status
-            )
-            if answer.kind == "write":
-                # The page's fate is the task's result now: written, skipped or
-                # failed, with the identity and a bounded summary/diff. A failed
-                # page write is a failed task; a skip still finished the task.
-                task_result = dict(answer.task_result or result)
-                status = (
-                    "failed" if task_result.get("status") == "failed" else "done"
-                )
-            saved = replace(
-                task,
-                cards=cards,
-                materials=materials,
-                ops=_replace_op(task, done),
-                approval=None if cleared else task.approval,
-                request=None if cleared else task.request,
-                result=task_result,
-                status=status,
-                rev=task.rev + 1,
-                updated_at=now,
-            )
-            self._store.save(saved)
-            notice = self._resume_notice(saved, done)
+            _saved, notice = self._commit_done_locked(task, op, answer)
         # The continuation starts outside the task lock: it loads the session
         # and asks the runtime for a run, and neither may hold this writer.
         if notice is not None:
             self._notify(notice)
+
+    def _commit_done_locked(
+        self, task: Task, op: Op, answer: "_OpAnswer"
+    ) -> tuple[Task, OpResumeNotice | None]:
+        """Write a finished op's content through the seam; caller holds the lock."""
+        now = iso_timestamp(self._clock)
+        cards = task.cards
+        materials = task.materials
+        result = dict(answer.result)
+        if answer.kind == "search":
+            new_cards = tuple(
+                Card(
+                    id=self._ids.new_id("card"),
+                    title=_text(card.title) or card.url,
+                    url=_text(card.url),
+                    snippet=_text(card.snippet),
+                    site=_text(card.site),
+                )
+                for card in answer.cards
+                if _text(card.url)
+            )
+            cards = task.cards + new_cards
+            result["cardIds"] = [card.id for card in new_cards]
+        elif answer.material is not None:
+            materials = _upsert_material(task.materials, answer.material)
+        done = replace(
+            op,
+            status="done",
+            result=result,
+            # A finish that owes a resume records the revision it creates: the
+            # continuation must observe the completion, even if a person writes
+            # while it is queued behind the session's running turn.
+            resume_rev=task.rev + 1 if op.resume_requested else op.resume_rev,
+            updated_at=now,
+        )
+        # Finishing an op is a content write: the seam moves the revision once
+        # and clears an approval or pending request bound to the old one. If
+        # that gate was what the task was waiting on, the wait ends too.
+        cleared = task.approval is not None or task.request is not None
+        task_result = task.result
+        status = (
+            "idle"
+            if cleared and task.status == "needs_approval"
+            else task.status
+        )
+        if answer.kind == "write":
+            # The page's fate is the task's result now: written, skipped or
+            # failed, with the identity and a bounded summary/diff. A failed
+            # page write is a failed task; a skip still finished the task.
+            task_result = dict(answer.task_result or result)
+            status = (
+                "failed" if task_result.get("status") == "failed" else "done"
+            )
+        saved = self._writer.commit_content(
+            task,
+            {
+                "cards": cards,
+                "materials": materials,
+                "ops": _replace_op(task, done),
+                "result": task_result,
+                "status": status,
+            },
+        )
+        return saved, self._resume_notice(saved, done)
 
     def _finish_failed(self, op_id: str, code: str, error: str) -> None:
         notice: OpResumeNotice | None = None
@@ -1748,14 +1756,11 @@ class TaskService:
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return
             now = iso_timestamp(self._clock)
-            result = task.result
-            status = task.status
             # A failed write rewrites the task's result and status, so it is a
-            # state write and moves the revision, exactly like a finished one.
-            # A failed search or pick only changes the op record, which is not
-            # task state: it keeps the no-bump semantics of an op-only
-            # transition, so a wait that ends in failure does not look like a
-            # task change to the views.
+            # content write and moves the revision, exactly like a finished
+            # one. A failed search or pick only changes the op record, which is
+            # not task state: it stays a log write, so a wait that ends in
+            # failure does not look like a task change to the views.
             changes_task = op.kind == "write"
             completion_rev = task.rev + 1 if changes_task else task.rev
             failed = replace(
@@ -1773,29 +1778,17 @@ class TaskService:
                 ),
                 updated_at=now,
             )
-            # A revision move makes any approval or pending request stale by
-            # construction; like a finished op, the failure clears them rather
-            # than leaving a go-ahead that no longer covers the task.
-            cleared = changes_task and (
-                task.approval is not None or task.request is not None
-            )
+            changes: dict[str, object] = {"ops": _replace_op(task, failed)}
             if changes_task:
                 # A compose or save that failed still leaves the attempt on the
                 # task: the reader sees the page it aimed at and why it is not
-                # there. The op carries the same failure for the agent.
-                result = _write_failure_result(op, code, error)
-                status = "failed"
-            saved = replace(
-                task,
-                ops=_replace_op(task, failed),
-                approval=None if cleared else task.approval,
-                request=None if cleared else task.request,
-                result=result,
-                status=status,
-                rev=completion_rev,
-                updated_at=now,
-            )
-            self._store.save(saved)
+                # there. The op carries the same failure for the agent. The
+                # content seam clears the gate bound to the old revision.
+                changes["result"] = _write_failure_result(op, code, error)
+                changes["status"] = "failed"
+                saved = self._writer.commit_content(task, changes)
+            else:
+                saved = self._writer.commit_log(task, changes)
             notice = self._resume_notice(saved, failed)
         if notice is not None:
             self._notify(notice)
@@ -1808,16 +1801,15 @@ class TaskService:
         Only an op whose wait expired asks; the session it names must exist in
         the op's input. The agent's next observation is the delta's revision, so
         a change made after it is a ``conflict`` rather than a silent overwrite.
-        The once-only marker is not set here: the resumer sets it under the
-        writer lock immediately before the run, and a cancelled op never asks.
+        Delivery is decided by the session's ``task_op_result``, not here: the
+        resumer reads it before attempting, and marks the op delivered only
+        once it is there.
         """
         session_id = _input_text(op.input, "sessionId")
         if not session_id:
             return None
         self._registry.observe(self._project_key, session_id, task.rev)
-        if op.status == "cancelled" or op.error_code == "cancelled":
-            return None
-        if not op.resume_requested or op.resume_started:
+        if not _needs_resume(op):
             return None
         return OpResumeNotice(
             session_id=session_id,
@@ -1896,12 +1888,10 @@ class TaskService:
                     requested = replace(
                         op, resume_requested=True, updated_at=now
                     )
-                    self._store.save(
-                        replace(
-                            task,
-                            ops=_replace_op(task, requested),
-                            updated_at=now,
-                        )
+                    # Asking to be resumed is a log write; the completion's
+                    # content is what will move the revision.
+                    self._writer.commit_log(
+                        task, {"ops": _replace_op(task, requested)}
                     )
                 return _Observed(op.status, task.rev, task, op)
         # The executor won the race: report its answer, not a stale wait.
@@ -1966,8 +1956,7 @@ class TaskService:
             created_at=now,
             updated_at=now,
         )
-        self._store.save(task)
-        return task
+        return self._writer.create(task)
 
     @contextmanager
     def _writing(self) -> Iterator[None]:
@@ -1995,6 +1984,32 @@ class _OpFailure(RuntimeError):
         self.code = code
 
 
+class _OpAborted(RuntimeError):
+    """The persisted op is no longer active; this executor writes nothing.
+
+    Another process cancelled or finished the op while this executor was
+    composing. The terminal record it wrote stands, including a cancel that
+    won the last-instant race; no page and no task content is written here.
+    """
+
+
+def _needs_resume(op: Op) -> bool:
+    """Whether this op still wants its one continuation delivered.
+
+    Terminal and uncancelled, asked for by a session whose wait expired, not
+    already delivered, and without a permanent failure recorded. The marker
+    says "delivered", not "consumed": a crash before the session committed the
+    ``task_op_result`` leaves the op eligible for another attempt.
+    """
+    if op.status not in TERMINAL_OP_STATUSES:
+        return False
+    if op.status == "cancelled" or op.error_code == "cancelled":
+        return False
+    if not op.resume_requested or op.resume_started or op.resume_error:
+        return False
+    return bool(_input_text(op.input, "sessionId"))
+
+
 def _check_op_cancel(cancel: Event | None) -> None:
     """Stop at an executor checkpoint when a person cancelled the op."""
     if cancel is not None and cancel.is_set():
@@ -2017,6 +2032,10 @@ class _OpAnswer:
     cards: tuple[SearchCard, ...] = ()
     material: Mapping[str, object] | None = None
     task_result: Mapping[str, object] | None = None
+    #: The answer already committed its task record (a write commits the page
+    #: and the task under the same locks); ``notice`` is its continuation call.
+    finished: bool = False
+    notice: "OpResumeNotice | None" = None
 
 
 @dataclass(frozen=True, slots=True)

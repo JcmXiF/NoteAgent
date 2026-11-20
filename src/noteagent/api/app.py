@@ -1604,28 +1604,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def project_page_save(name: str, body: PageSaveBody) -> dict[str, object]:
         layout = require_project_layout(name)
         try:
-            result = page_save_payload(
+            # The task's executor holds the same page lock while it writes a
+            # composed page, so whichever writer comes second is refused. A
+            # real change is recorded on the writing task while that lock is
+            # still held: the page and its task record move together, and the
+            # edit removes any approval bound to the old page.
+            return page_save_payload(
                 layout,
                 body.model_dump(),
-                # The task's executor holds the same lock while it writes a
-                # composed page, so whichever writer comes second is refused.
                 page_locks=deps.task_page_locks,
+                on_saved=(
+                    lambda path, revision: record_task_page_edit(
+                        deps, layout, path, revision
+                    )
+                ),
             )
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
-        if not body.preview and result.get("changed"):
-            # A real change to the page is a human op on the project's writing
-            # task: it moves the revision and invalidates a standing approval.
-            # The page is already saved; if the record cannot be written, the
-            # route answers a coded error saying the page stands and the task
-            # did not record it, rather than reporting a consistent state.
-            record_task_page_edit(
-                deps,
-                layout,
-                str(result.get("path") or ""),
-                str(result.get("revision") or ""),
-            )
-        return result
 
     @app.post("/api/projects/{name}/page/rename")
     def project_page_rename(name: str, body: PageRenameBody) -> dict[str, object]:
