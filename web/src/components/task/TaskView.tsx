@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import type {
   TaskFrame,
+  TaskOpSummary,
   TaskWriteRequest,
   TaskWriteResult,
 } from "@/lib/api/types";
@@ -35,10 +36,15 @@ export function TaskView() {
   const deciding = useTaskStore((state) => state.deciding);
   const decisionError = useTaskStore((state) => state.decisionError);
   const decisionNotice = useTaskStore((state) => state.decisionNotice);
+  const opBusy = useTaskStore((state) => state.opBusy);
+  const opError = useTaskStore((state) => state.opError);
+  const opNotice = useTaskStore((state) => state.opNotice);
   const load = useTaskStore((state) => state.load);
   const pick = useTaskStore((state) => state.pick);
   const frame = useTaskStore((state) => state.frame);
   const decide = useTaskStore((state) => state.decide);
+  const cancelOp = useTaskStore((state) => state.cancelOp);
+  const resumeOp = useTaskStore((state) => state.resumeOp);
   const reset = useTaskStore((state) => state.reset);
   const project = useWorkspaceStore((state) => state.current);
 
@@ -115,6 +121,24 @@ export function TaskView() {
             })
           : t("task.noApproval")}
       </p>
+      {/* The executor's active ops: a long op can be cancelled here, and an op
+          a restart interrupted can be resumed with the same task revision. */}
+      <OpsPanel
+        ops={summary.ops ?? []}
+        busy={opBusy}
+        onCancel={(opId) => void cancelOp(opId)}
+        onResume={(opId) => void resumeOp(opId)}
+      />
+      {opNotice ? (
+        <p role="status" className="mt-1 text-muted-foreground">
+          {opNotice}
+        </p>
+      ) : null}
+      {opError ? (
+        <p role="alert" className="mt-1 text-destructive">
+          {opError}
+        </p>
+      ) : null}
       {request ? (
         <WriteRequestPanel
           request={request}
@@ -289,6 +313,97 @@ function FrameList({
         <p className="mt-1 text-muted-foreground">{t("task.framesEmpty")}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The executor's ops: what is active, what a restart interrupted, and how the
+ * latest ones ended.
+ *
+ * The buttons are the person's stop and resume: cancel writes the terminal
+ * state before the executor is signalled, so a cancelled op never saves a page
+ * or resumes the conversation; resume re-runs only an op a restart left with no
+ * executor. A finished or cancelled op has no control.
+ */
+function OpsPanel({
+  ops,
+  busy,
+  onCancel,
+  onResume,
+}: {
+  ops: TaskOpSummary[];
+  busy: string;
+  onCancel: (opId: string) => void;
+  onResume: (opId: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (ops.length === 0) return null;
+  return (
+    <section
+      aria-label={t("task.ops")}
+      className="mt-2 rounded-md border p-1.5"
+    >
+      <p className="font-medium">{t("task.ops")}</p>
+      <ul className="mt-1 flex flex-col gap-1">
+        {ops.map((op) => {
+          const active = op.status === "requested" || op.status === "running";
+          const canCancel = active || op.interrupted;
+          const canResume = active && op.interrupted;
+          return (
+            <li key={op.id} className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span
+                  className="min-w-0 flex-1 truncate text-foreground"
+                  title={op.id}
+                >
+                  <span className="text-foreground/70">[{op.id}]</span>{" "}
+                  {op.kind} ·{" "}
+                  {t(`task.opStatus.${op.status}`, {
+                    defaultValue: op.status,
+                  })}
+                </span>
+                {canCancel ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 shrink-0 px-1.5"
+                    disabled={busy !== ""}
+                    onClick={() => onCancel(op.id)}
+                  >
+                    {busy === op.id ? t("task.opWorking") : t("task.opCancel")}
+                  </Button>
+                ) : null}
+                {canResume ? (
+                  <Button
+                    size="sm"
+                    className="h-5 shrink-0 px-1.5"
+                    disabled={busy !== ""}
+                    onClick={() => onResume(op.id)}
+                  >
+                    {busy === op.id ? t("task.opWorking") : t("task.opResume")}
+                  </Button>
+                ) : null}
+              </div>
+              {op.interrupted ? (
+                <span className="block text-[10px] text-muted-foreground">
+                  {t("task.opInterrupted")}
+                </span>
+              ) : null}
+              {op.resumeError ? (
+                <span className="block text-[10px] text-destructive">
+                  {t("task.opResumeFailed", { error: op.resumeError })}
+                </span>
+              ) : null}
+              {op.status === "cancelled" ? (
+                <span className="block text-[10px] text-muted-foreground">
+                  {t("task.opCancelledLine")}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

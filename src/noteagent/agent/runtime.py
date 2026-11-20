@@ -7,7 +7,7 @@ all cross it the same way, with the same request and the same sink.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import Event
@@ -80,6 +80,28 @@ class RunResume:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskOpResume:
+    """A task executor finished an op, and the session continues from its delta.
+
+    Not the wait's ``Resume`` (there is no job to wait for) and not ``RunResume``
+    (nothing crashed): the op is the executor's work, and ``result`` is its
+    bounded answer — the op id, kind, status and the one view the model needs,
+    never the task. A resume is a server-side continuation on the same session
+    id, so it is visible on reconnect by that id.
+    """
+
+    session_id: str
+    op_id: str
+    kind: str
+    status: str
+    rev: int
+    result: Mapping[str, object] = field(default_factory=dict)
+    pause: Event | None = field(default=None, repr=False, compare=False)
+    #: A run slot the route already claimed; the kernel must not claim twice.
+    claim: Event | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Retry:
     """The last run failed and the caller is asking for it again."""
 
@@ -89,7 +111,7 @@ class Retry:
     pause: Event | None = field(default=None, repr=False, compare=False)
 
 
-RunRequest: TypeAlias = UserInput | Resume | RunResume | Retry
+RunRequest: TypeAlias = UserInput | Resume | RunResume | TaskOpResume | Retry
 
 RunStatus: TypeAlias = Literal[
     "completed", "waiting", "failed", "cancelled", "interrupted"

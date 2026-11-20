@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/api/client";
 import { TaskView } from "@/components/task/TaskView";
 import {
   approveTaskRequest,
+  cancelTaskOp,
   fetchTaskApproval,
   fetchTaskCards,
   fetchTaskFrames,
@@ -15,12 +16,14 @@ import {
   fetchTaskSummary,
   frameTaskMaterial,
   pickTaskCard,
+  resumeTaskOp,
 } from "@/lib/api/task";
 import type {
   TaskApprovalView,
   TaskCardsView,
   TaskFramesView,
   TaskMaterialsView,
+  TaskOpSummary,
   TaskResultView,
   TaskSummaryView,
   TaskWriteRequest,
@@ -30,6 +33,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 
 vi.mock("@/lib/api/task", () => ({
   approveTaskRequest: vi.fn(),
+  cancelTaskOp: vi.fn(),
   fetchTaskApproval: vi.fn(),
   fetchTaskCards: vi.fn(),
   fetchTaskFrames: vi.fn(),
@@ -38,6 +42,7 @@ vi.mock("@/lib/api/task", () => ({
   fetchTaskSummary: vi.fn(),
   frameTaskMaterial: vi.fn(),
   pickTaskCard: vi.fn(),
+  resumeTaskOp: vi.fn(),
 }));
 
 const summary: TaskSummaryView = {
@@ -50,6 +55,8 @@ const summary: TaskSummaryView = {
   updatedAt: "2026-11-10T09:00:00Z",
   counts: { cards: 2, materials: 0, frames: 0 },
   approval: null,
+  ops: [],
+  opsOmitted: 0,
 };
 
 const cards: TaskCardsView = {
@@ -199,6 +206,9 @@ beforeEach(() => {
     deciding: "",
     decisionError: "",
     decisionNotice: "",
+    opBusy: "",
+    opError: "",
+    opNotice: "",
   });
   vi.mocked(fetchTaskSummary).mockReset();
   vi.mocked(fetchTaskCards).mockReset();
@@ -209,6 +219,8 @@ beforeEach(() => {
   vi.mocked(pickTaskCard).mockReset();
   vi.mocked(frameTaskMaterial).mockReset();
   vi.mocked(approveTaskRequest).mockReset();
+  vi.mocked(cancelTaskOp).mockReset();
+  vi.mocked(resumeTaskOp).mockReset();
   vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
   vi.mocked(fetchTaskFrames).mockResolvedValue(noFrames);
   vi.mocked(fetchTaskApproval).mockResolvedValue(noApprovalView);
@@ -712,5 +724,105 @@ describe("the writing task view", () => {
 
     expect(host.textContent).toContain(i18n.t("task.approvalInvalidated"));
     expect(host.textContent).not.toContain(i18n.t("task.writeRequest"));
+  });
+
+  const activeOp: TaskOpSummary = {
+    id: "op-3",
+    kind: "write",
+    actor: "agent",
+    status: "running",
+    createdAt: "2026-11-10T09:00:00Z",
+    updatedAt: "2026-11-10T09:01:00Z",
+    interrupted: false,
+    resumeRequested: true,
+    resumeStarted: false,
+    resumeError: "",
+    errorCode: "",
+    error: "",
+  };
+
+  it("shows an active op and cancels it from the panel", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      ops: [activeOp],
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(cancelTaskOp).mockResolvedValue({
+      cancelled: true,
+      rev: 2,
+      op: { ...activeOp, status: "cancelled", resumeRequested: false },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.ops"));
+    expect(host.textContent).toContain("op-3");
+    const cancel = buttonByText(i18n.t("task.opCancel"));
+    expect(cancel).toBeTruthy();
+    await act(async () => {
+      cancel?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(cancelTaskOp)).toHaveBeenCalledWith("op-3");
+    expect(host.textContent).toContain(
+      i18n.t("task.opCancelledNotice", { id: "op-3" }),
+    );
+    // The panel re-read the task after the action.
+    expect(vi.mocked(fetchTaskSummary).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("shows an interrupted op and resumes it from the panel", async () => {
+    const interrupted = {
+      ...activeOp,
+      interrupted: true,
+      resumeStarted: false,
+    };
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      ops: [interrupted],
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(resumeTaskOp).mockResolvedValue({
+      resumed: true,
+      rev: 2,
+      op: { ...interrupted, interrupted: false },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.opInterrupted"));
+    const resume = buttonByText(i18n.t("task.opResume"));
+    expect(resume).toBeTruthy();
+    await act(async () => {
+      resume?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(resumeTaskOp)).toHaveBeenCalledWith("op-3");
+    expect(host.textContent).toContain(
+      i18n.t("task.opResumedNotice", { id: "op-3" }),
+    );
+  });
+
+  it("offers no control for a finished op", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      ops: [
+        {
+          ...activeOp,
+          status: "done",
+          resumeRequested: false,
+          resumeStarted: true,
+        },
+      ],
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+
+    await draw();
+
+    expect(host.textContent).toContain("op-3");
+    expect(buttonByText(i18n.t("task.opCancel"))).toBeUndefined();
+    expect(buttonByText(i18n.t("task.opResume"))).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { ApiError, errorMessage } from "@/lib/api/client";
 import {
   approveTaskRequest,
+  cancelTaskOp,
   fetchTaskApproval,
   fetchTaskCards,
   fetchTaskFrames,
@@ -10,6 +11,7 @@ import {
   fetchTaskSummary,
   frameTaskMaterial,
   pickTaskCard,
+  resumeTaskOp,
 } from "@/lib/api/task";
 import type {
   TaskApprovalView,
@@ -58,6 +60,12 @@ type TaskState = {
   decisionError: string;
   /** What the last decision left behind. */
   decisionNotice: string;
+  /** The op being cancelled or resumed, while its request is in flight. */
+  opBusy: string;
+  /** Why the last op action failed, in the reader's words. */
+  opError: string;
+  /** What the last op action left behind. */
+  opNotice: string;
   load: () => Promise<void>;
   pick: (cardId: string, expectedRev: number) => Promise<void>;
   frame: (
@@ -66,6 +74,8 @@ type TaskState = {
     expectedRev: number,
   ) => Promise<void>;
   decide: (decision: "approve" | "reject") => Promise<void>;
+  cancelOp: (opId: string) => Promise<void>;
+  resumeOp: (opId: string) => Promise<void>;
   reset: () => void;
 };
 
@@ -90,6 +100,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   deciding: "",
   decisionError: "",
   decisionNotice: "",
+  opBusy: "",
+  opError: "",
+  opNotice: "",
 
   load: async () => {
     const mine = ++generation;
@@ -209,6 +222,49 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  cancelOp: async (opId) => {
+    set({ opBusy: opId, opError: "", opNotice: "" });
+    try {
+      const result = await cancelTaskOp(opId);
+      set({
+        opBusy: "",
+        opNotice: result.cancelled
+          ? i18n.t("task.opCancelledNotice", { id: opId })
+          : i18n.t("task.opAlreadyFinished"),
+      });
+      // The terminal state and any late result are the task's; read it again
+      // instead of patching the view.
+      await get().load();
+    } catch (reason) {
+      set({
+        opBusy: "",
+        opError: errorMessage(reason, i18n.t("task.opActionFailed")),
+      });
+    }
+  },
+
+  resumeOp: async (opId) => {
+    set({ opBusy: opId, opError: "", opNotice: "" });
+    try {
+      await resumeTaskOp(opId);
+      set({
+        opBusy: "",
+        opNotice: i18n.t("task.opResumedNotice", { id: opId }),
+      });
+      await get().load();
+    } catch (reason) {
+      set({
+        opBusy: "",
+        opError: errorMessage(reason, i18n.t("task.opActionFailed")),
+      });
+      // A conflict means the op moved since this view was read; the reloaded
+      // view shows whether it finished, was cancelled or is still running.
+      if (reason instanceof ApiError && reason.code === "conflict") {
+        await get().load();
+      }
+    }
+  },
+
   reset: () => {
     generation += 1;
     set({
@@ -229,6 +285,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       deciding: "",
       decisionError: "",
       decisionNotice: "",
+      opBusy: "",
+      opError: "",
+      opNotice: "",
     });
   },
 }));

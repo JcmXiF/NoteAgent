@@ -89,8 +89,11 @@ _INSPECT_DESCRIPTION = (
     "source and block ids/previews; `approval` says what go-ahead stands; "
     "`result` says how the last approved page write ended (written, skipped or "
     "failed), with its page, a summary and the revision, but not the page's "
-    "text. Returns the view and the task revision. Call it after a conflict or "
-    "a bounded wait, before deciding what to do next."
+    "text. Returns the view and the task revision. A long op that outlives its "
+    "bounded wait answers requested/running and resumes the conversation with "
+    "its bounded result and new revision when it finishes; do not run it again. "
+    "Call it after a conflict, or when a resumed op's delta leaves something "
+    "unclear, before deciding what to do next."
 )
 
 WEB_SEARCH_PARAMETERS = {
@@ -709,6 +712,24 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
         ]
         if intent:
             lines.append(f"intent: {intent}")
+        ops = payload.get("ops")
+        if isinstance(ops, list):
+            for op in ops:
+                if not isinstance(op, Mapping):
+                    continue
+                status = _text(op.get("status"))
+                interrupted = op.get("interrupted") is True
+                if status not in ("requested", "running") and not interrupted:
+                    continue
+                line = (
+                    f"op [{op.get('id', '')}] {op.get('kind', '')} "
+                    f"{status or 'interrupted'}"
+                )
+                if interrupted:
+                    line += " (interrupted by a restart; resume or cancel it)"
+                if _text(op.get("resumeError")):
+                    line += f" — resume failed: {_text(op.get('resumeError'))[:200]}"
+                lines.append(line)
         approval = payload.get("approval")
         if isinstance(approval, Mapping):
             lines.append(

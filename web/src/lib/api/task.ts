@@ -13,6 +13,8 @@ import type {
   TaskFrameResult,
   TaskFramesView,
   TaskMaterialsView,
+  TaskOpCancelResult,
+  TaskOpResumeResult,
   TaskPageSpec,
   TaskPickResult,
   TaskResultView,
@@ -86,6 +88,32 @@ export function frameTaskMaterial(
     blocks,
     expectedRev,
   });
+}
+
+/**
+ * Stop an unfinished op for good.
+ *
+ * The core writes the terminal state before it signals the executor, so a page
+ * is never saved and the conversation is not resumed for a cancelled op. A
+ * cancel that loses the race with a finishing op answers `cancelled: false`.
+ */
+export function cancelTaskOp(opId: string): Promise<TaskOpCancelResult> {
+  return postJson<TaskOpCancelResult>(
+    `/task/ops/${encodeURIComponent(opId)}/cancel`,
+  );
+}
+
+/**
+ * Re-run an op a restart left interrupted, then resume the session once.
+ *
+ * The op must still be active and marked interrupted; a finished or cancelled
+ * op is refused, so nothing already answered (or stopped by a person) runs
+ * again.
+ */
+export function resumeTaskOp(opId: string): Promise<TaskOpResumeResult> {
+  return postJson<TaskOpResumeResult>(
+    `/task/ops/${encodeURIComponent(opId)}/resume`,
+  );
 }
 
 /**

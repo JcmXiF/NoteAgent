@@ -9,6 +9,7 @@ task.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from noteagent.acquire.run_fetch import run_web_fetch
@@ -30,6 +31,7 @@ from noteagent.task.model import (
     StageFn,
     approval_to_dict,
     frame_to_dict,
+    op_to_dict,
 )
 from noteagent.task.service import (
     TaskBadSpec,
@@ -37,9 +39,12 @@ from noteagent.task.service import (
     TaskNeedsApproval,
     TaskNotFound,
     TaskOpFailed,
+    TaskOpResumeFn,
     TaskService,
 )
 from noteagent.util.run_log import RunLogger
+
+logger = logging.getLogger(__name__)
 
 
 def task_service(deps: AppDeps) -> TaskService:
@@ -53,8 +58,23 @@ def task_service(deps: AppDeps) -> TaskService:
     return task_service_for(deps, layout)
 
 
-def task_service_for(deps: AppDeps, layout: ProjectLayout) -> TaskService:
-    """The task service of one named project, for a caller with its layout."""
+#: Tells "build the default resumer" (no argument) from an explicit ``None``
+#: (a service that must not resume, built by the resumer itself).
+_RESUME_UNSET = object()
+
+
+def task_service_for(
+    deps: AppDeps,
+    layout: ProjectLayout,
+    *,
+    on_resume: TaskOpResumeFn | None | object = _RESUME_UNSET,
+) -> TaskService:
+    """The task service of one named project, for a caller with its layout.
+
+    The completion callback is the injected one, the project's own resumer, or
+    ``None``. The resumer builds its claim service with ``on_resume=None``:
+    claiming a resume must not create another resumer.
+    """
     if deps.tasks is not None:
         return deps.tasks
     search = (
@@ -70,6 +90,12 @@ def task_service_for(deps: AppDeps, layout: ProjectLayout) -> TaskService:
         if deps.task_stage is not None
         else default_stage(layout, deps.clock)
     )
+    if on_resume is _RESUME_UNSET:
+        on_resume = (
+            deps.task_resume
+            if deps.task_resume is not None
+            else _default_task_resume(deps, layout)
+        )
     return TaskService(
         layout,
         clock=deps.clock,
@@ -85,7 +111,15 @@ def task_service_for(deps: AppDeps, layout: ProjectLayout) -> TaskService:
         compose=deps.task_compose,
         save=deps.task_save,
         page_locks=deps.task_page_locks,
+        on_resume=on_resume,  # type: ignore[arg-type]
     )
+
+
+def _default_task_resume(deps: AppDeps, layout: ProjectLayout) -> TaskOpResumeFn:
+    """The production completion callback, imported lazily to keep one root."""
+    from noteagent.api.task_resume import task_op_resume_for
+
+    return task_op_resume_for(deps, layout)
 
 
 def task_view_payload(deps: AppDeps, view: str) -> dict[str, object]:
@@ -192,6 +226,82 @@ def approve_task_request(
     return body
 
 
+def recover_active_project_tasks(deps: AppDeps) -> None:
+    """Reconcile the active project's task before any route can read it.
+
+    Active ops are marked interrupted and become resumable or cancellable; a
+    completion that was finished but never resumed is started once. The scan is
+    best effort, like the chat's: a project that cannot be read is reported
+    when a route needs it, and a failure here must not stop the core from
+    opening.
+    """
+    if deps.tasks is not None:
+        service = deps.tasks
+    else:
+        try:
+            layout = get_active_layout()
+        except ProjectNotConfiguredError:
+            return
+        except (OSError, ValueError) as err:
+            logger.warning(
+                "the active project cannot be read for task recovery: %s", err
+            )
+            return
+        service = task_service_for(deps, layout)
+    try:
+        notices = service.recover_ops()
+    except Exception:  # noqa: BLE001 - startup must not fail on one task file
+        logger.exception("the writing-task recovery scan failed")
+        return
+    for notice in notices:
+        try:
+            service.deliver_resume(notice)
+        except Exception:  # noqa: BLE001 - the resume records its own failure
+            logger.exception(
+                "a pending resume for op %s could not be started",
+                notice.op_id,
+            )
+
+
+def cancel_task_op(deps: AppDeps, op_id: str) -> dict[str, object]:
+    """Stop an unfinished op; terminal, never retried and never resumed.
+
+    A cancel that loses the race with a finishing executor is not an error: it
+    answers ``cancelled=false`` with the op as it ended. The op's terminal state
+    is written before the executor's stop signal, so the finishing guard drops
+    any late result.
+    """
+    try:
+        outcome = task_service(deps).cancel_op(op_id)
+    except TaskNotFound as err:
+        raise CodedHTTPException(404, str(err), code="not_found") from err
+    return {
+        "cancelled": outcome.changed,
+        "rev": outcome.rev,
+        "op": op_to_dict(outcome.op),
+    }
+
+
+def resume_task_op(deps: AppDeps, op_id: str) -> dict[str, object]:
+    """Re-run an interrupted op and let its completion resume the session once.
+
+    The op must still be active and marked interrupted by the restart scan; a
+    finished or cancelled op is refused, so a person cannot re-run anything the
+    executor already answered or a person already stopped.
+    """
+    try:
+        outcome = task_service(deps).resume_op(op_id)
+    except TaskNotFound as err:
+        raise CodedHTTPException(404, str(err), code="not_found") from err
+    except TaskConflict as err:
+        raise CodedHTTPException(409, str(err), code="conflict") from err
+    return {
+        "resumed": outcome.changed,
+        "rev": outcome.rev,
+        "op": op_to_dict(outcome.op),
+    }
+
+
 def default_search(layout: ProjectLayout) -> SearchFn:
     """The project's configured web search, as a pure card-returning node."""
     logger = RunLogger.for_layout(layout)
@@ -265,11 +375,14 @@ def default_stage(layout: ProjectLayout, clock: Clock) -> StageFn:
 
 __all__ = [
     "approve_task_request",
+    "cancel_task_op",
     "default_fetch",
     "default_search",
     "default_stage",
     "frame_task_material",
     "pick_task_card",
+    "recover_active_project_tasks",
+    "resume_task_op",
     "task_service",
     "task_service_for",
     "task_view_payload",

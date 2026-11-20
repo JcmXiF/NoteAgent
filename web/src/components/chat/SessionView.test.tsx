@@ -682,4 +682,38 @@ describe("a session read from its log", () => {
       ),
     ).toBe(false);
   });
+
+  it("shows the task op result that resumed the conversation", async () => {
+    vi.mocked(fetchSession).mockResolvedValue({
+      ...payload,
+      state: {
+        busy: false,
+        taskOp: {
+          opId: "op-4",
+          kind: "write",
+          status: "done",
+          rev: 4,
+          result: {
+            status: "written",
+            page: "wiki/entropy.md",
+            summary: "written wiki/entropy.md (create, 244 bytes)",
+          },
+        },
+      },
+    });
+
+    await draw();
+
+    const label = i18n.t("chat.resumedOp", {
+      kind: "write",
+      status: i18n.t("task.opStatus.done"),
+      rev: 4,
+    });
+    expect(host.textContent).toContain(label);
+    expect(host.textContent).toContain("wiki/entropy.md");
+    expect(host.textContent).toContain(
+      "written wiki/entropy.md (create, 244 bytes)",
+    );
+    expect(host.textContent).toContain(i18n.t("chat.resumedOpHint"));
+  });
 });

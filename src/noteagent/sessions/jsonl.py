@@ -16,6 +16,7 @@ from pathlib import Path
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.run_marker import MARKER_TYPE
+from noteagent.agent.task_op import TASK_OP_RESULT_TYPE
 from noteagent.agent.store import (
     SessionSnapshot,
     SessionSummary,
@@ -58,6 +59,7 @@ _KNOWN_TYPES = frozenset(
         "session",
         "session_info",
         "system_section",
+        TASK_OP_RESULT_TYPE,
         "thinking_level_change",
         "usage",
         "wait_cancelled",

@@ -74,6 +74,10 @@ class PageBusy(RuntimeError):
     """Another writer holds the page; the later writer must not enter."""
 
 
+class WriteCancelled(RuntimeError):
+    """A person stopped the write before the page was saved."""
+
+
 class ComposePageError(RuntimeError):
     """The compose node could not build a page from the frame."""
 
@@ -280,6 +284,12 @@ class TaskPageSave:
         request: SaveRequest,
         cancel: Event | None = None,
     ) -> SaveOutcome:
+        # The last check before a page exists: a cancelled op never saves, even
+        # if the composition finished first.
+        if cancel is not None and cancel.is_set():
+            raise WriteCancelled(
+                f"the write of {request.wiki_path} was cancelled"
+            )
         journal = EffectJournal(layout)
         committed = journal.query(
             run_id=request.op_id,
@@ -442,6 +452,7 @@ __all__ = [
     "SaveRequest",
     "TaskPageCompose",
     "TaskPageSave",
+    "WriteCancelled",
     "diff_counts",
     "locators_for_frame",
     "page_diff",

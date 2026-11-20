@@ -50,12 +50,28 @@ FrameSource: TypeAlias = Literal["human", "agent", "model"]
 
 FRAME_SOURCES: tuple[FrameSource, ...] = ("human", "agent", "model")
 
-OpStatus: TypeAlias = Literal["requested", "running", "done", "failed"]
+OpStatus: TypeAlias = Literal[
+    "requested", "running", "done", "failed", "cancelled"
+]
 
-OP_STATUSES: tuple[OpStatus, ...] = ("requested", "running", "done", "failed")
+OP_STATUSES: tuple[OpStatus, ...] = (
+    "requested",
+    "running",
+    "done",
+    "failed",
+    "cancelled",
+)
 
 #: An op in one of these has not reached an answer yet.
 ACTIVE_OP_STATUSES = frozenset({"requested", "running"})
+
+#: An op in one of these will never change again: it is neither retried nor
+#: resumed. ``cancelled`` is a person's decision and is terminal.
+TERMINAL_OP_STATUSES = frozenset({"done", "failed", "cancelled"})
+
+#: How many ops the summary view carries. Active and interrupted ops come
+#: first, because those are the ones the panel can still cancel or resume.
+MAX_VIEW_OPS = 8
 
 #: Who asked for an op. ``approve`` is the one kind only a human may write.
 Actor: TypeAlias = Literal["agent", "human"]
@@ -259,6 +275,20 @@ class Op:
     #: The situation a failed op names (``not_found``, ``op_failed``), so the
     #: tool that waited on it can put the right code in the model's error.
     error_code: str = ""
+    #: The tool's bounded wait expired while this op was still active: the
+    #: session has moved on and wants the completion to bring it back. The
+    #: executor triggers a resume only when this is set.
+    resume_requested: bool = False
+    #: The once-only resume marker. It is set under the task's writer lock
+    #: before the continuation run starts, so a duplicate completion, a
+    #: reconnect or a restart cannot continue the same op twice.
+    resume_started: bool = False
+    #: Why a requested resume could not start (the session is gone, say). The
+    #: op stays inspectable and is not retried.
+    resume_error: str = ""
+    #: The process ended while this op was active. No executor owns it now; a
+    #: person may resume it or cancel it, and a cancelled op is never retried.
+    interrupted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +363,10 @@ def op_to_dict(op: Op) -> dict[str, object]:
         "result": dict(op.result),
         "error": op.error,
         "errorCode": op.error_code,
+        "resumeRequested": op.resume_requested,
+        "resumeStarted": op.resume_started,
+        "resumeError": op.resume_error,
+        "interrupted": op.interrupted,
     }
 
 
@@ -357,6 +391,10 @@ def op_from_dict(raw: Mapping[str, object]) -> Op:
         result=dict(result) if isinstance(result, Mapping) else {},
         error=_text(raw.get("error")),
         error_code=_text(raw.get("errorCode")),
+        resume_requested=raw.get("resumeRequested") is True,
+        resume_started=raw.get("resumeStarted") is True,
+        resume_error=_text(raw.get("resumeError")),
+        interrupted=raw.get("interrupted") is True,
     )
 
 
@@ -642,6 +680,7 @@ def task_view(task: Task, view: str) -> dict[str, object]:
     and the block source text are never copied.
     """
     if view == "summary":
+        ops, ops_omitted = _ops_view(task)
         return {
             "view": "summary",
             "rev": task.rev,
@@ -658,6 +697,11 @@ def task_view(task: Task, view: str) -> dict[str, object]:
             # Whether a person's go-ahead still stands, and what it covers. The
             # writing spec is not part of a bounded summary.
             "approval": _approval_summary(task),
+            # The ops a reader can still act on, plus the latest finished ones.
+            # The panel needs the ids to cancel or resume; the op log itself
+            # stays in the task file.
+            "ops": ops,
+            "opsOmitted": ops_omitted,
         }
     if view == "cards":
         shown = task.cards[:MAX_VIEW_CARDS]
@@ -723,6 +767,47 @@ def task_view(task: Task, view: str) -> dict[str, object]:
             "result": dict(task.result) if task.result is not None else None,
         }
     raise ValueError(f"unknown task view: {view!r}")
+
+
+def _ops_view(task: Task) -> tuple[list[dict[str, object]], int]:
+    """The ops a summary carries: the actionable ones first, bounded.
+
+    An op that is active or was interrupted by a restart is what a person can
+    still cancel (and, when interrupted, resume), so it is never pushed out by
+    newer finished ops. The rest fills the remaining slots newest first.
+    """
+    actionable = [
+        op
+        for op in task.ops
+        if op.status in ACTIVE_OP_STATUSES or op.interrupted
+    ]
+    shown_ids = {op.id for op in actionable}
+    recent = [
+        op for op in reversed(task.ops) if op.id not in shown_ids
+    ]
+    rows = actionable + recent
+    shown = rows[:MAX_VIEW_OPS]
+    return (
+        [_op_summary(op) for op in shown],
+        max(0, len(rows) - len(shown)),
+    )
+
+
+def _op_summary(op: Op) -> dict[str, object]:
+    return {
+        "id": op.id,
+        "kind": op.kind,
+        "actor": op.actor,
+        "status": op.status,
+        "createdAt": op.created_at,
+        "updatedAt": op.updated_at,
+        "interrupted": op.interrupted,
+        "resumeRequested": op.resume_requested,
+        "resumeStarted": op.resume_started,
+        "resumeError": op.resume_error[:200],
+        "errorCode": op.error_code,
+        "error": op.error[:200],
+    }
 
 
 def frame_view(task: Task, frame: Frame) -> dict[str, object]:
@@ -924,7 +1009,9 @@ __all__ = [
     "MAX_VIEW_FRAME_BLOCKS",
     "MAX_VIEW_FRAMES",
     "MAX_VIEW_MATERIALS",
+    "MAX_VIEW_OPS",
     "OP_KINDS",
+    "TERMINAL_OP_STATUSES",
     "OP_STATUSES",
     "PAGE_SPEC_ACTIONS",
     "TASK_STATUSES",
