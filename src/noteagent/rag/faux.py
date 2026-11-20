@@ -14,7 +14,11 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 
 from noteagent.rag.config import EmbeddingConfigError
-from noteagent.rag.embedding import Vector, normalize_vector
+from noteagent.rag.embedding import (
+    EmbeddingUsage,
+    Vector,
+    normalize_vector,
+)
 
 __all__ = ["FakeEmbedder", "FakeReranker"]
 
@@ -27,6 +31,11 @@ class FakeEmbedder:
             raise EmbeddingConfigError("the fake embedding dimension must be positive")
         self.dim = dim
         self.calls: list[tuple[tuple[str, ...], bool]] = []
+
+    @property
+    def usage(self) -> EmbeddingUsage:
+        """The same usage counter the HTTP client exposes."""
+        return EmbeddingUsage(len(self.calls), 0)
 
     def embed(
         self, texts: Sequence[str], *, query: bool = False

@@ -137,6 +137,7 @@ def fuse(
     k: int = DEFAULT_K,
     candidates: int = DEFAULT_CANDIDATE_LIMIT,
     exact_bonus: float = DEFAULT_EXACT_BONUS,
+    exact_tier: bool = True,
 ) -> FusionResult:
     """Fuse two ranked page lists into one, exact pages first."""
     if k <= 0:
@@ -154,9 +155,11 @@ def fuse(
     _add_ranked(scores, lexical_by_key, lexical_list, k)
     _add_ranked(scores, vector_by_key, vector_list, k)
 
-    exact_keys = {
-        key for key, hit in lexical_by_key.items() if hit.exact
-    }
+    exact_keys = (
+        {key for key, hit in lexical_by_key.items() if hit.exact}
+        if exact_tier
+        else set()
+    )
     ordered = sorted(
         scores,
         key=lambda key: (

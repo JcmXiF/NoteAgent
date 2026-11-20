@@ -233,13 +233,22 @@ class Bm25Index:
         *,
         limit: int = 50,
         kind: str | None = None,
+        exact_tier: bool = True,
     ) -> list[LexicalHit]:
-        """The best chunks for *query*, exact slug/title matches first."""
+        """The best chunks for *query*, exact slug/title matches first.
+
+        ``exact_tier=False`` keeps the BM25 scores but removes the page-level
+        exact ordering and bonus, for the ablation that tests that tier.
+        """
         if limit <= 0:
             return []
         terms = sorted(set(tokenize(query)))
         query_norm = _normalize(query)
-        exact_candidates = self._exact_candidates(query_norm, kind)
+        exact_candidates = (
+            self._exact_candidates(query_norm, kind)
+            if exact_tier
+            else set()
+        )
         if not terms and not exact_candidates:
             return []
 
@@ -274,7 +283,11 @@ class Bm25Index:
                 if tf.body:
                     fields.add("body")
 
-        exact_ids = self._exact_winners(exact_candidates, scores)
+        exact_ids = (
+            self._exact_winners(exact_candidates, scores)
+            if exact_tier
+            else set()
+        )
         for chunk_id in exact_ids:
             scores[chunk_id] = (
                 scores.get(chunk_id, 0.0) + self._params.exact_bonus
