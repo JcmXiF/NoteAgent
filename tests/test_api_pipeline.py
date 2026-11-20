@@ -8,7 +8,6 @@ the rest of the pipeline tickets will use too.
 from __future__ import annotations
 
 import json
-import tempfile
 import threading
 import time
 import unittest
@@ -37,6 +36,7 @@ from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.init import init_project
 from noteagent.util.cancel import JobCancelled
+from noteagent.util.tempdir import temporary_tree
 
 try:
     from fastapi.testclient import TestClient
@@ -195,7 +195,7 @@ def _wait_for(client, run_id: str, statuses: set[str], timeout: float = 3.0) -> 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class PipelineStartTests(unittest.TestCase):
     def test_starting_a_run_returns_it_and_it_can_be_read_back(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             with patch.object(projects_mod, "REPO_ROOT", repo):
@@ -229,7 +229,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(got.json(), body)
 
     def test_a_project_held_by_another_process_is_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             ProjectLock(layout.project_lock, clock=FixedClock()).acquire("other")
@@ -246,7 +246,7 @@ class PipelineStartTests(unittest.TestCase):
                 )
 
     def test_a_blank_intent_is_refused_as_a_bad_request(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             with patch.object(projects_mod, "REPO_ROOT", repo):
@@ -259,7 +259,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 422, response.text)
 
     def test_a_second_run_is_refused_while_the_first_is_still_active(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             stage = _BlockingStage()
@@ -283,7 +283,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(settled["status"], "succeeded")
 
     def test_cancel_stops_the_run_between_stages(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             stage = _BlockingStage()
@@ -316,7 +316,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(calls, [], "a later stage ran after the cancel")
 
     def test_a_run_lists_the_materials_it_collected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             with patch.object(projects_mod, "REPO_ROOT", repo):
@@ -346,7 +346,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertTrue(items[0]["material"].startswith("raw/web/"))
 
     def test_an_auto_run_stages_the_materials_it_acquired(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(5)
@@ -374,7 +374,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(len(materials), 4)
 
     def test_the_frame_stage_turns_materials_into_frames(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(4)
@@ -408,7 +408,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(clips["collections"][0]["blocks"], [])
 
     def test_the_model_frames_with_expansions_and_reports_its_use(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             script = ['{"expand": ["b2"]}', '{"frames": [["b1"], ["b2"]]}']
@@ -457,7 +457,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertIn(_LONG, expansion)
 
     def test_a_spent_budget_still_frames_from_what_was_read(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             script = ['{"expand": ["b2"]}', '{"frames": [["b1"]]}']
@@ -496,7 +496,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(clips["collections"][0]["blockIds"], ["b1"])
 
     def test_a_model_that_cannot_answer_falls_back(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(1)
@@ -536,7 +536,7 @@ class PipelineStartTests(unittest.TestCase):
             )
 
     def test_the_plan_stage_plans_the_run_and_records_a_revision(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             plan, calls = _scripted_plan()
@@ -586,7 +586,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(clips["decisions"], [])
 
     def test_a_person_answer_survives_the_automatic_plan(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             save_clip_store(
@@ -632,7 +632,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(clips["decisions"], [])
 
     def test_an_empty_plan_fails_the_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(1)
@@ -675,7 +675,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertIn("missing primary", run["error"])
 
     def test_a_cancelled_plan_marks_the_run_cancelled(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(1)
@@ -710,7 +710,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(run["error"], "")
 
     def test_a_changed_intent_clears_the_plan_and_the_next_run_replans(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             plan, calls = _scripted_plan()
@@ -765,7 +765,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertIsNotNone(replanned["topicMap"])
 
     def test_a_person_edited_frame_is_recorded_and_left_alone(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             cards = _cards(1)
@@ -837,7 +837,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(model_calls, [])
 
     def test_a_materials_blocks_can_be_read(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(4)
@@ -875,7 +875,7 @@ class PipelineStartTests(unittest.TestCase):
             )
 
     def test_a_changed_frame_clears_the_plan(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             first = ClipCollection(
@@ -928,7 +928,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertIsNone(response.json()["topicMap"])
 
     def test_a_sign_in_wall_waits_in_the_attention_panel(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             cards = _cards(5)
@@ -971,7 +971,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertEqual(attention["counts"]["capture"], 1)
 
     def test_a_queued_sign_in_page_can_be_dismissed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             item = CaptureInbox(layout.capture_inbox).add(
@@ -1000,7 +1000,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(again.json()["code"], "capture.notFound")
 
     def test_materials_for_an_unknown_run_are_not_found(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             init_project(repo / "projects" / "demo")
             with patch.object(projects_mod, "REPO_ROOT", repo):
@@ -1014,7 +1014,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(response.json()["code"], "pipeline.notFound")
 
     def test_opening_a_project_backfills_its_materials(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             raw = layout.raw / "web" / "entropy-a1.html"
@@ -1033,7 +1033,7 @@ class PipelineStartTests(unittest.TestCase):
                 self.assertEqual(state.state, "promoted")
 
     def test_startup_backfills_materials_from_raw(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             raw = layout.raw / "web" / "entropy-a1.html"
@@ -1052,7 +1052,7 @@ class PipelineStartTests(unittest.TestCase):
             self.assertTrue(state.detail.get("backfilled"))
 
     def test_a_run_left_open_by_a_previous_core_is_marked_interrupted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             repo = Path(tmp)
             layout = init_project(repo / "projects" / "demo")
             PipelineRunStore(layout).create(

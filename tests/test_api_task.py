@@ -41,6 +41,7 @@ from noteagent.task.model import (
 from noteagent.task.service import TaskService
 from noteagent.task.store import TaskStore, TaskUnreadableError
 from noteagent.task.writing import PageLocks, SaveOutcome
+from noteagent.util.tempdir import remove_tree
 
 try:
     from fastapi.testclient import TestClient
@@ -393,9 +394,10 @@ class FakeSave:
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class TaskApiCase(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.repo = Path(self._tmp.name)
+        # A background task can still be closing a task lock or an event log
+        # when the test ends; the helper waits that instant out on Windows.
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(remove_tree, self.repo)
         self.layout = init_project(self.repo / "projects" / "demo")
         patcher = patch.object(projects_mod, "REPO_ROOT", self.repo)
         patcher.start()
@@ -442,7 +444,11 @@ class TaskApiCase(unittest.TestCase):
             task_resume=RecordingResume() if resume is _UNSET else resume,
             tasks=tasks,
         )
-        return TestClient(create_app(deps))
+        client = TestClient(create_app(deps))
+        # Cleanups run last-registered-first, so the client closes before the
+        # temporary project is removed.
+        self.addCleanup(client.close)
+        return client
 
     def new_session(self, client) -> str:
         created = client.post("/api/v1/sessions", json={"title": "Writing"})

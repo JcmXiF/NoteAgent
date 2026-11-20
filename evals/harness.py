@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterable
@@ -38,6 +37,7 @@ from noteagent.api.app import create_app
 from noteagent.api.deps import AppDeps
 from noteagent.project.init import init_project
 from noteagent.sessions.jsonl import JsonlSessionStore
+from noteagent.util.tempdir import temporary_tree
 
 #: The pages every case starts with. They are ordinary wiki pages: the tools
 #: find them the same way they find a reader's pages.
@@ -288,6 +288,11 @@ class CaseRun:
         self.log.append(text)
 
     def close(self) -> None:
+        # Close the HTTP client before the temporary project goes away: its
+        # transport and any streamed response hold sockets, and on Windows a
+        # reader inside the app can keep an event log open for an instant.
+        if self.api is not None:
+            self.api.client.close()
         for patcher in reversed(self._patchers):
             patcher.stop()
         self._patchers.clear()
@@ -298,7 +303,7 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
     started = time.monotonic()
     run: CaseRun | None = None
     error = ""
-    with tempfile.TemporaryDirectory(
+    with temporary_tree(
         prefix=f"noteagent-eval-{case.name}-"
     ) as tmp:
         try:
