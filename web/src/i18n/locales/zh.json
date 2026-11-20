@@ -1483,7 +1483,8 @@
     "deleteProject": "删除项目失败",
     "code": {
       "conflict": "写作任务在你读到它之后有变化，请重新读取后再试。",
-      "not_found": "这张卡片已经不在写作任务里了。",
+      "not_found": "这张卡片或这份材料已经不在写作任务里了。",
+      "bad_spec": "画框里有些段落不属于这份材料。",
       "op_failed": "材料抓取或暂存失败，请先读取任务再决定是否重试。",
       "model_error": "助手没有作答，请重试。",
       "cancelled": "已停止。",
@@ -1676,6 +1677,23 @@
     "pickRunning": "选择仍在进行，稍后重新读取任务。",
     "loadFailed": "无法读取写作任务",
     "retry": "重试",
+    "frames": "{{count}} 个画框",
+    "framesEmpty": "还没有画框",
+    "frameSource": "由{{source}}画",
+    "frameHint": "勾选这份材料要用于写作的段落。",
+    "frameSave": "保存画框",
+    "framing": "正在保存画框…",
+    "frameMore": "框内还有 {{count}} 段",
+    "frameSaved": "画框已保存。",
+    "frameFailed": "画框没能保存",
+    "approved": "{{by}}已在修订 {{rev}} 批准",
+    "noApproval": "还没有批准",
+    "approvalInvalidated": "画框变了，之前的批准不再有效。",
+    "source": {
+      "agent": "助手",
+      "human": "你",
+      "model": "模型"
+    },
     "status": {
       "idle": "空闲",
       "running": "进行中",

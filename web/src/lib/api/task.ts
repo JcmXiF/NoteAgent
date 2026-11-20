@@ -8,6 +8,8 @@
 import { getJson, postJson } from "@/lib/api/client";
 import type {
   TaskCardsView,
+  TaskFrameResult,
+  TaskFramesView,
   TaskMaterialsView,
   TaskPickResult,
   TaskSummaryView,
@@ -25,6 +27,10 @@ export function fetchTaskMaterials(): Promise<TaskMaterialsView> {
   return getJson<TaskMaterialsView>("/task?view=materials");
 }
 
+export function fetchTaskFrames(): Promise<TaskFramesView> {
+  return getJson<TaskFramesView>("/task?view=frames");
+}
+
 /**
  * A person's pick, on the same task and executor the chat agent uses.
  *
@@ -37,4 +43,23 @@ export function pickTaskCard(
   expectedRev: number,
 ): Promise<TaskPickResult> {
   return postJson<TaskPickResult>("/task/pick", { cardId, expectedRev });
+}
+
+/**
+ * A person's frame, on the same task and writer the chat agent uses.
+ *
+ * The revision is the one shown by the frames view the reader clicked from; a
+ * task that moved since then answers `conflict` instead of letting the frame
+ * land on a state the person never saw.
+ */
+export function frameTaskMaterial(
+  docId: string,
+  blocks: string[],
+  expectedRev: number,
+): Promise<TaskFrameResult> {
+  return postJson<TaskFrameResult>("/task/frame", {
+    docId,
+    blocks,
+    expectedRev,
+  });
 }

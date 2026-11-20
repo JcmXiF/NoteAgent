@@ -7,12 +7,15 @@ import { ApiError } from "@/lib/api/client";
 import { TaskView } from "@/components/task/TaskView";
 import {
   fetchTaskCards,
+  fetchTaskFrames,
   fetchTaskMaterials,
   fetchTaskSummary,
+  frameTaskMaterial,
   pickTaskCard,
 } from "@/lib/api/task";
 import type {
   TaskCardsView,
+  TaskFramesView,
   TaskMaterialsView,
   TaskSummaryView,
 } from "@/lib/api/types";
@@ -21,8 +24,10 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 
 vi.mock("@/lib/api/task", () => ({
   fetchTaskCards: vi.fn(),
+  fetchTaskFrames: vi.fn(),
   fetchTaskMaterials: vi.fn(),
   fetchTaskSummary: vi.fn(),
+  frameTaskMaterial: vi.fn(),
   pickTaskCard: vi.fn(),
 }));
 
@@ -35,6 +40,7 @@ const summary: TaskSummaryView = {
   status: "idle",
   updatedAt: "2026-11-10T09:00:00Z",
   counts: { cards: 2, materials: 0, frames: 0 },
+  approval: null,
 };
 
 const cards: TaskCardsView = {
@@ -88,6 +94,32 @@ const oneMaterial: TaskMaterialsView = {
   ],
 };
 
+const noFrames: TaskFramesView = {
+  view: "frames",
+  rev: 2,
+  omitted: 0,
+  frames: [],
+};
+
+const oneFrame: TaskFramesView = {
+  view: "frames",
+  rev: 4,
+  omitted: 0,
+  frames: [
+    {
+      id: "frame-1",
+      docId: "raw/web/entropy-a1.html",
+      source: "human",
+      blockCount: 2,
+      blocks: [
+        { id: "b1", preview: "熵衡量不确定性。" },
+        { id: "b2", preview: "信息是不确定性的减少。" },
+      ],
+      blocksOmitted: 0,
+    },
+  ],
+};
+
 let host: HTMLDivElement;
 let root: Root;
 
@@ -101,16 +133,23 @@ beforeEach(() => {
     summary: null,
     cards: null,
     materials: null,
+    frames: null,
     error: "",
     picking: "",
     pickError: "",
     pickNotice: "",
+    framing: "",
+    frameError: "",
+    frameNotice: "",
   });
   vi.mocked(fetchTaskSummary).mockReset();
   vi.mocked(fetchTaskCards).mockReset();
   vi.mocked(fetchTaskMaterials).mockReset();
+  vi.mocked(fetchTaskFrames).mockReset();
   vi.mocked(pickTaskCard).mockReset();
+  vi.mocked(frameTaskMaterial).mockReset();
   vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
+  vi.mocked(fetchTaskFrames).mockResolvedValue(noFrames);
 });
 
 afterEach(() => {
@@ -224,5 +263,150 @@ describe("the writing task view", () => {
     await draw();
 
     expect(host.textContent).toContain(i18n.t("task.loadFailed"));
+  });
+
+  it("shows the frames the task holds and who drew them", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      rev: 4,
+      counts: { cards: 2, materials: 1, frames: 1 },
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames).mockResolvedValue(oneFrame);
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.frames", { count: 1 }));
+    expect(host.textContent).toContain("raw/web/entropy-a1.html");
+    expect(host.textContent).toContain(
+      i18n.t("task.frameSource", { source: i18n.t("task.source.human") }),
+    );
+    expect(host.textContent).toContain(i18n.t("task.noApproval"));
+  });
+
+  it("draws a frame as a person with the revision of the view", async () => {
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce({
+        ...summary,
+        counts: { cards: 2, materials: 1, frames: 0 },
+      })
+      .mockResolvedValue({
+        ...summary,
+        rev: 3,
+        counts: { cards: 2, materials: 1, frames: 1 },
+      });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials)
+      .mockResolvedValueOnce(oneMaterial)
+      .mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames)
+      .mockResolvedValueOnce(noFrames)
+      .mockResolvedValue({ ...oneFrame, rev: 3 });
+    vi.mocked(frameTaskMaterial).mockResolvedValue({
+      opId: "op-4",
+      status: "done",
+      rev: 3,
+      approvalCleared: false,
+      frame: {
+        id: "frame-1",
+        docId: "raw/web/entropy-a1.html",
+        blocks: ["b1"],
+        source: "human",
+      },
+    });
+
+    await draw();
+    const toggle = host.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(toggle).toBeTruthy();
+    await act(async () => {
+      toggle?.click();
+    });
+    const save = [...host.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes(i18n.t("task.frameSave")),
+    );
+    expect(save).toBeTruthy();
+    await act(async () => {
+      save?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(frameTaskMaterial)).toHaveBeenCalledWith(
+      "raw/web/entropy-a1.html",
+      ["b1"],
+      2,
+    );
+    expect(host.textContent).toContain(i18n.t("task.frameSaved"));
+  });
+
+  it("makes an invalidated approval visible after a frame change", async () => {
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce({
+        ...summary,
+        rev: 3,
+        counts: { cards: 2, materials: 1, frames: 1 },
+        approval: {
+          frameId: "frame-1",
+          rev: 2,
+          by: "human",
+          at: "2026-11-10T09:05:00Z",
+        },
+      })
+      .mockResolvedValue({
+        ...summary,
+        rev: 4,
+        counts: { cards: 2, materials: 1, frames: 1 },
+        approval: null,
+      });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames)
+      .mockResolvedValueOnce({ ...oneFrame, rev: 3 })
+      .mockResolvedValue({ ...oneFrame, rev: 4 });
+    vi.mocked(frameTaskMaterial).mockResolvedValue({
+      opId: "op-5",
+      status: "done",
+      rev: 4,
+      approvalCleared: true,
+      frame: {
+        id: "frame-1",
+        docId: "raw/web/entropy-a1.html",
+        blocks: ["b2"],
+        source: "human",
+      },
+    });
+
+    await draw();
+    const approved = i18n.t("task.approved", {
+      by: i18n.t("task.source.human"),
+      rev: 2,
+    });
+    expect(host.textContent).toContain(approved);
+
+    // The frame already covers b1 and b2; unticking b1 changes it.
+    const toggle = host.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(toggle?.checked).toBe(true);
+    await act(async () => {
+      toggle?.click();
+    });
+    const save = [...host.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes(i18n.t("task.frameSave")),
+    );
+    await act(async () => {
+      save?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(frameTaskMaterial)).toHaveBeenCalledWith(
+      "raw/web/entropy-a1.html",
+      ["b2"],
+      3,
+    );
+    expect(host.textContent).toContain(i18n.t("task.approvalInvalidated"));
+    expect(host.textContent).not.toContain(approved);
   });
 });

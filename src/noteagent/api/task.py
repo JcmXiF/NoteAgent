@@ -28,8 +28,10 @@ from noteagent.task.model import (
     SearchFn,
     StagedMaterial,
     StageFn,
+    frame_to_dict,
 )
 from noteagent.task.service import (
+    TaskBadSpec,
     TaskConflict,
     TaskNotFound,
     TaskOpFailed,
@@ -117,6 +119,37 @@ def pick_task_card(
     return body
 
 
+def frame_task_material(
+    deps: AppDeps, doc_id: str, blocks: list[str], expected_rev: int
+) -> dict[str, object]:
+    """A person's frame, as a pure-state op naming the revision they saw.
+
+    It lands in the one task the chat reads, through the same service, writer
+    lock and revision as the agent's frames. A refusal keeps the spec's names:
+    ``conflict``, ``not_found`` or ``bad_spec``.
+    """
+    try:
+        outcome = task_service(deps).frame(
+            doc_id,
+            blocks,
+            actor="human",
+            expected_rev=expected_rev,
+        )
+    except TaskConflict as err:
+        raise CodedHTTPException(409, str(err), code="conflict") from err
+    except TaskNotFound as err:
+        raise CodedHTTPException(404, str(err), code="not_found") from err
+    except TaskBadSpec as err:
+        raise CodedHTTPException(422, str(err), code="bad_spec") from err
+    return {
+        "opId": outcome.op_id,
+        "status": outcome.status,
+        "rev": outcome.rev,
+        "approvalCleared": outcome.approval_cleared,
+        "frame": frame_to_dict(outcome.frame),
+    }
+
+
 def default_search(layout: ProjectLayout) -> SearchFn:
     """The project's configured web search, as a pure card-returning node."""
     logger = RunLogger.for_layout(layout)
@@ -192,6 +225,7 @@ __all__ = [
     "default_fetch",
     "default_search",
     "default_stage",
+    "frame_task_material",
     "pick_task_card",
     "task_service",
     "task_service_for",

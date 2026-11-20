@@ -2,12 +2,15 @@ import { create } from "zustand";
 import { ApiError, errorMessage } from "@/lib/api/client";
 import {
   fetchTaskCards,
+  fetchTaskFrames,
   fetchTaskMaterials,
   fetchTaskSummary,
+  frameTaskMaterial,
   pickTaskCard,
 } from "@/lib/api/task";
 import type {
   TaskCardsView,
+  TaskFramesView,
   TaskMaterialsView,
   TaskSummaryView,
 } from "@/lib/api/types";
@@ -26,6 +29,7 @@ type TaskState = {
   summary: TaskSummaryView | null;
   cards: TaskCardsView | null;
   materials: TaskMaterialsView | null;
+  frames: TaskFramesView | null;
   error: string;
   /** The card being picked, while its op is in flight. */
   picking: string;
@@ -33,8 +37,19 @@ type TaskState = {
   pickError: string;
   /** A pick that outlived its bounded wait, still running in the executor. */
   pickNotice: string;
+  /** The material being framed, while its write is in flight. */
+  framing: string;
+  /** Why the last frame failed, in the reader's words. */
+  frameError: string;
+  /** What the last frame changed: saved, or an approval was cleared. */
+  frameNotice: string;
   load: () => Promise<void>;
   pick: (cardId: string, expectedRev: number) => Promise<void>;
+  frame: (
+    docId: string,
+    blocks: string[],
+    expectedRev: number,
+  ) => Promise<void>;
   reset: () => void;
 };
 
@@ -46,22 +61,27 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   summary: null,
   cards: null,
   materials: null,
+  frames: null,
   error: "",
   picking: "",
   pickError: "",
   pickNotice: "",
+  framing: "",
+  frameError: "",
+  frameNotice: "",
 
   load: async () => {
     const mine = ++generation;
     set({ status: "loading", error: "" });
     try {
-      const [summary, cards, materials] = await Promise.all([
+      const [summary, cards, materials, frames] = await Promise.all([
         fetchTaskSummary(),
         fetchTaskCards(),
         fetchTaskMaterials(),
+        fetchTaskFrames(),
       ]);
       if (mine !== generation) return;
-      set({ status: "ready", summary, cards, materials });
+      set({ status: "ready", summary, cards, materials, frames });
     } catch (reason) {
       if (mine !== generation) return;
       set({
@@ -94,6 +114,30 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  frame: async (docId, blocks, expectedRev) => {
+    set({ framing: docId, frameError: "", frameNotice: "" });
+    try {
+      const result = await frameTaskMaterial(docId, blocks, expectedRev);
+      set({
+        framing: "",
+        // The frame replaced the writing basis. If an approval stood on the
+        // old one, the reader is told it no longer covers what would be written.
+        frameNotice: result.approvalCleared
+          ? i18n.t("task.approvalInvalidated")
+          : i18n.t("task.frameSaved"),
+      });
+      await get().load();
+    } catch (reason) {
+      set({
+        framing: "",
+        frameError: errorMessage(reason, i18n.t("task.frameFailed")),
+      });
+      if (reason instanceof ApiError && reason.code === "conflict") {
+        await get().load();
+      }
+    }
+  },
+
   reset: () => {
     generation += 1;
     set({
@@ -101,10 +145,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       summary: null,
       cards: null,
       materials: null,
+      frames: null,
       error: "",
       picking: "",
       pickError: "",
       pickNotice: "",
+      framing: "",
+      frameError: "",
+      frameNotice: "",
     });
   },
 }));

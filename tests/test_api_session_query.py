@@ -297,12 +297,19 @@ class DefaultToolTests(unittest.TestCase):
             layout = ProjectLayout(Path(tmp))
             tools = session_tools(AppDeps(sessions=None), layout)
 
-        # The wiki's two read tools, then the writing task's search, pick and
-        # bounded read. The order is also the toolset fingerprint a resume
-        # records, so it is asserted rather than left to sort itself out.
+        # The wiki's two read tools, then the writing task's search, pick,
+        # frame and bounded read. The order is also the toolset fingerprint a
+        # resume records, so it is asserted rather than left to sort itself out.
         self.assertEqual(
             [tool.name for tool in tools.enabled()],
-            ["wiki_read", "search", "web_search", "pick_card", "inspect"],
+            [
+                "wiki_read",
+                "search",
+                "web_search",
+                "pick_card",
+                "frame_blocks",
+                "inspect",
+            ],
         )
         # The model names a query and nothing else; the observed revision is
         # attached by the wrapper, not guessed by the model.
@@ -320,10 +327,17 @@ class DefaultToolTests(unittest.TestCase):
         # The registry wall clock sits above the bounded wait, or a slow fetch
         # would be reported as a registry timeout instead of requested/running.
         self.assertGreater(pick.timeout_s, 90.0)
+        # A frame is pure task state, applied by the tool itself: the task
+        # contract calls that a local write, not a read and not the network.
+        frame = tools.require("frame_blocks")
+        self.assertEqual(set(frame.parameters["properties"]), {"docId", "blocks"})
+        self.assertEqual(frame.parameters["required"], ["docId", "blocks"])
+        self.assertFalse(frame.parameters["additionalProperties"])
+        self.assertEqual(frame.side_effect, "write")
         inspect = tools.require("inspect")
         self.assertEqual(
             inspect.parameters["properties"]["view"]["enum"],
-            ["summary", "cards", "materials"],
+            ["summary", "cards", "materials", "frames"],
         )
         self.assertEqual(inspect.side_effect, "read")
 

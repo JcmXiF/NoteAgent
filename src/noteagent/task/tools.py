@@ -23,12 +23,19 @@ from noteagent.task.model import (
     MAX_VIEW_CARDS,
     MAX_VIEW_MATERIALS,
     Card,
+    Frame,
     material_summary,
 )
-from noteagent.task.service import PickOutcome, SearchOutcome, TaskService
+from noteagent.task.service import (
+    FrameOutcome,
+    PickOutcome,
+    SearchOutcome,
+    TaskService,
+)
 
 WEB_SEARCH = "web_search"
 PICK_CARD = "pick_card"
+FRAME_BLOCKS = "frame_blocks"
 INSPECT = "inspect"
 
 _WEB_SEARCH_DESCRIPTION = (
@@ -44,12 +51,21 @@ _PICK_CARD_DESCRIPTION = (
     "block index afterwards. If the task changed since your last look, call "
     "inspect before picking."
 )
+_FRAME_BLOCKS_DESCRIPTION = (
+    "Mark blocks of one material as the basis for writing: draw a frame. The "
+    "blocks must be ids of that material, as inspect(\"materials\") shows them. "
+    "Drawing a frame again replaces its blocks. Returns the frame and the task "
+    "revision. A frame change invalidates any approval the person had given, so "
+    "ask for approval again afterwards. If the task changed since your last "
+    "look, call inspect before drawing."
+)
 _INSPECT_DESCRIPTION = (
     "Read a bounded view of the current writing task. `summary` says what the "
     "task is and how much it holds; `cards` lists the resource cards collected "
     "so far; `materials` lists the staged materials with an id/preview index of "
-    "their blocks. Returns the view and the task revision. Call it after a "
-    "conflict, before deciding what to do next."
+    "their blocks; `frames` lists the frames drawn so far, with their material, "
+    "source and block ids/previews. Returns the view and the task revision. Call "
+    "it after a conflict, before deciding what to do next."
 )
 
 WEB_SEARCH_PARAMETERS = {
@@ -82,12 +98,38 @@ PICK_CARD_PARAMETERS = {
     "additionalProperties": False,
 }
 
+FRAME_BLOCKS_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "docId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"\S",
+            "description": (
+                "The id of a material the task holds, as inspect(materials) "
+                "shows it"
+            ),
+        },
+        "blocks": {
+            "type": "array",
+            "items": {"type": "string", "pattern": r"\S"},
+            "description": (
+                "Block ids of that material, as inspect(materials) shows them. "
+                "At least one is required."
+            ),
+        },
+    },
+    "required": ["docId", "blocks"],
+    "additionalProperties": False,
+}
+
+
 INSPECT_PARAMETERS = {
     "type": "object",
     "properties": {
         "view": {
             "type": "string",
-            "enum": ["summary", "cards", "materials"],
+            "enum": ["summary", "cards", "materials", "frames"],
             "description": "Which bounded view of the writing task to read",
         }
     },
@@ -131,6 +173,22 @@ def task_tools(service: TaskService) -> tuple[ToolSpec, ...]:
             ),
             handler=_pick_handler(service),
             argument_hint="cardId",
+        ),
+        ToolSpec(
+            name=FRAME_BLOCKS,
+            description=_FRAME_BLOCKS_DESCRIPTION,
+            parameters=FRAME_BLOCKS_PARAMETERS,
+            # It writes the task file, not the web and not a wiki: the tool
+            # contract has its own word for a local state write.
+            side_effect="write",
+            timeout_s=10.0,
+            output_limits=OutputLimits(
+                max_items=1,
+                max_chars_per_item=MAX_CARD_SNIPPET + 2_000,
+                max_chars_total=8_000,
+            ),
+            handler=_frame_handler(service),
+            argument_hint="docId",
         ),
         ToolSpec(
             name=INSPECT,
@@ -220,6 +278,30 @@ def _pick_handler(service: TaskService):
     return pick
 
 
+def _frame_handler(service: TaskService):
+    def frame(
+        arguments: Mapping[str, object], context: ToolContext
+    ) -> ToolResult:
+        doc_id = str(arguments["docId"]).strip()
+        raw = arguments.get("blocks")
+        blocks = list(raw) if isinstance(raw, list) else []
+        outcome = service.frame(
+            doc_id,
+            blocks,
+            session_id=context.session_id,
+        )
+        return ToolResult(
+            content=_render_frame(outcome),
+            meta={
+                "title": outcome.doc_id,
+                "rev": outcome.rev,
+                "frames": [_frame_summary(outcome.frame)],
+            },
+        )
+
+    return frame
+
+
 def _inspect_handler(service: TaskService):
     def inspect(
         arguments: Mapping[str, object], context: ToolContext
@@ -241,6 +323,16 @@ def _inspect_handler(service: TaskService):
                 else []
             )
             meta["materials"] = [material_summary(item) for item in rows]
+            meta["hits"] = len(rows)
+        if view == "frames":
+            frames = payload.get("frames")
+            rows = (
+                [dict(item) for item in frames if isinstance(item, Mapping)]
+                if isinstance(frames, list)
+                else []
+            )
+            # The view is already bounded; the card reads the same shape.
+            meta["frames"] = rows
             meta["hits"] = len(rows)
         return ToolResult(content=_render_view(view, payload), meta=meta)
 
@@ -271,6 +363,43 @@ def _render_running(outcome: SearchOutcome) -> str:
         f"(task rev {outcome.rev}). Call inspect(\"cards\") later; do not start "
         "it again."
     )
+
+
+def _render_frame(outcome: FrameOutcome) -> str:
+    frame = outcome.frame
+    shown = frame.blocks[:MAX_VIEW_BLOCKS]
+    lines = [
+        f"Task rev {outcome.rev}. Frame [{frame.id}] on material "
+        f'"{frame.doc_id}" now covers {len(frame.blocks)} block(s), '
+        f"source={frame.source}:",
+    ]
+    lines.extend(f"   - [{block}]" for block in shown)
+    if len(frame.blocks) > len(shown):
+        lines.append(
+            f"{len(frame.blocks) - len(shown)} more block(s) omitted from this "
+            "result; call inspect(\"frames\") to read the frame."
+        )
+    if outcome.approval_cleared:
+        lines.append(
+            "The previous approval was cleared: this frame changed the writing "
+            "basis, so the person must approve again before compose_page."
+        )
+    return "\n".join(lines)
+
+
+def _frame_summary(frame: Frame) -> dict[str, object]:
+    """A frame as an event card reads it: identity, source and size."""
+    return {
+        "id": frame.id,
+        "docId": frame.doc_id,
+        "source": frame.source,
+        "blocks": [_block_ref(block) for block in frame.blocks[:MAX_VIEW_BLOCKS]],
+        "blockCount": len(frame.blocks),
+    }
+
+
+def _block_ref(block_id: str) -> dict[str, object]:
+    return {"id": block_id}
 
 
 def _render_picked(
@@ -320,9 +449,22 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
         ]
         if intent:
             lines.append(f"intent: {intent}")
+        approval = payload.get("approval")
+        if isinstance(approval, Mapping):
+            lines.append(
+                "approval: frame {frame} by {by} at rev {rev}.".format(
+                    frame=approval.get("frameId", ""),
+                    by=approval.get("by", ""),
+                    rev=approval.get("rev", ""),
+                )
+            )
+        else:
+            lines.append("approval: none.")
         return "\n".join(lines)
     if view == "materials":
         return _render_materials(rev, payload)
+    if view == "frames":
+        return _render_frames(rev, payload)
     cards = payload.get("cards")
     shown = [item for item in cards if isinstance(item, Mapping)] if isinstance(cards, list) else []
     if not shown:
@@ -400,6 +542,50 @@ def _render_materials(rev: object, payload: Mapping[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _render_frames(rev: object, payload: Mapping[str, object]) -> str:
+    raw = payload.get("frames")
+    rows = (
+        [item for item in raw if isinstance(item, Mapping)]
+        if isinstance(raw, list)
+        else []
+    )
+    if not rows:
+        return f"Task rev {rev}. No frames yet."
+    omitted = payload.get("omitted")
+    header = f"Task rev {rev}. {len(rows)} frame(s)"
+    if isinstance(omitted, int) and omitted > 0:
+        header += f" ({omitted} more omitted)"
+    lines = [header + ":"]
+    for index, frame in enumerate(rows, 1):
+        blocks = frame.get("blocks")
+        shown = (
+            [item for item in blocks if isinstance(item, Mapping)]
+            if isinstance(blocks, list)
+            else []
+        )
+        lines.append(
+            '{index}. [{id}] on "{doc}" source={source} '
+            "{count} block(s):".format(
+                index=index,
+                id=frame.get("id", ""),
+                doc=frame.get("docId", ""),
+                source=frame.get("source", ""),
+                count=frame.get("blockCount", 0),
+            )
+        )
+        for block in shown:
+            lines.append(
+                "   - [{id}] {preview}".format(
+                    id=block.get("id", ""),
+                    preview=block.get("preview", ""),
+                )
+            )
+        more = frame.get("blocksOmitted")
+        if isinstance(more, int) and more > 0:
+            lines.append(f"   ({more} more block(s) beyond this view)")
+    return "\n".join(lines)
+
+
 def _card_payload(card: Card) -> dict[str, object]:
     return {
         "id": card.id,
@@ -420,6 +606,8 @@ def _host(url: str) -> str:
 
 
 __all__ = [
+    "FRAME_BLOCKS",
+    "FRAME_BLOCKS_PARAMETERS",
     "INSPECT",
     "INSPECT_PARAMETERS",
     "PICK_CARD",

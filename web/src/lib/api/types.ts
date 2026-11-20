@@ -436,6 +436,14 @@ export type TaskCard = {
   site?: string;
 };
 
+/** The go-ahead a person gave, in the bounded shape a summary carries. */
+export type TaskApprovalSummary = {
+  frameId: string;
+  rev: number;
+  by: string;
+  at: string;
+};
+
 /** The task as metadata: what it is, how much it holds, and its revision. */
 export type TaskSummaryView = {
   view: "summary";
@@ -446,6 +454,8 @@ export type TaskSummaryView = {
   status: string;
   updatedAt: string;
   counts: { cards: number; materials: number; frames: number };
+  /** The approval that still stands, or null when the task has none. */
+  approval: TaskApprovalSummary | null;
 };
 
 /** A bounded list of the cards the task has collected. */
@@ -475,6 +485,40 @@ export type TaskPickResult = {
   status: string;
   rev: number;
   material?: TaskMaterial;
+};
+
+/** One frame of the task, with a bounded list of the blocks it covers. */
+export type TaskFrame = {
+  id: string;
+  docId: string;
+  source: string;
+  blockCount: number;
+  blocks?: { id: string; preview?: string }[];
+  blocksOmitted?: number;
+};
+
+/** A bounded list of the frames the task holds. */
+export type TaskFramesView = {
+  view: "frames";
+  rev: number;
+  frames: TaskFrame[];
+  /** Frames beyond the view's bound. */
+  omitted: number;
+};
+
+/** What a person's frame answers with: the frame, its rev, and the approval. */
+export type TaskFrameResult = {
+  opId: string;
+  status: string;
+  rev: number;
+  /** Whether this frame write cleared a standing approval. */
+  approvalCleared: boolean;
+  frame: {
+    id: string;
+    docId: string;
+    blocks: string[];
+    source: string;
+  };
 };
 
 /* ----------------------------------------------------------------- Sessions */

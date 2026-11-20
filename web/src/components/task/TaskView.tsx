@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import type { TaskFrame } from "@/lib/api/types";
 import { useTaskStore } from "@/stores/task-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
@@ -17,12 +18,17 @@ export function TaskView() {
   const summary = useTaskStore((state) => state.summary);
   const cards = useTaskStore((state) => state.cards);
   const materials = useTaskStore((state) => state.materials);
+  const frames = useTaskStore((state) => state.frames);
   const error = useTaskStore((state) => state.error);
   const picking = useTaskStore((state) => state.picking);
   const pickError = useTaskStore((state) => state.pickError);
   const pickNotice = useTaskStore((state) => state.pickNotice);
+  const framing = useTaskStore((state) => state.framing);
+  const frameError = useTaskStore((state) => state.frameError);
+  const frameNotice = useTaskStore((state) => state.frameNotice);
   const load = useTaskStore((state) => state.load);
   const pick = useTaskStore((state) => state.pick);
+  const frame = useTaskStore((state) => state.frame);
   const reset = useTaskStore((state) => state.reset);
   const project = useWorkspaceStore((state) => state.current);
 
@@ -73,6 +79,18 @@ export function TaskView() {
           {t("task.cards", { count: summary.counts.cards })}
         </span>
       </div>
+      {/* The go-ahead that stands, or the fact that none does. A frame change
+          clears it, so this line is where the reader sees that it is gone. */}
+      <p className="mt-0.5 text-[10px] text-muted-foreground">
+        {summary.approval
+          ? t("task.approved", {
+              by: t(`task.source.${summary.approval.by}`, {
+                defaultValue: summary.approval.by,
+              }),
+              rev: summary.approval.rev,
+            })
+          : t("task.noApproval")}
+      </p>
       {shown.length > 0 ? (
         <ul className="mt-1 flex flex-col gap-0.5">
           {shown.map((card) => (
@@ -133,22 +151,16 @@ export function TaskView() {
                   {material.state} · {material.fidelity} ·{" "}
                   {t("task.blocks", { count: material.blockCount })}
                 </span>
-                {(material.blocks ?? []).length > 0 ? (
-                  <ul className="mt-0.5 flex flex-col gap-px">
-                    {(material.blocks ?? []).slice(0, 6).map((block) => (
-                      <li
-                        key={block.id}
-                        className="truncate text-[10px] text-muted-foreground"
-                        title={block.preview}
-                      >
-                        <span className="text-foreground/70">
-                          [{block.id}]
-                        </span>{" "}
-                        {block.preview}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
+                <FrameEditor
+                  materialId={material.id}
+                  blocks={material.blocks ?? []}
+                  frame={(frames?.frames ?? []).find(
+                    (item) => item.docId === material.id,
+                  )}
+                  rev={frames?.rev ?? summary.rev}
+                  busy={framing === material.id}
+                  onSave={frame}
+                />
                 {(material.blocksOmitted ?? 0) > 0 ? (
                   <span className="block text-[10px] text-muted-foreground">
                     {t("task.moreBlocks", {
@@ -161,6 +173,154 @@ export function TaskView() {
           </ul>
         </div>
       ) : null}
+      {frameNotice ? (
+        <p role="status" className="mt-1 text-muted-foreground">
+          {frameNotice}
+        </p>
+      ) : null}
+      {frameError ? (
+        <p role="alert" className="mt-1 text-destructive">
+          {frameError}
+        </p>
+      ) : null}
+      <FrameList frames={frames} />
+    </div>
+  );
+}
+
+/**
+ * The task's frames, and who drew each one.
+ *
+ * A frame is the writing basis the agent reads; this is the reader's view of
+ * it. The block previews are the bounded ones the core sends, never full text.
+ */
+function FrameList({
+  frames,
+}: {
+  frames: ReturnType<typeof useTaskStore.getState>["frames"];
+}) {
+  const { t } = useTranslation();
+  const shown = frames?.frames ?? [];
+  return (
+    <div className="mt-2 border-t pt-1.5">
+      <p className="font-medium">{t("task.frames", { count: shown.length })}</p>
+      {shown.length > 0 ? (
+        <ul className="mt-1 flex flex-col gap-1">
+          {shown.map((frame) => (
+            <li key={frame.id} className="min-w-0">
+              <span className="block truncate text-foreground">
+                {frame.docId}
+              </span>
+              <span className="block text-[10px] text-muted-foreground">
+                {t("task.frameSource", {
+                  source: t(`task.source.${frame.source}`, {
+                    defaultValue: frame.source,
+                  }),
+                })}{" "}
+                · {t("task.blocks", { count: frame.blockCount })}
+              </span>
+              {(frame.blocks ?? []).length > 0 ? (
+                <ul className="mt-0.5 flex flex-col gap-px">
+                  {(frame.blocks ?? []).slice(0, 6).map((block) => (
+                    <li
+                      key={block.id}
+                      className="truncate text-[10px] text-muted-foreground"
+                      title={block.preview}
+                    >
+                      <span className="text-foreground/70">[{block.id}]</span>{" "}
+                      {block.preview}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {(frame.blocksOmitted ?? 0) > 0 ? (
+                <span className="block text-[10px] text-muted-foreground">
+                  {t("task.frameMore", { count: frame.blocksOmitted ?? 0 })}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-muted-foreground">{t("task.framesEmpty")}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Tick the blocks one material contributes.
+ *
+ * The current frame starts ticked, so adding or removing a block is one tick
+ * and one save. A frame may name blocks past this view's bounded index; those
+ * stay ticked and are saved back, and the count says how many they are.
+ */
+function FrameEditor({
+  materialId,
+  blocks,
+  frame,
+  rev,
+  busy,
+  onSave,
+}: {
+  materialId: string;
+  blocks: { id: string; preview?: string }[];
+  frame?: TaskFrame;
+  rev: number;
+  busy: boolean;
+  onSave: (docId: string, blocks: string[], expectedRev: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [picked, setPicked] = useState<string[]>([]);
+  useEffect(() => {
+    setPicked((frame?.blocks ?? []).map((block) => block.id));
+  }, [frame, materialId]);
+  if (blocks.length === 0) return null;
+  const inView = new Set(blocks.map((block) => block.id));
+  const beyond = picked.filter((id) => !inView.has(id));
+  const toggle = (id: string) =>
+    setPicked((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  return (
+    <div className="mt-1 border-t border-dashed pt-1">
+      <p className="text-[10px] text-muted-foreground">
+        {t("task.frameHint")}
+      </p>
+      <ul className="mt-0.5 flex flex-col gap-px">
+        {blocks.map((block) => (
+          <li key={block.id}>
+            <label className="flex items-start gap-1 text-[10px] text-muted-foreground">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-3 shrink-0"
+                checked={picked.includes(block.id)}
+                onChange={() => toggle(block.id)}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="text-foreground/70">[{block.id}]</span>{" "}
+                {block.preview ?? ""}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {beyond.length > 0 ? (
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          {t("task.frameMore", { count: beyond.length })}
+        </p>
+      ) : null}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mt-1 h-5 px-1.5"
+        disabled={busy || picked.length === 0}
+        onClick={() => onSave(materialId, picked, rev)}
+      >
+        {busy ? t("task.framing") : t("task.frameSave")}
+      </Button>
     </div>
   );
 }

@@ -104,6 +104,65 @@ describe("the cards beside an answer", () => {
     expect(host.textContent).not.toContain("block-1");
   });
 
+  it("draws a frame as the material it marks and how much it covers", async () => {
+    await draw([
+      {
+        tool: "frame_blocks",
+        title: "raw/web/entropy-a1.html",
+        rev: 3,
+        frames: [
+          {
+            id: "frame-1",
+            docId: "raw/web/entropy-a1.html",
+            source: "agent",
+            blockCount: 2,
+            blocks: [{ id: "b1" }, { id: "b2" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(host.textContent).toContain("raw/web/entropy-a1.html");
+    expect(host.textContent).toContain(
+      i18n.t("chat.looked.blocks", { count: 2 }),
+    );
+    // A card says how much the frame covers, not which block ids it names.
+    expect(host.textContent).not.toContain("b1");
+  });
+
+  it("draws every frame an inspect returned", async () => {
+    await draw([
+      {
+        tool: "inspect",
+        title: "writing task frames",
+        rev: 4,
+        hits: 2,
+        frames: [
+          {
+            id: "frame-1",
+            docId: "raw/web/entropy-a1.html",
+            source: "human",
+            blockCount: 1,
+            blocks: [{ id: "b1", preview: "熵衡量不确定性。" }],
+          },
+          {
+            id: "frame-2",
+            docId: "raw/web/information-a1.html",
+            source: "agent",
+            blockCount: 3,
+            blocks: [],
+          },
+        ],
+      },
+    ]);
+
+    expect(host.textContent).toContain("raw/web/entropy-a1.html");
+    expect(host.textContent).toContain("raw/web/information-a1.html");
+    expect(host.textContent).toContain(
+      i18n.t("chat.looked.blocks", { count: 3 }),
+    );
+  });
+
   it("says when a pick is still fetching", async () => {
     await draw([
       {

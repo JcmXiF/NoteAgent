@@ -371,6 +371,21 @@ export type ObservedMaterial = {
 };
 
 /**
+ * One frame the assistant drew or inspected.
+ *
+ * A frame says which material it marks, who drew it, and how many of that
+ * material's passages it covers. The block previews are bounded by the core;
+ * a card reads the count, not the ids.
+ */
+export type ObservedFrame = {
+  id: string;
+  docId: string;
+  source: string;
+  blockCount: number;
+  blocks?: { id: string; preview?: string }[];
+};
+
+/**
  * One thing the assistant looked at.
  *
  * The shape is the core's: `tool` and `target` say what was touched and `title`
@@ -419,6 +434,8 @@ export type ObservationPayload = {
   }[];
   /** The materials a pick or an inspect("materials") touched. */
   materials?: ObservedMaterial[];
+  /** The frames a frame_blocks call or an inspect("frames") touched. */
+  frames?: ObservedFrame[];
   /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
   diagnostics?: { severity: string; code: string; message: string }[];
 };

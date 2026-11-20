@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from threading import Event, Lock
@@ -35,6 +35,7 @@ from noteagent.task.model import (
     TASK_VIEWS,
     Card,
     FetchFn,
+    Frame,
     Op,
     SearchCard,
     SearchFn,
@@ -83,6 +84,13 @@ class TaskNotFound(TaskToolError):
         super().__init__(message, code="not_found")
 
 
+class TaskBadSpec(TaskToolError):
+    """A frame or a writing spec names something that does not fit the task."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="bad_spec")
+
+
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
     """What a tool gets back from a search: cards, or where the op stands."""
@@ -103,6 +111,19 @@ class PickOutcome:
     status: str
     rev: int
     material: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameOutcome:
+    """What a tool or a route gets back from drawing a frame."""
+
+    op_id: str
+    doc_id: str
+    status: str
+    rev: int
+    frame: Frame
+    #: Whether this frame write cleared an approval the person had given.
+    approval_cleared: bool = False
 
 
 class TaskRegistry:
@@ -297,6 +318,144 @@ class TaskService:
                 {},
             )
         return PickOutcome(op_id, cleaned, observed.status, observed.rev, material)
+
+    def frame(
+        self,
+        doc_id: str,
+        blocks: Sequence[object],
+        *,
+        session_id: str = "",
+        expected_rev: int | None = None,
+        actor: str = "agent",
+    ) -> FrameOutcome:
+        """Draw a frame on one material and write it straight into the task.
+
+        A frame is pure state: no node runs behind it, so it is applied and
+        logged under the task's single writer rather than spawned. The op is
+        written with status ``done``, the revision moves once, and any approval
+        the person had given is cleared because the writing basis changed.
+        """
+        cleaned_doc = (doc_id or "").strip()
+        if not cleaned_doc:
+            raise TaskBadSpec("a frame names the material it is drawn on")
+        if actor not in ("agent", "human"):
+            raise ValueError(f"unknown frame actor: {actor!r}")
+        if actor == "human" and expected_rev is None:
+            raise ValueError("a human frame names the revision it saw")
+        wanted: list[str] = []
+        for item in blocks:
+            block = item.strip() if isinstance(item, str) else ""
+            if not block:
+                raise TaskBadSpec(
+                    "a frame lists block ids, and one of them is blank or not "
+                    "a string"
+                )
+            if block not in wanted:
+                wanted.append(block)
+        if not wanted:
+            raise TaskBadSpec("a frame needs at least one block id")
+        expected = (
+            expected_rev
+            if expected_rev is not None
+            else self._registry.observed(self._project_key, session_id)
+        )
+        op_id = self._ids.new_id("op")
+        now = iso_timestamp(self._clock)
+        with self._writing():
+            task = self._store.load() or self._create_locked()
+            # A session that has not read the task yet names no revision; the
+            # first mutation is accepted at the revision the task is at.
+            expected = task.rev if expected is None else expected
+            if expected != task.rev:
+                raise TaskConflict(
+                    "the writing task changed since this session last saw it "
+                    f"(expected rev {expected}, now rev {task.rev}). "
+                    "Do not retry blindly; call inspect and decide again."
+                )
+            material = next(
+                (
+                    item
+                    for item in task.materials
+                    if _text(item.get("id")) == cleaned_doc
+                ),
+                None,
+            )
+            if material is None:
+                raise TaskNotFound(
+                    f"the writing task has no material {cleaned_doc!r}. Do not "
+                    'retry blindly; call inspect("materials") for the ids it '
+                    "holds."
+                )
+            known = _material_block_ids(material)
+            unknown = [block for block in wanted if block not in known]
+            if unknown:
+                shown = ", ".join(repr(block) for block in unknown[:5])
+                raise TaskBadSpec(
+                    f"block(s) {shown} do not belong to material "
+                    f"{cleaned_doc!r}. Do not retry blindly; call "
+                    'inspect("materials") for the ids it holds.'
+                )
+            order = {block: index for index, block in enumerate(known)}
+            ordered = tuple(sorted(wanted, key=order.__getitem__))
+            existing = next(
+                (
+                    frame
+                    for frame in task.frames
+                    if frame.doc_id == cleaned_doc
+                ),
+                None,
+            )
+            frame = Frame(
+                id=existing.id
+                if existing is not None
+                else self._ids.new_id("frame"),
+                doc_id=cleaned_doc,
+                blocks=ordered,
+                source=actor,
+            )
+            frames = tuple(
+                frame if item.doc_id == cleaned_doc else item
+                for item in task.frames
+            )
+            if existing is None:
+                frames = frames + (frame,)
+            # Any frame write changes the writing basis, so a person's earlier
+            # go-ahead no longer covers what would be written.
+            approval_cleared = task.approval is not None
+            op = Op(
+                id=op_id,
+                kind="frame",
+                actor=actor,  # type: ignore[arg-type]
+                status="done",
+                input={"docId": cleaned_doc, "blocks": list(wanted)},
+                expected_rev=expected,
+                created_at=now,
+                updated_at=now,
+                result={
+                    "frameId": frame.id,
+                    "docId": cleaned_doc,
+                    "blocks": list(ordered),
+                    "approvalCleared": approval_cleared,
+                },
+            )
+            saved = replace(
+                task,
+                frames=frames,
+                ops=task.ops + (op,),
+                approval=None if approval_cleared else task.approval,
+                rev=task.rev + 1,
+                updated_at=now,
+            )
+            self._store.save(saved)
+            self._registry.observe(self._project_key, session_id, saved.rev)
+        return FrameOutcome(
+            op_id=op_id,
+            doc_id=cleaned_doc,
+            status="done",
+            rev=saved.rev,
+            frame=frame,
+            approval_cleared=approval_cleared,
+        )
 
     def _request(
         self,
@@ -584,9 +743,16 @@ def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
     """The task's record of one staged material, with a bounded block index.
 
     The source text stays in the staging area. What the task keeps is the
-    identity and the id/preview pairs a frame will name later.
+    identity and the id/preview pairs a frame will name later. ``blockIds`` is
+    the full identity list: a view is bounded, but a frame may name any block
+    of the material, including one past the preview cut.
     """
     material = staged.material.strip()
+    block_ids = list(
+        dict.fromkeys(
+            block.id.strip() for block in staged.blocks if block.id.strip()
+        )
+    )
     blocks = tuple(staged.blocks[:MAX_VIEW_BLOCKS])
     count = max(staged.block_count, len(staged.blocks))
     return {
@@ -598,6 +764,7 @@ def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
         "state": staged.state.strip() or "staged",
         "runId": run_id,
         "blockCount": count,
+        "blockIds": block_ids,
         "blocks": [
             {
                 "id": block.id.strip(),
@@ -608,6 +775,32 @@ def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
             if block.id.strip()
         ],
     }
+
+
+def _material_block_ids(material: Mapping[str, object]) -> list[str]:
+    """Every block id a frame may name, in document order.
+
+    Newer task files carry the full ``blockIds`` list. An older or hand-seeded
+    material only has the bounded preview index, so that is the fallback.
+    """
+    ids: list[str] = []
+    raw = material.get("blockIds")
+    if isinstance(raw, list):
+        for item in raw:
+            block = item.strip() if isinstance(item, str) else ""
+            if block and block not in ids:
+                ids.append(block)
+    if ids:
+        return ids
+    raw_blocks = material.get("blocks")
+    if isinstance(raw_blocks, list):
+        for item in raw_blocks:
+            if not isinstance(item, Mapping):
+                continue
+            block = _text(item.get("id"))
+            if block and block not in ids:
+                ids.append(block)
+    return ids
 
 
 def _upsert_material(
@@ -644,8 +837,10 @@ __all__ = [
     "DEFAULT_PICK_WAIT_S",
     "DEFAULT_POLL_S",
     "DEFAULT_WAIT_S",
+    "FrameOutcome",
     "PickOutcome",
     "SearchOutcome",
+    "TaskBadSpec",
     "TaskConflict",
     "TaskNotFound",
     "TaskOpFailed",

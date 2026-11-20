@@ -23,8 +23,12 @@ from noteagent.agent.model import ToolCall
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
-#: What a call is allowed to touch.
-SideEffect: TypeAlias = Literal["read", "network", "human"]
+#: What a call is allowed to touch. ``write`` is local state written by the
+#: core itself (the writing task), never the web and never a wiki page.
+SideEffect: TypeAlias = Literal["read", "network", "human", "write"]
+
+#: The side effects the contract knows; a spec outside this set is refused.
+SIDE_EFFECTS: tuple[SideEffect, ...] = ("read", "network", "human", "write")
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -62,6 +66,9 @@ OBSERVATION_FIELDS = (
     # A writing-task material (or several), with its identity and state; the
     # block index is a reader's view, not a chat card's payload.
     "materials",
+    # A writing-task frame (or several): which material, who drew it, and how
+    # many blocks it covers. The block previews stay in the bounded view.
+    "frames",
 )
 
 
@@ -146,6 +153,10 @@ class ToolSpec:
     output_limits: OutputLimits = field(default_factory=OutputLimits)
     enabled: bool = True
     argument_hint: str = ""
+
+    def __post_init__(self) -> None:
+        if self.side_effect not in SIDE_EFFECTS:
+            raise ValueError(f"unknown tool side effect: {self.side_effect!r}")
 
 
 class UnknownToolError(LookupError):

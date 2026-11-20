@@ -229,6 +229,43 @@ class ObservationTests(unittest.TestCase):
             },
         )
 
+    def test_a_frame_result_passes_its_frames_and_revision_but_not_the_task(self) -> None:
+        result = ToolResult(
+            content="frames stay with the model",
+            meta={
+                "rev": 4,
+                "frames": [
+                    {
+                        "id": "frame-1",
+                        "docId": "raw/web/entropy.html",
+                        "source": "human",
+                        "blockCount": 2,
+                    }
+                ],
+                "blockIds": ["b1", "b2"],
+                "ops": [{"id": "op-1"}],
+                "expectedRev": 3,
+            },
+        )
+
+        card = result.observation("inspect")
+
+        self.assertEqual(
+            card,
+            {
+                "tool": "inspect",
+                "rev": 4,
+                "frames": [
+                    {
+                        "id": "frame-1",
+                        "docId": "raw/web/entropy.html",
+                        "source": "human",
+                        "blockCount": 2,
+                    }
+                ],
+            },
+        )
+
 
 class ParallelDispatchTests(unittest.TestCase):
     def test_calls_in_one_batch_run_at_the_same_time_and_keep_their_order(self) -> None:
