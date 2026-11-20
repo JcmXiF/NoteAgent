@@ -231,6 +231,23 @@ class ApproveOutcome:
     approval: Approval | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class EditOutcome:
+    """What a person's recorded page save leaves behind.
+
+    The page write itself is the editor's; this is only the task's record of it,
+    the revision it moved to, and whether a standing approval or a pending write
+    request was cleared because the writing basis changed.
+    """
+
+    op_id: str
+    path: str
+    revision: str
+    rev: int
+    approval_cleared: bool = False
+    request_cleared: bool = False
+
+
 class TaskRegistry:
     """The task's process-wide single writer and what each session has seen.
 
@@ -360,21 +377,33 @@ class TaskService:
         *,
         session_id: str = "",
         cancel: Event | None = None,
+        actor: str = "agent",
+        expected_rev: int | None = None,
     ) -> SearchOutcome:
         """Write a ``search`` op, run the node behind it, and wait at most N s.
 
-        The op is accepted only at the revision this session last saw. A stale
-        observation is refused before anything is written.
+        The agent's wrapper names the revision its session last saw; a person's
+        route names the revision of the card view they searched from, so a task
+        that moved since then is a ``conflict`` rather than a search over it.
         """
         cleaned = " ".join(query.split())
         if not cleaned:
             raise ValueError("a search needs a query")
-        expected = self._registry.observed(self._project_key, session_id)
+        if actor not in ("agent", "human"):
+            raise ValueError(f"unknown search actor: {actor!r}")
+        if actor == "human" and expected_rev is None:
+            raise ValueError("a human search names the revision it saw")
+        expected = (
+            expected_rev
+            if expected_rev is not None
+            else self._registry.observed(self._project_key, session_id)
+        )
         op_id = self._request(
             kind="search",
-            actor="agent",
+            actor=actor,
             # The session travels on the op so the executor can resume it when
             # the search finishes after this tool has handed the turn back.
+            # A person's search has no session: there is nothing to resume.
             input={"query": cleaned, "sessionId": session_id},
             expected_rev=expected,
             session_id=session_id,
@@ -609,6 +638,72 @@ class TaskService:
             rev=saved.rev,
             frame=frame,
             approval_cleared=approval_cleared,
+        )
+
+    def record_page_edit(
+        self, path: str, revision: str = ""
+    ) -> EditOutcome:
+        """Record a person's real page save as a terminal human ``edit`` op.
+
+        The page's own save has already succeeded when this runs: this is a
+        record, not a second write, so it never touches the page or the task's
+        ``result`` (which is the agent's last page write). Under the task's
+        writer lock it moves the revision and clears a standing approval or a
+        pending write request, because the page a later write would compose is
+        no longer the one the person approved. The op is appended as ``done``:
+        there is no node behind it and no executor claims it.
+        """
+        cleaned = (path or "").strip()
+        if not cleaned:
+            raise ValueError("a page edit names the page")
+        digest = (revision or "").strip()
+        op_id = self._ids.new_id("op")
+        now = iso_timestamp(self._clock)
+        with self._writing():
+            task = self._store.load() or self._create_locked()
+            approval_cleared = task.approval is not None
+            request_cleared = task.request is not None
+            op = Op(
+                id=op_id,
+                kind="edit",
+                actor="human",
+                status="done",
+                input={"path": cleaned[:500], "revision": digest[:120]},
+                expected_rev=task.rev,
+                created_at=now,
+                updated_at=now,
+                result={
+                    "path": cleaned[:500],
+                    "revision": digest[:120],
+                    "approvalCleared": approval_cleared,
+                    "requestCleared": request_cleared,
+                },
+            )
+            saved = replace(
+                task,
+                ops=task.ops + (op,),
+                approval=None,
+                request=None,
+                # Clearing the pending request ends the waiting-for-approval
+                # state; the task is idle again. Nothing else of its status is
+                # rewritten by a page edit.
+                status=(
+                    "idle"
+                    if (approval_cleared or request_cleared)
+                    and task.status == "needs_approval"
+                    else task.status
+                ),
+                rev=task.rev + 1,
+                updated_at=now,
+            )
+            self._store.save(saved)
+        return EditOutcome(
+            op_id=op_id,
+            path=cleaned,
+            revision=digest,
+            rev=saved.rev,
+            approval_cleared=approval_cleared,
+            request_cleared=request_cleared,
         )
 
     def compose(
@@ -2085,6 +2180,7 @@ __all__ = [
     "DEFAULT_WAIT_S",
     "ApproveOutcome",
     "ComposeOutcome",
+    "EditOutcome",
     "FrameOutcome",
     "OpOutcome",
     "OpResumeNotice",

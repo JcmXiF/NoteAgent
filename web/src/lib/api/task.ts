@@ -18,6 +18,7 @@ import type {
   TaskPageSpec,
   TaskPickResult,
   TaskResultView,
+  TaskSearchResult,
   TaskSummaryView,
 } from "@/lib/api/types";
 
@@ -55,6 +56,21 @@ export function fetchTaskApproval(): Promise<TaskApprovalView> {
  */
 export function fetchTaskResult(): Promise<TaskResultView> {
   return getJson<TaskResultView>("/task?view=result");
+}
+
+/**
+ * A person's web search, on the same task, node and executor the agent uses.
+ *
+ * The revision is the one shown by the card view the reader searched from; a
+ * task that moved since then answers `conflict` instead of letting the search
+ * land on a state the person never saw. A search that takes longer than its
+ * bounded wait answers requested/running and the executor finishes it.
+ */
+export function searchTaskCards(
+  query: string,
+  expectedRev: number,
+): Promise<TaskSearchResult> {
+  return postJson<TaskSearchResult>("/task/search", { query, expectedRev });
 }
 
 /**

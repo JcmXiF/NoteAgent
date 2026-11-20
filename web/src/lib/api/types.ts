@@ -522,6 +522,19 @@ export type TaskMaterialsView = {
   omitted: number;
 };
 
+/**
+ * What a person's web search answers with: the op's state and the cards it put
+ * in the task. A search that outlived its bounded wait answers requested or
+ * running with no cards; the executor finishes it after the conversation moved.
+ */
+export type TaskSearchResult = {
+  opId: string;
+  query: string;
+  status: string;
+  rev: number;
+  cards: TaskCard[];
+};
+
 /** What a person's pick answers with: the op's state and its material. */
 export type TaskPickResult = {
   opId: string;

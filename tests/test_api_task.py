@@ -35,6 +35,7 @@ from noteagent.task.model import (
     Task,
     WriteRequest,
 )
+from noteagent.task.service import TaskService
 from noteagent.task.store import TaskStore
 from noteagent.task.writing import PageLocks, SaveOutcome
 
@@ -3499,13 +3500,17 @@ class ComposeWriteTests(TaskApiCase):
         self.assertNotIn("composed from", text)
 
         task = self.task()
+        # The person's save is also one more human op on the shared task; it
+        # moved the revision, which is what makes the approval stale.
+        self.assertEqual(task.rev, 4)
+        self.assertEqual(task.ops[-1].kind, "edit")
+        self.assertEqual(task.ops[-1].actor, "human")
+        write = next(op for op in task.ops if op.kind == "write")
         self.assertEqual(task.result["status"], "failed")
         self.assertIn("changed while", task.result["reason"])
-        self.assertEqual(task.ops[-1].status, "failed")
-        self.assertEqual(task.ops[-1].error_code, "conflict")
-        self.assertFalse(
-            EffectJournal(self.layout).query(run_id=task.ops[-1].id)
-        )
+        self.assertEqual(write.status, "failed")
+        self.assertEqual(write.error_code, "conflict")
+        self.assertFalse(EffectJournal(self.layout).query(run_id=write.id))
 
     def test_a_human_save_during_the_compose_wins_and_the_task_conflicts(
         self,
@@ -3577,14 +3582,15 @@ class ComposeWriteTests(TaskApiCase):
         self.assertNotIn("composed from", page.read_text(encoding="utf-8"))
 
         task = self.task()
-        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.rev, 4)
+        self.assertEqual(task.ops[-1].kind, "edit")
+        self.assertEqual(task.ops[-1].actor, "human")
+        write = next(op for op in task.ops if op.kind == "write")
         self.assertEqual(task.result["status"], "failed")
         self.assertIn("changed while", task.result["reason"])
-        self.assertEqual(task.ops[-1].status, "failed")
-        self.assertEqual(task.ops[-1].error_code, "conflict")
-        self.assertFalse(
-            EffectJournal(self.layout).query(run_id=task.ops[-1].id)
-        )
+        self.assertEqual(write.status, "failed")
+        self.assertEqual(write.error_code, "conflict")
+        self.assertFalse(EffectJournal(self.layout).query(run_id=write.id))
 
     def test_a_human_save_is_busy_while_the_task_is_saving(self) -> None:
         spec = {**PAGE_SPEC, "action": "update"}
@@ -3643,7 +3649,21 @@ class ComposeWriteTests(TaskApiCase):
         self.assertNotIn("error", outcome)
         events = outcome["events"]
         composed = next(data for kind, data in events if kind == "observation")
-        self.assertEqual(composed["status"], "written")
+        task = self.task()
+        self.assertEqual(
+            composed["status"],
+            "written",
+            json.dumps(
+                {
+                    "observation": composed,
+                    "rev": task.rev,
+                    "ops": [
+                        (op.kind, op.status, op.error_code, op.error)
+                        for op in task.ops
+                    ],
+                }
+            ),
+        )
         self.assertEqual(self.task().result["status"], "written")
         # The lock is released with the save: the person can save afterwards.
         opened = client.get(
@@ -4589,6 +4609,812 @@ class OpResumeRunTests(TaskApiCase):
         self.assertEqual(delivered[0]["rev"], task.rev)
         self.assertEqual(task.result["status"], "written")
         self.assertTrue(task.ops[-1].resume_started)
+
+
+class HumanSearchTests(TaskApiCase):
+    """The source side searches the same task the agent's web_search feeds."""
+
+    def test_a_person_searches_and_the_chat_inspect_sees_the_cards(self) -> None:
+        search = FakeSearch()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "cards"}'
+            ).script,
+            FauxModelClient.text("看到卡片了。").script,
+            search=search,
+            spawn=lambda work: work(),
+        )
+
+        found = client.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+
+        self.assertEqual(found.status_code, 200, found.text)
+        body = found.json()
+        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["rev"], 1)
+        self.assertEqual(body["query"], "entropy")
+        self.assertEqual(
+            [card["title"] for card in body["cards"]],
+            ["Entropy", "Information"],
+        )
+        self.assertEqual(body["cards"][0]["id"], "card-1")
+        self.assertEqual(body["cards"][0]["url"], "https://example.com/entropy")
+        self.assertEqual(search.queries, ["entropy"])
+
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual([op.kind for op in task.ops], ["search"])
+        op = task.ops[0]
+        self.assertEqual(op.actor, "human")
+        self.assertEqual(op.status, "done")
+        self.assertEqual(op.expected_rev, 0)
+        self.assertEqual(op.input["query"], "entropy")
+        self.assertFalse(op.resume_requested)
+
+        # The same one task: the chat reads the cards the person's search found.
+        session_id = self.new_session(client)
+        events = self.ask(client, session_id)
+        observed = next(
+            data for kind, data in events if kind == "observation"
+        )
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["rev"], 1)
+        self.assertEqual(observed["hits"], 2)
+
+    def test_a_stale_view_is_a_conflict_and_writes_no_op(self) -> None:
+        client = self.client(spawn=lambda work: work())
+        first = client.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+
+        stale = client.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(len(task.ops), 1)
+
+    def test_a_failed_search_is_op_failed_and_writes_no_cards(self) -> None:
+        client = self.client(
+            search=FakeSearch(error=RuntimeError("the engine refused")),
+            spawn=lambda work: work(),
+        )
+
+        response = client.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.json()["code"], "op_failed")
+        task = self.task()
+        self.assertEqual(task.cards, ())
+        self.assertEqual(task.ops[0].status, "failed")
+        self.assertEqual(task.ops[0].error_code, "op_failed")
+        self.assertIn("the engine refused", task.ops[0].error)
+
+    def test_a_blank_search_is_refused_and_writes_no_op(self) -> None:
+        client = self.client(spawn=lambda work: work())
+
+        response = client.post(
+            "/api/v1/task/search",
+            json={"query": "   ", "expectedRev": 0},
+        )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIsNone(TaskStore(self.layout).load())
+
+
+class PageEditTaskTests(TaskApiCase):
+    """A person's real page save is one more human op on the same task."""
+
+    PAGE = "wiki/entropy.md"
+
+    def seed(self) -> None:
+        page = self.layout.wiki / "entropy.md"
+        page.write_text(
+            "---\n"
+            "title: Entropy\n"
+            "created: 2026-11-01\n"
+            "updated: 2026-11-01\n"
+            "---\n\n"
+            "# Entropy\n\noriginal prose\n",
+            encoding="utf-8",
+        )
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=3,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(PAGE_SPEC),
+                    rev=3,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                ),
+                result={
+                    "status": "written",
+                    "page": "wiki/entropy.md",
+                    "slug": "entropy",
+                    "title": "Entropy",
+                    "action": "create",
+                    "summary": "written wiki/entropy.md",
+                    "reason": "",
+                    "written": ["wiki/entropy.md"],
+                    "skipped": [],
+                    "failed": [],
+                    "diff": "",
+                    "added": 0,
+                    "removed": 0,
+                },
+            )
+        )
+
+    def save(
+        self,
+        client,
+        body: str = "# Entropy\n\nthe person's edit\n",
+        *,
+        preview: bool = False,
+        base_revision: str | None = None,
+    ):
+        opened = client.get(
+            "/api/projects/demo/page", params={"path": self.PAGE}
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        return client.post(
+            "/api/projects/demo/page/save",
+            json={
+                "path": self.PAGE,
+                "body": body,
+                "baseRevision": (
+                    opened.json()["revision"]
+                    if base_revision is None
+                    else base_revision
+                ),
+                "preview": preview,
+            },
+        )
+
+    def test_a_person_saves_a_page_and_the_task_records_a_human_edit(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        saved = self.save(client)
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()["changed"])
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertIsNone(task.approval)
+        # A page edit is not a page write: the agent's last result stands.
+        self.assertEqual(task.result["status"], "written")
+        self.assertEqual(task.result["page"], "wiki/entropy.md")
+        self.assertEqual([op.kind for op in task.ops], ["edit"])
+        op = task.ops[0]
+        self.assertEqual(op.actor, "human")
+        self.assertEqual(op.status, "done")
+        self.assertEqual(op.expected_rev, 3)
+        self.assertEqual(op.input["path"], self.PAGE)
+        self.assertEqual(op.input["revision"], saved.json()["revision"])
+        self.assertTrue(op.result["approvalCleared"])
+
+        # The chat's inspect sees the person's step on the shared task, bounded:
+        # the op kind, who did it and how it ended, never its input or the page.
+        chat = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("看到你的编辑了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(chat)
+        events = self.ask(chat, session_id)
+        observed = next(
+            data for kind, data in events if kind == "observation"
+        )
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["rev"], 4)
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("edit", content)
+        self.assertIn("human", content)
+        self.assertIn("rev 4", content)
+        self.assertNotIn("expectedRev", content)
+        self.assertNotIn("original prose", content)
+
+    def test_a_preview_records_no_task_op(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        preview = self.save(client, preview=True)
+
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["changed"])
+        self.assertIn("+the person's edit", preview.json()["diff"])
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.ops, ())
+        self.assertIsNotNone(task.approval)
+        self.assertNotIn(
+            "the person's edit",
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        )
+
+    def test_a_save_that_changes_nothing_records_no_task_op(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+        opened = client.get(
+            "/api/projects/demo/page", params={"path": self.PAGE}
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+
+        saved = client.post(
+            "/api/projects/demo/page/save",
+            json={
+                "path": self.PAGE,
+                "body": opened.json()["body"],
+                "baseRevision": opened.json()["revision"],
+            },
+        )
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertFalse(saved.json()["changed"])
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.ops, ())
+        self.assertIsNotNone(task.approval)
+
+    def test_a_page_conflict_records_no_task_op(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        stale = self.save(client, base_revision="a revision that is not")
+
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["code"], "page.changed")
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.ops, ())
+        self.assertIsNotNone(task.approval)
+        self.assertNotIn(
+            "the person's edit",
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        )
+
+    def test_a_failed_task_record_does_not_fail_the_page_save(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+        with patch.object(
+            TaskService,
+            "record_page_edit",
+            side_effect=RuntimeError("the task file is on a full disk"),
+        ):
+            saved = self.save(client)
+
+        # The page exists and is the person's; the task record is the part that
+        # failed, and it is reported rather than turning the save into an error.
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertIn(
+            "the person's edit",
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        )
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.ops, ())
+
+
+class PageEditInvalidationTests(TaskApiCase):
+    """A person's page edit removes the basis a standing approval covered."""
+
+    PAGE = "wiki/entropy.md"
+
+    def seed(self) -> None:
+        page = self.layout.wiki / "entropy.md"
+        page.write_text(
+            "---\ntitle: Entropy\ncreated: 2026-11-01\n---\n\n"
+            "# Entropy\n\noriginal prose\n",
+            encoding="utf-8",
+        )
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=3,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(PAGE_SPEC),
+                    rev=3,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                ),
+            )
+        )
+
+    def edit_page(self, client, body: str) -> None:
+        opened = client.get(
+            "/api/projects/demo/page", params={"path": self.PAGE}
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        saved = client.post(
+            "/api/projects/demo/page/save",
+            json={
+                "path": self.PAGE,
+                "body": body,
+                "baseRevision": opened.json()["revision"],
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+
+    def test_a_page_edit_makes_the_agents_stale_compose_a_conflict(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.text("已批准。").script,
+            # The next turn still believes the task is at the revision it read.
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("冲突了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id, "看看批准")
+        self.assertEqual(self.task().rev, 3)
+
+        person_text = "# Entropy\n\nthe person's text\n"
+        self.edit_page(client, person_text)
+
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.ops[-1].kind, "edit")
+        self.assertEqual(task.ops[-1].actor, "human")
+
+        events = self.ask(client, session_id, "写页")
+        composed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "conflict")
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("conflict", content)
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertFalse(any(op.kind == "write" for op in task.ops))
+        self.assertIsNone(task.result)
+        # The person's prose is the page, exactly as they saved it.
+        self.assertEqual(
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+            "---\ntitle: Entropy\ncreated: 2026-11-01\n---\n\n"
+            + person_text,
+        )
+
+    def test_after_the_page_edit_a_fresh_compose_asks_for_approval_again(
+        self,
+    ) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("看过了。").script,
+            FauxModelClient.tool_call(
+                "t2", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("需要重新批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id, "先看看")
+        self.assertEqual(self.task().rev, 3)
+
+        person_text = "# Entropy\n\nthe person's newer text\n"
+        self.edit_page(client, person_text)
+        self.assertEqual(self.task().rev, 4)
+
+        events = self.ask(client, session_id, "再提交")
+        observations = [data for kind, data in events if kind == "observation"]
+        inspected = observations[0]
+        self.assertEqual(inspected["tool"], "inspect")
+        self.assertEqual(inspected["rev"], 4)
+        self.assertIsNone(inspected.get("request"))
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("none", content.lower())
+        # The approval was cleared by the edit, not left looking usable.
+        self.assertNotIn("stale", content.lower())
+
+        composed = observations[1]
+        self.assertEqual(composed["tool"], "compose_page")
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertEqual(composed["rev"], 5)
+        self.assertEqual(composed["request"]["frameId"], "frame-1")
+
+        task = self.task()
+        self.assertEqual(task.rev, 5)
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertFalse(any(op.kind == "write" for op in task.ops))
+        self.assertEqual(
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+            "---\ntitle: Entropy\ncreated: 2026-11-01\n---\n\n"
+            + person_text,
+        )
+
+
+class ChatEndToEndTests(TaskApiCase):
+    """The whole chat flow through the API seam, one revision at a time.
+
+    Search, pick, frame and the first compose are one run; the person approves
+    between runs; the second run must read the new approval before the write.
+    No network and no real model: the nodes are fakes and the model is scripted.
+    """
+
+    def test_search_pick_frame_propose_approve_compose_result(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1", "b2"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t4",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准写这一页。").script,
+            # The second run starts after the person's decision and reads it
+            # before proposing the same page again.
+            FauxModelClient.tool_call(
+                "t5", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t6",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.tool_call(
+                "t7", "inspect", '{"view": "result"}'
+            ).script,
+            FauxModelClient.text("页面写好了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        first = self.ask(client, session_id, "找资料写一页")
+        observations = [data for kind, data in first if kind == "observation"]
+        self.assertEqual(
+            [(item["tool"], item["rev"]) for item in observations],
+            [
+                ("web_search", 1),
+                ("pick_card", 2),
+                ("frame_blocks", 3),
+                ("compose_page", 4),
+            ],
+        )
+        self.assertEqual(observations[3]["status"], "needs_approval")
+        self.assertEqual(observations[3]["request"]["rev"], 4)
+
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertEqual(task.status, "needs_approval")
+        self.assertEqual(task.request.frame_id, "frame-1")
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+        approved = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": task.id,
+                "rev": 4,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["rev"], 5)
+        self.assertEqual(approved.json()["approval"]["rev"], 5)
+
+        second = self.ask(client, session_id, "批准了，写吧")
+        observations = [data for kind, data in second if kind == "observation"]
+        self.assertEqual(
+            [(item["tool"], item["rev"]) for item in observations],
+            [("inspect", 5), ("compose_page", 6), ("inspect", 6)],
+        )
+        self.assertEqual(observations[1]["status"], "written")
+        self.assertEqual(observations[1]["path"], "wiki/entropy.md")
+        self.assertTrue(observations[1]["wrote_wiki"])
+        self.assertEqual(observations[2]["status"], "written")
+        self.assertNotIn("diff", observations[1])
+        self.assertNotIn("effectIds", json.dumps(observations))
+
+        task = self.task()
+        self.assertEqual(task.rev, 6)
+        self.assertEqual(task.status, "done")
+        self.assertIsNone(task.approval)
+        self.assertIsNone(task.request)
+        self.assertEqual(task.result["status"], "written")
+        self.assertEqual(task.result["page"], "wiki/entropy.md")
+        self.assertFalse(any(key == "effectIds" for key in task.result))
+        # Every step is an op with the revision it was requested at and who
+        # asked; the person's approval is one of them.
+        self.assertEqual(
+            [(op.kind, op.actor, op.status, op.expected_rev) for op in task.ops],
+            [
+                ("search", "agent", "done", 0),
+                ("pick", "agent", "done", 1),
+                ("frame", "agent", "done", 2),
+                ("approve", "human", "done", 4),
+                ("write", "agent", "done", 5),
+            ],
+        )
+        page = (self.layout.wiki / "entropy.md").read_text(encoding="utf-8")
+        self.assertIn("<!-- na-clip:raw/web/entropy-a1.html -->", page)
+        self.assertIn("composed from b1", page)
+
+
+class OriginEndToEndTests(TaskApiCase):
+    """The origin panel drives the same task the chat reads, then a page edit
+    removes the approval basis; a restarted core reads the same task."""
+
+    def test_source_side_flow_then_page_edit_then_agent_conflict(self) -> None:
+        # One id source across the app instances that write the one task: an op
+        # id names an op in the task file, so a second core must not reuse it.
+        ids = SequentialIds()
+        # The origin's search, pick and frame are human routes with no session.
+        origin = self.client(spawn=lambda work: work(), ids=ids)
+        found = origin.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+        self.assertEqual(found.status_code, 200, found.text)
+        self.assertEqual(found.json()["rev"], 1)
+        picked = origin.post(
+            "/api/v1/task/pick",
+            json={"cardId": "card-1", "expectedRev": 1},
+        )
+        self.assertEqual(picked.status_code, 200, picked.text)
+        self.assertEqual(picked.json()["rev"], 2)
+        framed = origin.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1", "b2"],
+                "expectedRev": 2,
+            },
+        )
+        self.assertEqual(framed.status_code, 200, framed.text)
+        self.assertEqual(framed.json()["rev"], 3)
+        self.assertEqual(framed.json()["frame"]["source"], "human")
+
+        chat = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            FauxModelClient.tool_call(
+                "t3", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t4",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("写好了。").script,
+            # After the person's page edit, the same session tries again with
+            # the revision it saw, then reads the task and proposes anew.
+            FauxModelClient.tool_call(
+                "t5",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("冲突了。").script,
+            FauxModelClient.tool_call(
+                "t6", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t7",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请重新批准。").script,
+            spawn=lambda work: work(),
+            ids=ids,
+        )
+        session_id = self.new_session(chat)
+
+        # The chat sees the person's steps on the one task, with the revision.
+        proposed = self.ask(chat, session_id, "提议写页")
+        observations = [
+            data for kind, data in proposed if kind == "observation"
+        ]
+        self.assertEqual(observations[0]["tool"], "inspect")
+        self.assertEqual(observations[0]["rev"], 3)
+        summary_content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("search", summary_content)
+        self.assertIn("pick", summary_content)
+        self.assertIn("frame", summary_content)
+        self.assertIn("human", summary_content)
+        self.assertEqual(observations[1]["status"], "needs_approval")
+        self.assertEqual(observations[1]["rev"], 4)
+
+        # The confirmation panel approves the request the chat card shows.
+        task = self.task()
+        self.assertEqual(task.request.frame_id, "frame-1")
+        approved = chat.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": task.id,
+                "rev": 4,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["rev"], 5)
+
+        written = self.ask(chat, session_id, "批准了")
+        observations = [data for kind, data in written if kind == "observation"]
+        self.assertEqual(observations[0]["tool"], "inspect")
+        self.assertEqual(observations[0]["rev"], 5)
+        self.assertEqual(observations[1]["status"], "written")
+        self.assertEqual(observations[1]["rev"], 6)
+        task = self.task()
+        self.assertEqual(task.rev, 6)
+        self.assertEqual(task.result["status"], "written")
+
+        # The person opens the page the agent wrote and edits its prose. That is
+        # one more human op on the task, and it moves the revision.
+        opened = chat.get(
+            "/api/projects/demo/page", params={"path": "wiki/entropy.md"}
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        person_body = "# Entropy\n\nthe person's own paragraph\n"
+        saved = chat.post(
+            "/api/projects/demo/page/save",
+            json={
+                "path": "wiki/entropy.md",
+                "body": person_body,
+                "baseRevision": opened.json()["revision"],
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        task = self.task()
+        self.assertEqual(task.rev, 7)
+        self.assertEqual(task.ops[-1].kind, "edit")
+        self.assertEqual(task.ops[-1].actor, "human")
+        # The edit is not a page write: the agent's result still stands.
+        self.assertEqual(task.result["status"], "written")
+
+        # A restarted core reads the same task and the person's page.
+        restarted = self.client(ids=ids)
+        summary = restarted.get("/api/v1/task", params={"view": "summary"})
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json()["rev"], 7)
+        self.assertEqual(summary.json()["counts"]["frames"], 1)
+        result = restarted.get("/api/v1/task", params={"view": "result"})
+        self.assertEqual(result.json()["result"]["status"], "written")
+        self.assertIn(
+            "the person's own paragraph",
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        )
+
+        # The agent still believes the task is at rev 6: its next compose is a
+        # conflict and writes nothing. The person's page is untouched.
+        conflict = self.ask(chat, session_id, "再写一次")
+        composed = next(
+            data for kind, data in conflict if kind == "observation"
+        )
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "conflict")
+
+        # After reading the task as it stands, the write needs a new approval.
+        again = self.ask(chat, session_id, "重新提")
+        observations = [data for kind, data in again if kind == "observation"]
+        self.assertEqual(observations[0]["tool"], "inspect")
+        self.assertEqual(observations[0]["rev"], 7)
+        self.assertEqual(observations[1]["status"], "needs_approval")
+        self.assertEqual(observations[1]["rev"], 8)
+        ops = self.task().ops
+        edit_index = next(
+            index for index, op in enumerate(ops) if op.kind == "edit"
+        )
+        self.assertFalse(
+            any(op.kind == "write" for op in ops[edit_index + 1 :])
+        )
+        self.assertEqual(
+            [op.kind for op in ops],
+            ["search", "pick", "frame", "approve", "write", "edit"],
+        )
+        self.assertIn(
+            "the person's own paragraph",
+            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "composed from", (self.layout.wiki / "entropy.md").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_a_long_human_search_can_be_cancelled(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        client = self.client(search=search, wait_s=0.05)
+
+        found = client.post(
+            "/api/v1/task/search",
+            json={"query": "entropy", "expectedRev": 0},
+        )
+
+        self.assertEqual(found.status_code, 200, found.text)
+        self.assertIn(found.json()["status"], ("requested", "running"))
+        self.assertEqual(found.json()["cards"], [])
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].status == "running"
+        )
+        op_id = task.ops[-1].id
+
+        cancelled = client.post(f"/api/v1/task/ops/{op_id}/cancel")
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertTrue(cancelled.json()["cancelled"])
+
+        gate.set()
+        self.assertTrue(search.exited.wait(5))
+        threading.Event().wait(0.1)
+        task = self.task()
+        self.assertEqual(task.cards, ())
+        self.assertEqual(task.ops[-1].status, "cancelled")
+        self.assertEqual(task.rev, 0)
 
 
 if __name__ == "__main__":

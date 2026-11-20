@@ -27,6 +27,9 @@ export function TaskView() {
   const approvalView = useTaskStore((state) => state.approvalView);
   const resultView = useTaskStore((state) => state.resultView);
   const error = useTaskStore((state) => state.error);
+  const searching = useTaskStore((state) => state.searching);
+  const searchError = useTaskStore((state) => state.searchError);
+  const searchNotice = useTaskStore((state) => state.searchNotice);
   const picking = useTaskStore((state) => state.picking);
   const pickError = useTaskStore((state) => state.pickError);
   const pickNotice = useTaskStore((state) => state.pickNotice);
@@ -40,6 +43,7 @@ export function TaskView() {
   const opError = useTaskStore((state) => state.opError);
   const opNotice = useTaskStore((state) => state.opNotice);
   const load = useTaskStore((state) => state.load);
+  const search = useTaskStore((state) => state.search);
   const pick = useTaskStore((state) => state.pick);
   const frame = useTaskStore((state) => state.frame);
   const decide = useTaskStore((state) => state.decide);
@@ -47,6 +51,7 @@ export function TaskView() {
   const resumeOp = useTaskStore((state) => state.resumeOp);
   const reset = useTaskStore((state) => state.reset);
   const project = useWorkspaceStore((state) => state.current);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (project) void load();
@@ -159,6 +164,24 @@ export function TaskView() {
         </p>
       ) : null}
       <WriteResultPanel result={resultView?.result ?? null} />
+      {/* The origin's search: the same node, executor and bounded wait as the
+          agent's web_search, so its cards land in the one task both read. */}
+      <SearchForm
+        value={query}
+        busy={searching}
+        onChange={setQuery}
+        onSubmit={() => void search(query)}
+      />
+      {searchNotice ? (
+        <p role="status" className="mt-1 text-muted-foreground">
+          {searchNotice}
+        </p>
+      ) : null}
+      {searchError ? (
+        <p role="alert" className="mt-1 text-destructive">
+          {searchError}
+        </p>
+      ) : null}
       {shown.length > 0 ? (
         <ul className="mt-1 flex flex-col gap-0.5">
           {shown.map((card) => (
@@ -253,6 +276,56 @@ export function TaskView() {
       ) : null}
       <FrameList frames={frames} />
     </div>
+  );
+}
+
+/**
+ * The origin's web search.
+ *
+ * A person's query becomes the same typed `search` op the agent's `web_search`
+ * writes, at the revision this panel is showing. The cards it finds are read
+ * back from the task, never patched in from the response, so the panel and the
+ * chat always show the one task.
+ */
+function SearchForm({
+  value,
+  busy,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation();
+  const ready = value.trim() !== "";
+  return (
+    <form
+      className="mt-1 flex items-center gap-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready && !busy) onSubmit();
+      }}
+    >
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={t("task.searchPlaceholder")}
+        aria-label={t("task.searchPlaceholder")}
+        disabled={busy}
+        className="h-6 min-w-0 flex-1 rounded border bg-background px-1.5 text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+      />
+      <Button
+        type="submit"
+        size="sm"
+        className="h-6 shrink-0 px-1.5"
+        disabled={busy || !ready}
+      >
+        {busy ? t("task.searching") : t("task.search")}
+      </Button>
+    </form>
   );
 }
 

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { ApiError } from "@/lib/api/client";
+import { SessionCards } from "@/components/chat/SessionCards";
 import { TaskView } from "@/components/task/TaskView";
 import {
   approveTaskRequest,
@@ -17,6 +18,7 @@ import {
   frameTaskMaterial,
   pickTaskCard,
   resumeTaskOp,
+  searchTaskCards,
 } from "@/lib/api/task";
 import type {
   TaskApprovalView,
@@ -43,6 +45,7 @@ vi.mock("@/lib/api/task", () => ({
   frameTaskMaterial: vi.fn(),
   pickTaskCard: vi.fn(),
   resumeTaskOp: vi.fn(),
+  searchTaskCards: vi.fn(),
 }));
 
 const summary: TaskSummaryView = {
@@ -209,6 +212,9 @@ beforeEach(() => {
     opBusy: "",
     opError: "",
     opNotice: "",
+    searching: false,
+    searchError: "",
+    searchNotice: "",
   });
   vi.mocked(fetchTaskSummary).mockReset();
   vi.mocked(fetchTaskCards).mockReset();
@@ -221,6 +227,7 @@ beforeEach(() => {
   vi.mocked(approveTaskRequest).mockReset();
   vi.mocked(cancelTaskOp).mockReset();
   vi.mocked(resumeTaskOp).mockReset();
+  vi.mocked(searchTaskCards).mockReset();
   vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
   vi.mocked(fetchTaskFrames).mockResolvedValue(noFrames);
   vi.mocked(fetchTaskApproval).mockResolvedValue(noApprovalView);
@@ -824,5 +831,124 @@ describe("the writing task view", () => {
     expect(host.textContent).toContain("op-3");
     expect(buttonByText(i18n.t("task.opCancel"))).toBeUndefined();
     expect(buttonByText(i18n.t("task.opResume"))).toBeUndefined();
+  });
+
+  it("searches the web as a person with the revision of the view", async () => {
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce(summary)
+      .mockResolvedValue({ ...summary, rev: 3 });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(searchTaskCards).mockResolvedValue({
+      opId: "op-1",
+      query: "entropy",
+      status: "done",
+      rev: 3,
+      cards: cards.cards,
+    });
+
+    await draw();
+    const input = host.querySelector<HTMLInputElement>("input[type='text']");
+    expect(input).toBeTruthy();
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setValue?.call(input, "entropy");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const form = host.querySelector("form");
+    expect(form).toBeTruthy();
+    await act(async () => {
+      form?.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await act(async () => {});
+
+    // The human search names the revision of the cards view the person saw.
+    expect(vi.mocked(searchTaskCards)).toHaveBeenCalledWith("entropy", 2);
+    expect(host.textContent).toContain(
+      i18n.t("task.searchDone", { count: 2 }),
+    );
+    // The one task was read again, not patched from the response.
+    expect(vi.mocked(fetchTaskSummary).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("says a search lost the race in the reader's words and re-reads", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue(summary);
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(searchTaskCards).mockRejectedValue(
+      new ApiError("stale", 409, "conflict"),
+    );
+
+    await draw();
+    const input = host.querySelector<HTMLInputElement>("input[type='text']");
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setValue?.call(input, "entropy");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      host.querySelector("form")?.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      );
+    });
+    await act(async () => {});
+
+    expect(host.textContent).toContain(i18n.t("error.code.conflict"));
+    expect(vi.mocked(fetchTaskSummary).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("shows the same write request as the chat card", async () => {
+    vi.mocked(fetchTaskSummary).mockResolvedValue({
+      ...summary,
+      rev: 4,
+      status: "needs_approval",
+      counts: { cards: 2, materials: 1, frames: 1 },
+    });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames).mockResolvedValue(oneFrame);
+    vi.mocked(fetchTaskApproval).mockResolvedValue(requestView);
+
+    await draw();
+    const chatHost = document.createElement("div");
+    document.body.append(chatHost);
+    const chatRoot = createRoot(chatHost);
+    try {
+      await act(async () => {
+        chatRoot.render(
+          <SessionCards
+            observations={[
+              {
+                tool: "compose_page",
+                status: "needs_approval",
+                rev: 4,
+                title: "Entropy",
+                request: pendingRequest,
+              },
+            ]}
+          />,
+        );
+      });
+
+      // The panel and the chat card read the one request the task stores: the
+      // page, its sections and the revision the person decides at.
+      expect(host.textContent).toContain(i18n.t("task.writeRequest"));
+      expect(host.textContent).toContain("What it is");
+      expect(host.textContent).toContain("Why it matters");
+      expect(chatHost.textContent).toContain("Entropy");
+      expect(chatHost.textContent).toContain("What it is");
+      expect(chatHost.textContent).toContain(i18n.t("chat.looked.needsApproval"));
+    } finally {
+      await act(async () => {
+        chatRoot.unmount();
+      });
+      chatHost.remove();
+    }
   });
 });
