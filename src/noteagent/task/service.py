@@ -1007,6 +1007,7 @@ class TaskService:
             raise _OpFailure(
                 "op_failed", f"the page could not be composed: {err}"
             ) from err
+        after = ""
         with self._writing():
             current = self._store.load()
             if (
@@ -1023,20 +1024,27 @@ class TaskService:
                     "was written. Do not retry blindly; call inspect and ask "
                     "the person to approve again.",
                 )
-            now_text = (
-                absolute.read_text(encoding="utf-8") if absolute.is_file() else ""
-            )
-            now_digest = blob_digest(now_text) if absolute.is_file() else ""
-            if now_digest != base_digest:
-                raise _OpFailure(
-                    "conflict",
-                    f"the page {wiki_path} changed while it was being "
-                    "composed. The person's edit was kept and nothing was "
-                    f"written. Do not retry blindly; call inspect and read the "
-                    "page again.",
-                )
             try:
+                # The digest is read and compared under the same page lock the
+                # human editor takes, so a save that lands after the compose but
+                # before this point is seen rather than overwritten.
                 with self._page_locks.holding(self._project_key, wiki_path):
+                    now_text = (
+                        absolute.read_text(encoding="utf-8")
+                        if absolute.is_file()
+                        else ""
+                    )
+                    now_digest = (
+                        blob_digest(now_text) if absolute.is_file() else ""
+                    )
+                    if now_digest != base_digest:
+                        raise _OpFailure(
+                            "conflict",
+                            f"the page {wiki_path} changed while it was being "
+                            "composed. The person's edit was kept and nothing "
+                            "was written. Do not retry blindly; call inspect "
+                            "and read the page again.",
+                        )
                     outcome = self._save(
                         self._layout,
                         SaveRequest(
@@ -1052,6 +1060,13 @@ class TaskService:
                         ),
                         None,
                     )
+                    # The diff is read before the lock is released, so a later
+                    # person's edit is never reported as part of this write.
+                    after = (
+                        absolute.read_text(encoding="utf-8")
+                        if absolute.is_file()
+                        else ""
+                    )
             except PageBusy as err:
                 raise _OpFailure(
                     "conflict",
@@ -1059,7 +1074,6 @@ class TaskService:
                     "written. Do not retry blindly; read the page again before "
                     "deciding whether to compose.",
                 ) from err
-        after = absolute.read_text(encoding="utf-8") if absolute.is_file() else ""
         return self._page_answer(
             spec,
             wiki_path,

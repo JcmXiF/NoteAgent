@@ -86,8 +86,11 @@ _INSPECT_DESCRIPTION = (
     "task is and how much it holds; `cards` lists the resource cards collected "
     "so far; `materials` lists the staged materials with an id/preview index of "
     "their blocks; `frames` lists the frames drawn so far, with their material, "
-    "source and block ids/previews. Returns the view and the task revision. Call "
-    "it after a conflict, before deciding what to do next."
+    "source and block ids/previews; `approval` says what go-ahead stands; "
+    "`result` says how the last approved page write ended (written, skipped or "
+    "failed), with its page, a summary and the revision, but not the page's "
+    "text. Returns the view and the task revision. Call it after a conflict or "
+    "a bounded wait, before deciding what to do next."
 )
 
 WEB_SEARCH_PARAMETERS = {
@@ -210,7 +213,14 @@ INSPECT_PARAMETERS = {
     "properties": {
         "view": {
             "type": "string",
-            "enum": ["summary", "cards", "materials", "frames", "approval"],
+            "enum": [
+                "summary",
+                "cards",
+                "materials",
+                "frames",
+                "approval",
+                "result",
+            ],
             "description": "Which bounded view of the writing task to read",
         }
     },
@@ -477,6 +487,21 @@ def _inspect_handler(service: TaskService):
                 # The same request the task panel shows; a chat card can render
                 # the proposal from the observation alone.
                 meta["request"] = dict(request)
+        if view == "result":
+            result = payload.get("result")
+            if isinstance(result, Mapping):
+                status = _text(result.get("status"))
+                # The model-facing card gets the outcome and identity only. The
+                # page's diff and the op's effect ids stay in the task and its
+                # op log; the HTTP result view is the interface's.
+                meta["title"] = (
+                    _text(result.get("title")) or f"writing task {view}"
+                )
+                meta["status"] = status
+                meta["path"] = _text(result.get("page"))
+                meta["slug"] = _text(result.get("slug"))
+                meta["action"] = _text(result.get("action"))
+                meta["wrote_wiki"] = status == "written"
         return ToolResult(content=_render_view(view, payload), meta=meta)
 
     return inspect
@@ -702,6 +727,8 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
         return _render_frames(rev, payload)
     if view == "approval":
         return _render_approval(rev, payload)
+    if view == "result":
+        return _render_result(rev, payload)
     cards = payload.get("cards")
     shown = [item for item in cards if isinstance(item, Mapping)] if isinstance(cards, list) else []
     if not shown:
@@ -833,6 +860,66 @@ def _render_approval(rev: object, payload: Mapping[str, object]) -> str:
         )
     else:
         lines.append("No write request is pending.")
+    return "\n".join(lines)
+
+
+def _render_result(rev: object, payload: Mapping[str, object]) -> str:
+    """The last page write, bounded: outcome, page identity, summary, lists.
+
+    The page's diff is deliberately absent: the agent can open the page with
+    its read tool, and the interface reads the diff from the task route. This
+    view exists so a bounded wait or a resumed run can learn how the write
+    ended without re-reading the whole task.
+    """
+    result = payload.get("result")
+    if not isinstance(result, Mapping):
+        return (
+            f"Task rev {rev}. No page write has finished yet, so there is no "
+            "result. compose_page records one when a person's approval covers "
+            "it."
+        )
+    status = _text(result.get("status")) or "unknown"
+    page = _text(result.get("page"))
+    title = _text(result.get("title"))
+    slug = _text(result.get("slug"))
+    action = _text(result.get("action"))
+    summary = _text(result.get("summary"))[:800]
+    reason = _text(result.get("reason"))[:600]
+    lines = [
+        f"Task rev {rev}. The last page write is {status}: {page} "
+        f'("{title}", {slug}, {action}).'
+    ]
+    if summary:
+        lines.append(f"summary: {summary}")
+    if reason and status != "written":
+        lines.append(f"reason: {reason}")
+    for key in ("written", "skipped", "failed"):
+        raw = result.get(key)
+        if not isinstance(raw, list):
+            continue
+        for item in raw[:8]:
+            if isinstance(item, Mapping):
+                path = _text(item.get("path"))
+                detail = _text(item.get("reason"))
+                lines.append(
+                    f"{key}: {path}" + (f" — {detail}" if detail else "")
+                )
+            elif isinstance(item, str):
+                lines.append(f"{key}: {item}")
+    added = result.get("added")
+    removed = result.get("removed")
+    if (
+        isinstance(added, int)
+        and not isinstance(added, bool)
+        and isinstance(removed, int)
+        and not isinstance(removed, bool)
+        and (added or removed)
+    ):
+        lines.append(f"changed: {added} line(s) added, {removed} removed.")
+    lines.append(
+        "The page's text and diff are not in this view; open the page for its "
+        "prose. The revision above is the one this result belongs to."
+    )
     return "\n".join(lines)
 
 

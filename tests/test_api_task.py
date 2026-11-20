@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -239,6 +240,30 @@ class FakeCompose:
         if self.block is not None:
             return self.block
         return _composed_page(request)
+
+
+class GapPageLocks(PageLocks):
+    """Delay the task's first page-lock acquisition until the test says so.
+
+    This opens exactly the gap a person's save could land in: the executor has
+    finished composing and is about to take the page lock. The test saves the
+    page through the human route in that gap, then lets the executor continue.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.arrived = threading.Event()
+        self.release = threading.Event()
+        self._delay = True
+
+    @contextmanager
+    def holding(self, project_key: str, page: str):
+        if self._delay:
+            self._delay = False
+            self.arrived.set()
+            self.release.wait(5)
+        with super().holding(project_key, page):
+            yield
 
 
 class FakeSave:
@@ -2917,24 +2942,72 @@ class ComposeWriteTests(TaskApiCase):
         self.assertEqual(task.ops[-1].status, "failed")
         self.assertEqual(task.ops[-1].error_code, "op_failed")
 
-    def test_the_agent_cannot_read_the_page_diff_through_inspect(self) -> None:
+    def test_inspect_result_reads_the_outcome_without_the_diff(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("写好了。").script,
+            FauxModelClient.tool_call(
+                "t2", "inspect", '{"view": "result"}'
+            ).script,
+            FauxModelClient.text("结果在这里。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        events = self.ask(client, session_id, "结果呢")
+
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["status"], "written")
+        self.assertEqual(observed["rev"], 4)
+        self.assertEqual(observed["path"], "wiki/entropy.md")
+        self.assertEqual(observed["slug"], "entropy")
+        self.assertEqual(observed["action"], "create")
+        self.assertTrue(observed["wrote_wiki"])
+        # The agent re-reads the outcome, never the page prose or the op log.
+        self.assertNotIn("diff", observed)
+        self.assertNotIn("effectIds", json.dumps(observed))
+        self.assertNotIn("+composed from", json.dumps(observed))
+
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("wiki/entropy.md", content)
+        self.assertIn("written", content.lower())
+        self.assertIn("written wiki/entropy.md", content)
+        self.assertIn("rev 4", content)
+        self.assertNotIn("composed from b1", content)
+        self.assertNotIn("effectIds", content)
+
+        # The interface's route keeps the diff; only the agent's view drops it.
+        body = client.get("/api/v1/task", params={"view": "result"}).json()
+        self.assertIn("diff", body["result"])
+        self.assertEqual(body["result"]["status"], "written")
+
+    def test_inspect_result_before_any_write_says_there_is_none(self) -> None:
+        self.seed()
         client = self.client(
             FauxModelClient.tool_call(
                 "t1", "inspect", '{"view": "result"}'
             ).script,
-            FauxModelClient.text("读不到。").script,
+            FauxModelClient.text("还没有结果。").script,
             spawn=lambda work: work(),
         )
         session_id = self.new_session(client)
 
         events = self.ask(client, session_id)
 
-        card = next(data for kind, data in events if kind == "observation")
-        self.assertEqual(card["tool"], "inspect")
-        self.assertTrue(card["error"])
-        self.assertEqual(card["diagnostics"][0]["code"], "invalid_arguments")
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["rev"], 3)
+        self.assertNotIn("path", observed)
+        self.assertNotIn("status", observed)
         content = self.last_tool_result_content(session_id, "inspect")
-        self.assertIn("invalid arguments", content.lower())
+        self.assertIn("no page write", content.lower())
 
     def test_a_failed_save_is_recorded_as_failed_and_writes_no_page(self) -> None:
         self.seed()
@@ -3230,6 +3303,100 @@ class ComposeWriteTests(TaskApiCase):
         self.assertTrue((self.layout.wiki / "entropy.md").is_file())
         self.assertEqual(task.ops[-1].kind, "write")
         self.assertEqual(task.ops[-1].status, "done")
+
+        # After a timeout the agent re-reads the outcome; the result view is
+        # bounded and carries no page text or effect ids.
+        later = self.client(
+            FauxModelClient.tool_call(
+                "t3", "inspect", '{"view": "result"}'
+            ).script,
+            FauxModelClient.text("完成了。").script,
+            spawn=lambda work: work(),
+        )
+        events = self.ask(later, session_id, "写完了吗")
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["status"], "written")
+        self.assertEqual(observed["rev"], 4)
+        self.assertEqual(observed["path"], "wiki/entropy.md")
+        self.assertNotIn("diff", observed)
+        self.assertNotIn(
+            "composed from b1",
+            self.last_tool_result_content(session_id, "inspect"),
+        )
+
+    def test_a_human_save_in_the_lock_gap_wins_and_the_task_conflicts(
+        self,
+    ) -> None:
+        spec = {**PAGE_SPEC, "action": "update"}
+        self.seed(spec)
+        page = self.layout.wiki / "entropy.md"
+        page.write_text(
+            "---\ntitle: Entropy\n---\n\n# Entropy\n\noriginal text\n",
+            encoding="utf-8",
+        )
+        locks = GapPageLocks()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": spec}),
+            ).script,
+            FauxModelClient.text("页面被改过。").script,
+            page_locks=locks,
+        )
+        session_id = self.new_session(client)
+        outcome: dict[str, object] = {}
+
+        def ask() -> None:
+            try:
+                outcome["events"] = self.ask(client, session_id)
+            except Exception as err:  # noqa: BLE001 - re-raised in the test
+                outcome["error"] = err
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        try:
+            # The executor has composed and is about to take the page lock.
+            self.assertTrue(locks.arrived.wait(5))
+            # The person saves in that gap. The check must happen under the
+            # same lock as the write, so the task sees this edit and refuses
+            # instead of overwriting it with content composed before it.
+            opened = client.get(
+                "/api/projects/demo/page",
+                params={"path": "wiki/entropy.md"},
+            )
+            self.assertEqual(opened.status_code, 200, opened.text)
+            saved = client.post(
+                "/api/projects/demo/page/save",
+                json={
+                    "path": "wiki/entropy.md",
+                    "body": "the person's edit in the lock gap",
+                    "baseRevision": opened.json()["revision"],
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+        finally:
+            locks.release.set()
+            worker.join(10)
+
+        self.assertNotIn("error", outcome)
+        events = outcome["events"]
+        composed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "conflict")
+        text = page.read_text(encoding="utf-8")
+        self.assertIn("the person's edit in the lock gap", text)
+        self.assertNotIn("composed from", text)
+
+        task = self.task()
+        self.assertEqual(task.result["status"], "failed")
+        self.assertIn("changed while", task.result["reason"])
+        self.assertEqual(task.ops[-1].status, "failed")
+        self.assertEqual(task.ops[-1].error_code, "conflict")
+        self.assertFalse(
+            EffectJournal(self.layout).query(run_id=task.ops[-1].id)
+        )
 
     def test_a_human_save_during_the_compose_wins_and_the_task_conflicts(
         self,

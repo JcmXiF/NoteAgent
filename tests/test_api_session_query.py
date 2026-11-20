@@ -360,16 +360,21 @@ class DefaultToolTests(unittest.TestCase):
         # instead of the contract's requested/running answer.
         self.assertGreater(compose.timeout_s, 180.0)
         inspect = tools.require("inspect")
+        # `result` is the last page write's bounded outcome: the agent needs it
+        # after a bounded wait or a resumed run. The route's diff stays out of
+        # it; the handler strips it from what the model reads.
         self.assertEqual(
             inspect.parameters["properties"]["view"]["enum"],
-            ["summary", "cards", "materials", "frames", "approval"],
+            [
+                "summary",
+                "cards",
+                "materials",
+                "frames",
+                "approval",
+                "result",
+            ],
         )
         self.assertEqual(inspect.side_effect, "read")
-        # The page result's diff is the interface's, not the model's: inspect
-        # has no `result` view even though the task route serves one.
-        self.assertNotIn(
-            "result", inspect.parameters["properties"]["view"]["enum"]
-        )
 
     def test_a_pick_gets_its_own_ninety_second_bounded_wait(self) -> None:
         self.assertEqual(AppDeps().task_pick_wait_s, 90.0)

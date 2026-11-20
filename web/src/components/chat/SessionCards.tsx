@@ -388,9 +388,15 @@ function noteFor(observation: ObservationPayload): Row["note"] {
       key:
         observation.tool === "pick_card"
           ? "chat.looked.picking"
-          : "chat.looked.searching",
+          : observation.tool === "compose_page" || observation.tool === "inspect"
+            ? "chat.looked.writing"
+            : "chat.looked.searching",
     };
   }
+  // An inspect("result") reads the last page write's outcome.
+  if (observation.status === "written") return { key: "chat.looked.written" };
+  if (observation.status === "skipped") return { key: "chat.looked.writeSkipped" };
+  if (observation.status === "failed") return { key: "chat.looked.writeFailed" };
   if (observation.omitted) return { key: "chat.looked.omitted" };
   if (observation.truncated) return { key: "chat.looked.truncated" };
   if (typeof observation.hits === "number") {

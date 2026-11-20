@@ -254,6 +254,24 @@ describe("the cards beside an answer", () => {
     expect(host.textContent).toContain(i18n.t("chat.looked.writing"));
   });
 
+  it("draws an inspect result as the page's outcome", async () => {
+    await draw([
+      {
+        tool: "inspect",
+        title: "Entropy",
+        status: "written",
+        rev: 4,
+        path: "wiki/entropy.md",
+        slug: "entropy",
+        action: "create",
+        wrote_wiki: true,
+      },
+    ]);
+
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain(i18n.t("chat.looked.written"));
+  });
+
   it("draws a refused compose_page as a failed card", async () => {
     await draw([
       {
