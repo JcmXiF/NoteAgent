@@ -128,7 +128,11 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
-from noteagent.api.task import pick_task_card, task_view_payload
+from noteagent.api.task import (
+    frame_task_material,
+    pick_task_card,
+    task_view_payload,
+)
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -266,6 +270,14 @@ class TaskPickBody(BaseModel):
     """A person's pick, from the card view they were looking at."""
 
     cardId: str = Field(..., min_length=1, max_length=120)
+    expectedRev: int = Field(..., ge=0)
+
+
+class TaskFrameBody(BaseModel):
+    """A person's frame, from the material view they were looking at."""
+
+    docId: str = Field(..., min_length=1, max_length=500)
+    blocks: list[str] = Field(..., max_length=2000)
     expectedRev: int = Field(..., ge=0)
 
 
@@ -928,7 +940,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.get("/api/v1/task")
     def kernel_task(
-        view: Literal["summary", "cards", "materials"] = Query("summary"),
+        view: Literal["summary", "cards", "materials", "frames"] = Query(
+            "summary"
+        ),
     ) -> dict[str, object]:
         """The active project's writing task, as a bounded view with its rev."""
         return task_view_payload(deps, view)
@@ -937,6 +951,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def kernel_task_pick(body: TaskPickBody) -> dict[str, object]:
         """A person's card pick, on the same task and executor as the agent."""
         return pick_task_card(deps, body.cardId, body.expectedRev)
+
+    @app.post("/api/v1/task/frame")
+    def kernel_task_frame(body: TaskFrameBody) -> dict[str, object]:
+        """A person's frame, on the same task and writer as the agent's."""
+        return frame_task_material(
+            deps, body.docId, body.blocks, body.expectedRev
+        )
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:

@@ -1483,7 +1483,8 @@
     "deleteProject": "Could not delete the project",
     "code": {
       "conflict": "The writing task changed since this view was read. Re-read it and try again.",
-      "not_found": "That card is no longer in the writing task.",
+      "not_found": "That card or material is no longer in the writing task.",
+      "bad_spec": "The frame names passages that do not belong to this material.",
       "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
@@ -1676,6 +1677,23 @@
     "pickRunning": "The pick is still running; read the task again later.",
     "loadFailed": "The writing task could not be read",
     "retry": "Retry",
+    "frames": "Frames {{count}}",
+    "framesEmpty": "No frames yet",
+    "frameSource": "drawn by {{source}}",
+    "frameHint": "Tick the passages this material contributes.",
+    "frameSave": "Save frame",
+    "framing": "Saving the frame…",
+    "frameMore": "{{count}} more passages in this frame",
+    "frameSaved": "The frame was saved.",
+    "frameFailed": "The frame could not be saved",
+    "approved": "Approved by {{by}} at revision {{rev}}",
+    "noApproval": "No approval yet",
+    "approvalInvalidated": "The frame changed, so the previous approval no longer applies.",
+    "source": {
+      "agent": "the agent",
+      "human": "you",
+      "model": "the model"
+    },
     "status": {
       "idle": "idle",
       "running": "running",

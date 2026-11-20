@@ -21,7 +21,9 @@ from noteagent.acquire.types import Capture
 from noteagent.agent.faux import FauxModelClient
 from noteagent.project.init import init_project
 from noteagent.task.model import (
+    Approval,
     Card,
+    Frame,
     MaterialBlock,
     SearchCard,
     StagedMaterial,
@@ -851,6 +853,691 @@ class HumanPickTests(TaskApiCase):
         self.assertEqual(task.ops, ())
         self.assertEqual(task.materials, ())
         self.assertEqual(stage.run_ids, [])
+
+
+class FrameBlocksTests(TaskApiCase):
+    def test_the_agent_frames_blocks_and_the_task_holds_the_frame(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", '
+                '"blocks": ["b2", "b1"]}',
+            ).script,
+            FauxModelClient.text("画好了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        framed = observations[2]
+        self.assertEqual(framed["tool"], "frame_blocks")
+        self.assertEqual(framed["rev"], 3)
+        self.assertEqual(len(framed["frames"]), 1)
+        self.assertEqual(
+            framed["frames"][0]["docId"], "raw/web/entropy-a1.html"
+        )
+        self.assertEqual(framed["frames"][0]["source"], "agent")
+        self.assertEqual(framed["frames"][0]["blockCount"], 2)
+
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual([op.kind for op in task.ops], ["search", "pick", "frame"])
+        op = task.ops[2]
+        self.assertEqual(op.actor, "agent")
+        self.assertEqual(op.status, "done")
+        self.assertEqual(op.expected_rev, 2)
+        self.assertEqual(op.input["docId"], "raw/web/entropy-a1.html")
+        self.assertEqual(op.input["blocks"], ["b2", "b1"])
+
+        self.assertEqual(len(task.frames), 1)
+        frame = task.frames[0]
+        self.assertEqual(frame.doc_id, "raw/web/entropy-a1.html")
+        self.assertEqual(frame.source, "agent")
+        # A frame is a set of blocks; the task keeps them in document order.
+        self.assertEqual(frame.blocks, ("b1", "b2"))
+
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("rev 3", content)
+        self.assertIn("raw/web/entropy-a1.html", content)
+        self.assertIn("[b1]", content)
+        self.assertIn("[b2]", content)
+        self.assertNotIn("expectedRev", content)
+        self.assertNotIn("ops", content)
+
+
+class FrameValidationTests(TaskApiCase):
+    def test_a_block_past_the_preview_cap_can_still_be_framed(self) -> None:
+        blocks = tuple(
+            MaterialBlock(
+                id=f"b{index}", tag="p", preview=f"第{index}段的预览"
+            )
+            for index in range(1, 131)
+        )
+        stage = FakeStage(_staged(blocks=blocks, block_count=130))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", '
+                '"blocks": ["b130", "b1"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t4", "inspect", '{"view": "materials"}'
+            ).script,
+            FauxModelClient.text("框好了。").script,
+            stage=stage,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        framed = observations[2]
+        self.assertNotIn("error", framed)
+        self.assertEqual(framed["frames"][0]["blockCount"], 2)
+
+        task = self.task()
+        self.assertEqual(task.frames[0].blocks, ("b1", "b130"))
+        # The preview index stays bounded; only the identity list is complete.
+        self.assertEqual(len(task.materials[0]["blocks"]), 120)
+        self.assertEqual(len(task.materials[0]["blockIds"]), 130)
+
+        material = observations[3]["materials"][0]
+        self.assertEqual(material["blockCount"], 130)
+        self.assertEqual(material["blocksOmitted"], 10)
+        # The full identity list is the task's own bookkeeping, not a view.
+        self.assertNotIn("blockIds", material)
+
+    def test_an_unknown_block_is_bad_spec_and_writes_no_frame(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", '
+                '"blocks": ["b1", "b999"]}',
+            ).script,
+            FauxModelClient.text("框不对。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        framed = [data for kind, data in events if kind == "observation"][2]
+        self.assertTrue(framed["error"])
+        self.assertEqual(framed["diagnostics"][0]["code"], "bad_spec")
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("bad_spec", content)
+        self.assertIn("do not retry blindly", content.lower())
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.frames, ())
+        self.assertEqual([op.kind for op in task.ops], ["search", "pick"])
+
+    def test_an_unknown_document_is_not_found_and_writes_no_frame(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/missing.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.text("没有这份材料。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        framed = [data for kind, data in events if kind == "observation"][2]
+        self.assertTrue(framed["error"])
+        self.assertEqual(framed["diagnostics"][0]["code"], "not_found")
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("not_found", content)
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.frames, ())
+        self.assertEqual([op.kind for op in task.ops], ["search", "pick"])
+
+    def test_an_agent_frame_after_a_person_edited_the_task_is_a_conflict(self) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=1,
+                materials=(_stored_material(),),
+            )
+        )
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("看到了。").script,
+            FauxModelClient.tool_call(
+                "t2",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.text("画不了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        # The session observes rev 1; then a person's edit moves the task.
+        self.ask(client, session_id, "先看看任务")
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, rev=2, intent="a person edited it"))
+
+        events = self.ask(client, session_id, "画个框")
+
+        framed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(framed["error"])
+        self.assertEqual(framed["diagnostics"][0]["code"], "conflict")
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("conflict", content)
+        self.assertIn("do not retry blindly", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.frames, ())
+        self.assertEqual(task.ops, ())
+
+    def test_an_empty_frame_is_bad_spec(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": []}',
+            ).script,
+            FauxModelClient.text("框是空的。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        framed = [data for kind, data in events if kind == "observation"][2]
+        self.assertTrue(framed["error"])
+        self.assertEqual(framed["diagnostics"][0]["code"], "bad_spec")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.frames, ())
+
+
+def _stored_material(
+    material: str = "raw/web/entropy-a1.html",
+    *,
+    block_ids: tuple[str, ...] = ("b1", "b2"),
+) -> dict[str, object]:
+    """A material as the task stores it, for a test that seeds a task."""
+    return {
+        "id": material,
+        "title": "Entropy",
+        "url": "https://example.com/entropy",
+        "kind": "html",
+        "fidelity": "ok",
+        "state": "staged",
+        "runId": "task-7",
+        "blockCount": len(block_ids),
+        "blockIds": list(block_ids),
+        "blocks": [
+            {"id": block, "tag": "p", "preview": f"{block} 的预览"}
+            for block in block_ids
+        ],
+    }
+
+
+def _seed_approval() -> Approval:
+    return Approval(
+        frame_id="frame-1",
+        spec={
+            "slug": "entropy",
+            "title": "Entropy",
+            "action": "create",
+            "sections": [{"title": "What it is", "blocks": ["b1"]}],
+        },
+        rev=2,
+        by="human",
+        at="2026-11-10T09:05:00Z",
+    )
+
+
+class ApprovalInvalidationTests(TaskApiCase):
+    def seed(self) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=2,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1",),
+                        source="human",
+                    ),
+                ),
+                approval=_seed_approval(),
+            )
+        )
+
+    def test_a_frame_change_invalidates_the_approval_and_the_agent_sees_it(self) -> None:
+        self.seed()
+        self.assertIsNotNone(TaskStore(self.layout).load().approval)
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1", "b2"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("框变了，批准失效。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        framed = observations[0]
+        self.assertEqual(framed["tool"], "frame_blocks")
+        self.assertEqual(framed["rev"], 3)
+        self.assertEqual(framed["frames"][0]["source"], "agent")
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("approval", content.lower())
+        self.assertIn("cleared", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.frames[0].blocks, ("b1", "b2"))
+        self.assertEqual(task.frames[0].source, "agent")
+        self.assertTrue(task.ops[-1].result["approvalCleared"])
+        self.assertEqual(task.ops[-1].kind, "frame")
+
+        # The next inspection reads the task as it stands: no approval left.
+        summary = observations[1]
+        self.assertEqual(summary["rev"], 3)
+        viewed = client.get("/api/v1/task", params={"view": "summary"})
+        self.assertEqual(viewed.status_code, 200, viewed.text)
+        self.assertEqual(viewed.json()["rev"], 3)
+        self.assertIsNone(viewed.json()["approval"])
+
+    def test_the_summary_view_says_an_approval_exists(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("有批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        summary = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(summary["rev"], 2)
+        viewed = client.get("/api/v1/task", params={"view": "summary"})
+        self.assertEqual(viewed.status_code, 200, viewed.text)
+        approval = viewed.json()["approval"]
+        self.assertEqual(approval["frameId"], "frame-1")
+        self.assertEqual(approval["by"], "human")
+        self.assertEqual(approval["rev"], 2)
+        # The writing spec itself is not part of a bounded summary.
+        self.assertNotIn("spec", approval)
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("approval", content.lower())
+        self.assertIn("frame-1", content)
+
+    def test_a_frame_that_clears_no_approval_says_nothing_about_one(self) -> None:
+        self.seed()
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, approval=None))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b2"]}',
+            ).script,
+            FauxModelClient.text("画好了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        framed = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(framed["rev"], 3)
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertNotIn("approval", content.lower())
+        self.assertFalse(self.task().ops[-1].result["approvalCleared"])
+
+
+class FrameInspectTests(TaskApiCase):
+    def test_inspect_frames_returns_the_frame_bounded_with_its_rev(self) -> None:
+        blocks = tuple(
+            MaterialBlock(
+                id=f"b{index}", tag="p", preview=f"第{index}段的预览"
+            )
+            for index in range(1, 81)
+        )
+        stage = FakeStage(_staged(blocks=blocks, block_count=80))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1", "b2"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t4", "inspect", '{"view": "frames"}'
+            ).script,
+            FauxModelClient.text("框在这里。").script,
+            stage=stage,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        inspected = observations[3]
+        self.assertEqual(inspected["tool"], "inspect")
+        self.assertEqual(inspected["rev"], 3)
+        self.assertEqual(inspected["hits"], 1)
+        frame = inspected["frames"][0]
+        self.assertEqual(frame["id"], "frame-1")
+        self.assertEqual(frame["docId"], "raw/web/entropy-a1.html")
+        self.assertEqual(frame["source"], "agent")
+        self.assertEqual(frame["blockCount"], 2)
+        self.assertEqual(
+            [block["id"] for block in frame["blocks"]], ["b1", "b2"]
+        )
+        self.assertEqual(frame["blocks"][0]["preview"], "第1段的预览")
+
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("rev 3", content)
+        self.assertIn("raw/web/entropy-a1.html", content)
+        self.assertIn("[b1]", content)
+        self.assertIn("第1段的预览", content)
+        self.assertIn("source=agent", content)
+        # The summary counts frames too.
+        summary = observations[3]
+        self.assertEqual(summary["rev"], 3)
+
+    def test_inspect_frames_with_no_frames_is_a_normal_empty_view(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "frames"}'
+            ).script,
+            FauxModelClient.text("还没有框。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        inspected = next(data for kind, data in events if kind == "observation")
+        self.assertEqual(inspected["frames"], [])
+        self.assertEqual(inspected["hits"], 0)
+        self.assertNotIn("error", inspected)
+        self.assertIn("No frames", self.last_tool_result_content(session_id, "inspect"))
+
+
+class HumanFrameTests(TaskApiCase):
+    def seed(self, *, approval: Approval | None = None) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=1,
+                materials=(_stored_material(),),
+                approval=approval,
+            )
+        )
+
+    def test_a_person_frames_blocks_and_the_chat_inspect_sees_them(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "frames"}'
+            ).script,
+            FauxModelClient.text("看到框了。").script,
+            spawn=lambda work: work(),
+        )
+
+        before = client.get("/api/v1/task", params={"view": "frames"})
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertEqual(before.json()["rev"], 1)
+        self.assertEqual(before.json()["frames"], [])
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b2", "b1"],
+                "expectedRev": 1,
+            },
+        )
+        self.assertEqual(framed.status_code, 200, framed.text)
+        body = framed.json()
+        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["rev"], 2)
+        self.assertFalse(body["approvalCleared"])
+        self.assertEqual(body["frame"]["id"], "frame-1")
+        self.assertEqual(
+            body["frame"]["docId"], "raw/web/entropy-a1.html"
+        )
+        self.assertEqual(body["frame"]["source"], "human")
+        self.assertEqual(body["frame"]["blocks"], ["b1", "b2"])
+
+        # The same one task: the chat reads the frame the person drew.
+        session_id = self.new_session(client)
+        events = self.ask(client, session_id)
+        observation = next(
+            data for kind, data in events if kind == "observation"
+        )
+        self.assertEqual(observation["tool"], "inspect")
+        self.assertEqual(observation["rev"], 2)
+        self.assertEqual(observation["hits"], 1)
+        self.assertEqual(observation["frames"][0]["source"], "human")
+        self.assertEqual(
+            [block["id"] for block in observation["frames"][0]["blocks"]],
+            ["b1", "b2"],
+        )
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual([op.kind for op in task.ops], ["frame"])
+        op = task.ops[0]
+        self.assertEqual(op.actor, "human")
+        self.assertEqual(op.status, "done")
+        self.assertEqual(op.expected_rev, 1)
+        self.assertEqual(op.input["blocks"], ["b2", "b1"])
+        self.assertEqual(task.frames[0].source, "human")
+
+    def test_a_person_drawing_over_a_frame_replaces_its_blocks(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        first = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": 1,
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        second = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b2"],
+                "expectedRev": 2,
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.json()["frame"]["id"], "frame-1")
+
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(len(task.frames), 1)
+        self.assertEqual(task.frames[0].blocks, ("b2",))
+
+    def test_a_person_framing_invalidates_an_existing_approval(self) -> None:
+        self.seed(approval=_seed_approval())
+        client = self.client(spawn=lambda work: work())
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1", "b2"],
+                "expectedRev": 1,
+            },
+        )
+
+        self.assertEqual(framed.status_code, 200, framed.text)
+        self.assertTrue(framed.json()["approvalCleared"])
+        summary = client.get("/api/v1/task", params={"view": "summary"})
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertIsNone(summary.json()["approval"])
+        self.assertIsNone(self.task().approval)
+
+    def test_a_stale_frame_is_a_conflict_and_writes_no_op(self) -> None:
+        self.seed()
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, rev=2, intent="a person edited it"))
+        client = self.client(spawn=lambda work: work())
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": 1,
+            },
+        )
+
+        self.assertEqual(framed.status_code, 409, framed.text)
+        self.assertEqual(framed.json()["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual(task.ops, ())
+        self.assertEqual(task.frames, ())
+
+    def test_a_person_framing_an_unknown_document_is_not_found(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/missing.html",
+                "blocks": ["b1"],
+                "expectedRev": 1,
+            },
+        )
+
+        self.assertEqual(framed.status_code, 404, framed.text)
+        self.assertEqual(framed.json()["code"], "not_found")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(task.ops, ())
+        self.assertEqual(task.frames, ())
+
+    def test_a_person_framing_an_unknown_block_is_bad_spec(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1", "b999"],
+                "expectedRev": 1,
+            },
+        )
+
+        self.assertEqual(framed.status_code, 422, framed.text)
+        self.assertEqual(framed.json()["code"], "bad_spec")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertEqual(task.ops, ())
+        self.assertEqual(task.frames, ())
+
+    def test_a_person_drawing_an_empty_frame_is_bad_spec(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": [],
+                "expectedRev": 1,
+            },
+        )
+
+        self.assertEqual(framed.status_code, 422, framed.text)
+        self.assertEqual(framed.json()["code"], "bad_spec")
+        self.assertEqual(self.task().frames, ())
 
 
 class TaskSurvivalTests(TaskApiCase):

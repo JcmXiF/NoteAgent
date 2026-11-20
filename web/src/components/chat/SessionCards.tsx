@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { FileText, Globe, Layers, Search, Wrench } from "lucide-react";
+import { FileText, Frame, Globe, Layers, Search, Wrench } from "lucide-react";
 import type { ObservationPayload } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -73,7 +73,7 @@ export function SessionCards({
 
 type Row = {
   key: string;
-  kind: "page" | "search" | "web" | "material" | "other";
+  kind: "page" | "search" | "web" | "material" | "frame" | "other";
   label: string;
   /** The page's file, the result's url or the material's id, for the tooltip. */
   path: string | null;
@@ -87,6 +87,7 @@ const ICONS = {
   search: Search,
   web: Globe,
   material: Layers,
+  frame: Frame,
   other: Wrench,
 } as const;
 
@@ -101,6 +102,10 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
     }
     if (observation.tool === "pick_card") {
       materialRows(observation, rows, seen);
+      continue;
+    }
+    if (observation.frames && observation.frames.length > 0) {
+      frameRows(observation, rows, seen);
       continue;
     }
     if (observation.materials && observation.materials.length > 0) {
@@ -226,6 +231,36 @@ function materialRows(
       note:
         material.blockCount > 0
           ? { key: "chat.looked.blocks", count: material.blockCount }
+          : null,
+    });
+  }
+}
+
+/**
+ * A frame is one row per frame: the material it marks and how much of that
+ * material it covers. Which block ids it names stays in the reader's view.
+ */
+function frameRows(
+  observation: ObservationPayload,
+  rows: Row[],
+  seen: Set<string>,
+): void {
+  for (const frame of observation.frames ?? []) {
+    const docId = (frame.docId || "").trim();
+    const label = docId || frame.id || observation.tool;
+    if (!label) continue;
+    const key = `frame:${frame.id || docId}:${observation.rev ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      key,
+      kind: "frame",
+      label,
+      path: docId || null,
+      open: null,
+      note:
+        frame.blockCount > 0
+          ? { key: "chat.looked.blocks", count: frame.blockCount }
           : null,
     });
   }

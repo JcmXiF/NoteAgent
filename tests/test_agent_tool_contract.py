@@ -47,6 +47,18 @@ class ToolSpecTests(unittest.TestCase):
         self.assertIsNone(context.cancel)
 
 
+class SideEffectTests(unittest.TestCase):
+    def test_a_local_state_write_is_a_side_effect_the_contract_knows(self) -> None:
+        # A pure-state task op edits the task file, not the web and not a wiki
+        # page; the vocabulary names that case instead of mislabelling it.
+        spec = _spec(side_effect="write")
+        self.assertEqual(spec.side_effect, "write")
+
+    def test_a_side_effect_the_contract_does_not_know_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "side effect"):
+            _spec(side_effect="filesystem")
+
+
 class ToolRegistryTests(unittest.TestCase):
     def test_a_registered_tool_is_found_by_name(self) -> None:
         registry = ToolRegistry([_spec()])
