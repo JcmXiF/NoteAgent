@@ -28,6 +28,7 @@ from noteagent.task.model import (
     Card,
     Frame,
     material_summary,
+    material_view,
     request_to_dict,
 )
 from noteagent.task.service import (
@@ -368,7 +369,7 @@ def _pick_handler(service: TaskService):
             cancel=context.cancel,
         )
         if outcome.status == "done" and outcome.material:
-            summary = material_summary(outcome.material)
+            summary = material_summary(material_view(outcome.material))
             return ToolResult(
                 content=_render_picked(outcome, summary),
                 meta={

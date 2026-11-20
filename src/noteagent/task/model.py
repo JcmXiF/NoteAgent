@@ -206,6 +206,28 @@ StageFn: TypeAlias = Callable[[Capture, str], StagedMaterial]
 
 
 @dataclass(frozen=True, slots=True)
+class Material:
+    """One material recorded in the task, with a bounded block index.
+
+    The source text stays in staging. The task keeps the identity, the state a
+    later frame and write read, the full block id list (so a frame may name any
+    block) and the short previews a view can afford. ``run_id`` is the run that
+    staged it, kept so the stored shape does not change.
+    """
+
+    id: str
+    title: str = ""
+    url: str = ""
+    kind: str = ""
+    fidelity: str = ""
+    state: str = "staged"
+    run_id: str = ""
+    block_count: int = 0
+    block_ids: tuple[str, ...] = ()
+    blocks: tuple[MaterialBlock, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Card:
     """A material card in the task, addressable by id for a later pick."""
 
@@ -332,7 +354,7 @@ class Task:
     status: TaskStatus = "idle"
     rev: int = 0
     cards: tuple[Card, ...] = ()
-    materials: tuple[Mapping[str, object], ...] = ()
+    materials: tuple[Material, ...] = ()
     frames: tuple[Frame, ...] = ()
     plan: tuple[Mapping[str, object], ...] = ()
     approval: Approval | None = None
@@ -376,6 +398,56 @@ def card_from_dict(raw: Mapping[str, object]) -> Card:
         url=url,
         snippet=_text(raw.get("snippet")),
         site=_text(raw.get("site")),
+    )
+
+
+def material_to_dict(material: Material) -> dict[str, object]:
+    """One task material as the task file stores it and a route returns it."""
+    return {
+        "id": material.id,
+        "title": material.title,
+        "url": material.url,
+        "kind": material.kind,
+        "fidelity": material.fidelity,
+        "state": material.state,
+        "runId": material.run_id,
+        "blockCount": material.block_count,
+        "blockIds": list(material.block_ids),
+        "blocks": [
+            {"id": block.id, "tag": block.tag, "preview": block.preview}
+            for block in material.blocks
+        ],
+    }
+
+
+def material_from_dict(raw: Mapping[str, object]) -> Material:
+    """One stored material, or ``ValueError`` when it cannot be read.
+
+    A material id is a ``raw/`` path (``raw/web/entropy-a1.html``), not a task
+    id: it carries slashes and a suffix, so it is only checked for emptiness.
+    An older row without ``blockIds`` falls back to its bounded preview index,
+    which is what a frame could already name.
+    """
+    material_id = _text(raw.get("id"))
+    if not material_id:
+        raise ValueError("a material needs an id")
+    blocks = _material_blocks(raw.get("blocks"))
+    block_ids = _material_ids(raw.get("blockIds"))
+    if not block_ids:
+        block_ids = tuple(
+            dict.fromkeys(block.id for block in blocks if block.id)
+        )
+    return Material(
+        id=material_id,
+        title=_text(raw.get("title")),
+        url=_text(raw.get("url")),
+        kind=_text(raw.get("kind")),
+        fidelity=_text(raw.get("fidelity")),
+        state=_text(raw.get("state")) or "staged",
+        run_id=_text(raw.get("runId")),
+        block_count=_count(raw.get("blockCount")),
+        block_ids=block_ids,
+        blocks=blocks,
     )
 
 
@@ -650,7 +722,9 @@ def task_to_dict(task: Task) -> dict[str, object]:
         "createdAt": task.created_at,
         "updatedAt": task.updated_at,
         "cards": [card_to_dict(card) for card in task.cards],
-        "materials": [dict(item) for item in task.materials],
+        "materials": [
+            material_to_dict(material) for material in task.materials
+        ],
         "frames": [frame_to_dict(frame) for frame in task.frames],
         "plan": [dict(item) for item in task.plan],
         "ops": [op_to_dict(op, storage=True) for op in task.ops],
@@ -690,7 +764,7 @@ def task_from_dict(raw: Mapping[str, object]) -> Task:
         )
         if isinstance(cards, list)
         else (),
-        materials=_mappings(raw.get("materials")),
+        materials=_materials(raw.get("materials")),
         frames=_frames(raw.get("frames")),
         plan=_mappings(raw.get("plan")),
         approval=(
@@ -951,68 +1025,108 @@ def _request_detail(
 def _block_previews(task: Task, doc_id: str) -> dict[str, str]:
     """The previews the task's bounded material index holds for one document."""
     material = next(
-        (item for item in task.materials if _text(item.get("id")) == doc_id),
-        None,
+        (item for item in task.materials if item.id == doc_id), None
     )
-    raw_blocks = material.get("blocks") if material is not None else None
     previews: dict[str, str] = {}
-    if isinstance(raw_blocks, list):
-        for item in raw_blocks:
-            if not isinstance(item, Mapping):
-                continue
-            block = _text(item.get("id"))
-            if block:
-                previews[block] = _text(item.get("preview"))
+    if material is not None:
+        for block in material.blocks:
+            if block.id:
+                previews[block.id] = block.preview
     return previews
 
 
-def material_view(raw: Mapping[str, object]) -> dict[str, object]:
+def material_view(material: Material) -> dict[str, object]:
     """One material as a bounded reading: its identity and a block index.
 
     The block source text is never here. A preview is clipped, and the index is
     cut to ``MAX_VIEW_BLOCKS``; ``blocksOmitted`` says how much of the material
     this reading leaves out. The same shape serves a tool result and a route.
     """
-    raw_blocks = raw.get("blocks")
-    blocks: list[dict[str, object]] = []
-    if isinstance(raw_blocks, list):
-        for item in raw_blocks[:MAX_VIEW_BLOCKS]:
-            if not isinstance(item, Mapping):
-                continue
-            blocks.append(
-                {
-                    "id": _text(item.get("id")),
-                    "tag": _text(item.get("tag")),
-                    "preview": _text(item.get("preview"))[:MAX_BLOCK_PREVIEW],
-                }
-            )
-    count = _count(raw.get("blockCount"))
+    blocks = [
+        {
+            "id": block.id,
+            "tag": block.tag,
+            "preview": block.preview[:MAX_BLOCK_PREVIEW],
+        }
+        for block in material.blocks[:MAX_VIEW_BLOCKS]
+    ]
+    count = max(0, material.block_count)
     if count < len(blocks):
         count = len(blocks)
     return {
-        "id": _text(raw.get("id")),
-        "title": _text(raw.get("title"))[:MAX_MATERIAL_TITLE],
-        "url": _text(raw.get("url")),
-        "kind": _text(raw.get("kind")),
-        "fidelity": _text(raw.get("fidelity")),
-        "state": _text(raw.get("state")),
+        "id": material.id,
+        "title": material.title[:MAX_MATERIAL_TITLE],
+        "url": material.url,
+        "kind": material.kind,
+        "fidelity": material.fidelity,
+        "state": material.state,
         "blockCount": count,
         "blocks": blocks,
         "blocksOmitted": max(0, count - len(blocks)),
     }
 
 
-def material_summary(raw: Mapping[str, object]) -> dict[str, object]:
-    """The part of a material an event card needs: no block index at all."""
-    view = material_view(raw)
-    view.pop("blocks", None)
-    return view
+def material_summary(view: Mapping[str, object]) -> dict[str, object]:
+    """An already-bounded material view without its block index.
+
+    An event card needs the identity, not the index; the view itself is what
+    ``material_view`` built, so this only drops the one key.
+    """
+    summary = dict(view)
+    summary.pop("blocks", None)
+    return summary
 
 
 def _mappings(value: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list):
         return ()
     return tuple(dict(item) for item in value if isinstance(item, Mapping))
+
+
+def _materials(value: object) -> tuple[Material, ...]:
+    """The materials that can be read; one bad row does not hide the task."""
+    if not isinstance(value, list):
+        return ()
+    materials: list[Material] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            materials.append(material_from_dict(item))
+        except ValueError:
+            continue
+    return tuple(materials)
+
+
+def _material_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    ids: list[str] = []
+    for item in value:
+        block = _text(item)
+        if block and block not in ids:
+            ids.append(block)
+    return tuple(ids)
+
+
+def _material_blocks(value: object) -> tuple[MaterialBlock, ...]:
+    if not isinstance(value, list):
+        return ()
+    blocks: list[MaterialBlock] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        block = _text(item.get("id"))
+        if not block:
+            continue
+        blocks.append(
+            MaterialBlock(
+                id=block,
+                tag=_text(item.get("tag")),
+                preview=_text(item.get("preview")),
+            )
+        )
+    return tuple(blocks)
 
 
 def _frames(value: object) -> tuple[Frame, ...]:
@@ -1080,6 +1194,7 @@ __all__ = [
     "FetchFn",
     "Frame",
     "FrameSource",
+    "Material",
     "MaterialBlock",
     "Op",
     "SearchCard",
@@ -1096,7 +1211,9 @@ __all__ = [
     "frame_to_dict",
     "frame_view",
     "is_task_id",
+    "material_from_dict",
     "material_summary",
+    "material_to_dict",
     "material_view",
     "op_from_dict",
     "op_to_dict",

@@ -27,6 +27,7 @@ from noteagent.task.model import (
     Approval,
     Card,
     Frame,
+    Material,
     MaterialBlock,
     Op,
     SearchCard,
@@ -191,21 +192,23 @@ def _seed_task(
             ),
         ),
         materials=(
-            {
-                "id": "raw/web/entropy-a1.html",
-                "title": "Entropy",
-                "url": "https://example.com/entropy",
-                "kind": "html",
-                "fidelity": "ok",
-                "state": "staged",
-                "runId": "task-7",
-                "blockCount": 2,
-                "blockIds": ["b1", "b2"],
-                "blocks": [
-                    {"id": "b1", "tag": "p", "preview": "熵衡量不确定性。"},
-                    {"id": "b2", "tag": "p", "preview": "信息是不确定性的减少。"},
-                ],
-            },
+            Material(
+                id="raw/web/entropy-a1.html",
+                title="Entropy",
+                url="https://example.com/entropy",
+                kind="html",
+                fidelity="ok",
+                state="staged",
+                run_id="task-7",
+                block_count=2,
+                block_ids=("b1", "b2"),
+                blocks=(
+                    MaterialBlock(id="b1", tag="p", preview="熵衡量不确定性。"),
+                    MaterialBlock(
+                        id="b2", tag="p", preview="信息是不确定性的减少。"
+                    ),
+                ),
+            ),
         ),
         frames=(
             Frame(
@@ -366,7 +369,7 @@ class TaskWriteSeamTests(unittest.TestCase):
         self.assertEqual(outcome.status, "done")
         after = self.load()
         self.assert_content_once(before, after)
-        self.assertEqual(after.materials[0]["id"], STAGED.material)
+        self.assertEqual(after.materials[0].id, STAGED.material)
 
     def test_a_failed_pick_is_log_only(self) -> None:
         before = self.seed(
