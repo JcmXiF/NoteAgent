@@ -36,6 +36,7 @@ from noteagent.task.model import (
     approval_to_dict,
     card_to_dict,
     frame_to_dict,
+    material_to_dict,
     op_to_dict,
 )
 from noteagent.task.service import (
@@ -247,7 +248,7 @@ def pick_task_card(
         "rev": outcome.rev,
     }
     if outcome.material:
-        body["material"] = dict(outcome.material)
+        body["material"] = material_to_dict(outcome.material)
     return body
 
 

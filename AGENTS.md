@@ -18,6 +18,11 @@ One-command checks: `node scripts/check.mjs`; details in `docs/development.md`.
 Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; tool
 contracts: `docs/tool-contract.md`.
 
+### Coding standards
+
+Task invariants and judgement rules that tests cannot express:
+`docs/agents/coding-standards.md`. Mechanical rules stay in source-scan tests.
+
 ### Ticket worktrees
 
 `node scripts/agent-worktree.mjs new <slug>` / `rm <slug>` creates and removes

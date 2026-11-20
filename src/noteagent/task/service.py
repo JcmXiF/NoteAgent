@@ -44,6 +44,8 @@ from noteagent.task.model import (
     Card,
     FetchFn,
     Frame,
+    Material,
+    MaterialBlock,
     Op,
     SearchCard,
     SearchFn,
@@ -53,6 +55,7 @@ from noteagent.task.model import (
     WriteRequest,
     canonical_page_spec,
     material_summary,
+    material_view,
     task_overview,
     task_view,
 )
@@ -199,7 +202,7 @@ class PickOutcome:
     card_id: str
     status: str
     rev: int
-    material: Mapping[str, object] = field(default_factory=dict)
+    material: Material | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,7 +564,7 @@ class TaskService:
             op_id, f'the pick of card "{cleaned}"', observed
         )
         self._registry.observe(self._project_key, session_id, observed.rev)
-        material: Mapping[str, object] = {}
+        material: Material | None = None
         if (
             observed.status == "done"
             and observed.task is not None
@@ -572,9 +575,9 @@ class TaskService:
                 (
                     item
                     for item in observed.task.materials
-                    if item.get("id") == material_id
+                    if item.id == material_id
                 ),
-                {},
+                None,
             )
         return PickOutcome(op_id, cleaned, observed.status, observed.rev, material)
 
@@ -635,7 +638,7 @@ class TaskService:
                 (
                     item
                     for item in task.materials
-                    if _text(item.get("id")) == cleaned_doc
+                    if item.id == cleaned_doc
                 ),
                 None,
             )
@@ -1391,16 +1394,16 @@ class TaskService:
                 )
             staged = self._stage(capture, task.id)
             _check_op_cancel(cancel)
-            row = _material_row(staged, run_id=task.id)
+            material = _material_row(staged, run_id=task.id)
             return _OpAnswer(
                 "pick",
                 {
-                    "materialId": row["id"],
-                    "title": row["title"],
-                    "fidelity": row["fidelity"],
-                    "blocks": row["blockCount"],
+                    "materialId": material.id,
+                    "title": material.title,
+                    "fidelity": material.fidelity,
+                    "blocks": material.block_count,
                 },
-                material=row,
+                material=material,
             )
         if op.kind == "write":
             return self._execute_write(task, op, cancel)
@@ -1437,7 +1440,7 @@ class TaskService:
             (
                 item
                 for item in task.materials
-                if _text(item.get("id")) == frame.doc_id
+                if item.id == frame.doc_id
             ),
             None,
         )
@@ -2061,7 +2064,7 @@ class _OpAnswer:
     kind: str
     result: Mapping[str, object]
     cards: tuple[SearchCard, ...] = ()
-    material: Mapping[str, object] | None = None
+    material: Material | None = None
     task_result: Mapping[str, object] | None = None
     #: The answer already committed its task record (a write commits the page
     #: and the task under the same locks); ``notice`` is its continuation call.
@@ -2079,11 +2082,11 @@ class _Observed:
     op: Op | None
 
 
-def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
-    """The task's record of one staged material, with a bounded block index.
+def _material_row(staged: StagedMaterial, *, run_id: str) -> Material:
+    """The task's typed record of one staged material, with a bounded index.
 
     The source text stays in the staging area. What the task keeps is the
-    identity and the id/preview pairs a frame will name later. ``blockIds`` is
+    identity and the id/preview pairs a frame will name later. ``block_ids`` is
     the full identity list: a view is bounded, but a frame may name any block
     of the material, including one past the preview cut.
     """
@@ -2093,65 +2096,55 @@ def _material_row(staged: StagedMaterial, *, run_id: str) -> dict[str, object]:
             block.id.strip() for block in staged.blocks if block.id.strip()
         )
     )
-    blocks = tuple(staged.blocks[:MAX_VIEW_BLOCKS])
+    blocks = tuple(
+        MaterialBlock(
+            id=block.id.strip(),
+            tag=block.tag.strip(),
+            preview=block.preview.strip()[:MAX_BLOCK_PREVIEW],
+        )
+        for block in staged.blocks[:MAX_VIEW_BLOCKS]
+        if block.id.strip()
+    )
     count = max(staged.block_count, len(staged.blocks))
-    return {
-        "id": material,
-        "title": (staged.title.strip() or material)[:MAX_MATERIAL_TITLE],
-        "url": staged.url.strip(),
-        "kind": staged.kind.strip(),
-        "fidelity": staged.fidelity.strip(),
-        "state": staged.state.strip() or "staged",
-        "runId": run_id,
-        "blockCount": count,
-        "blockIds": block_ids,
-        "blocks": [
-            {
-                "id": block.id.strip(),
-                "tag": block.tag.strip(),
-                "preview": block.preview.strip()[:MAX_BLOCK_PREVIEW],
-            }
-            for block in blocks
-            if block.id.strip()
-        ],
-    }
+    return Material(
+        id=material,
+        title=(staged.title.strip() or material)[:MAX_MATERIAL_TITLE],
+        url=staged.url.strip(),
+        kind=staged.kind.strip(),
+        fidelity=staged.fidelity.strip(),
+        state=staged.state.strip() or "staged",
+        run_id=run_id,
+        block_count=count,
+        block_ids=tuple(block_ids),
+        blocks=blocks,
+    )
 
 
-def _material_block_ids(material: Mapping[str, object]) -> list[str]:
+def _material_block_ids(material: Material) -> list[str]:
     """Every block id a frame may name, in document order.
 
-    Newer task files carry the full ``blockIds`` list. An older or hand-seeded
-    material only has the bounded preview index, so that is the fallback.
+    Newer task files carry the full ``block_ids`` list. An older or hand-seeded
+    material only has the bounded preview index; the parser then derives the
+    ids from those blocks, so both forms answer here.
     """
+    if material.block_ids:
+        return list(material.block_ids)
     ids: list[str] = []
-    raw = material.get("blockIds")
-    if isinstance(raw, list):
-        for item in raw:
-            block = item.strip() if isinstance(item, str) else ""
-            if block and block not in ids:
-                ids.append(block)
-    if ids:
-        return ids
-    raw_blocks = material.get("blocks")
-    if isinstance(raw_blocks, list):
-        for item in raw_blocks:
-            if not isinstance(item, Mapping):
-                continue
-            block = _text(item.get("id"))
-            if block and block not in ids:
-                ids.append(block)
+    for block in material.blocks:
+        if block.id and block.id not in ids:
+            ids.append(block.id)
     return ids
 
 
 def _upsert_material(
-    materials: tuple[Mapping[str, object], ...],
-    row: Mapping[str, object] | None,
-) -> tuple[Mapping[str, object], ...]:
+    materials: tuple[Material, ...],
+    row: Material | None,
+) -> tuple[Material, ...]:
     """A material is one object: picking it again replaces its reading."""
     if row is None:
         return materials
     for index, item in enumerate(materials):
-        if item.get("id") == row.get("id"):
+        if item.id == row.id:
             return materials[:index] + (row,) + materials[index + 1 :]
     return materials + (row,)
 
@@ -2282,14 +2275,14 @@ def op_delta(task: Task, op: Op) -> dict[str, object]:
                 (
                     item
                     for item in task.materials
-                    if _text(item.get("id")) == material_id
+                    if item.id == material_id
                 ),
                 None,
             )
             if row is not None:
                 return {
                     "status": "done",
-                    "material": material_summary(row),
+                    "material": material_summary(material_view(row)),
                 }
             return {
                 "status": "done",

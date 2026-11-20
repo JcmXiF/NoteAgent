@@ -31,12 +31,14 @@ from noteagent.task.model import (
     Approval,
     Card,
     Frame,
+    Material,
     MaterialBlock,
     Op,
     SearchCard,
     StagedMaterial,
     Task,
     WriteRequest,
+    material_from_dict,
 )
 from noteagent.task.service import TaskService
 from noteagent.task.store import TaskStore, TaskUnreadableError
@@ -726,17 +728,17 @@ class PickCardTests(TaskApiCase):
 
         self.assertEqual(len(task.materials), 1)
         material = task.materials[0]
-        self.assertEqual(material["id"], "raw/web/entropy-a1.html")
-        self.assertEqual(material["title"], "Entropy")
-        self.assertEqual(material["url"], "https://example.com/entropy")
-        self.assertEqual(material["fidelity"], "ok")
-        self.assertEqual(material["state"], "staged")
-        self.assertEqual(material["runId"], "task-1")
-        self.assertEqual(material["blockCount"], 2)
+        self.assertEqual(material.id, "raw/web/entropy-a1.html")
+        self.assertEqual(material.title, "Entropy")
+        self.assertEqual(material.url, "https://example.com/entropy")
+        self.assertEqual(material.fidelity, "ok")
+        self.assertEqual(material.state, "staged")
+        self.assertEqual(material.run_id, "task-1")
+        self.assertEqual(material.block_count, 2)
         self.assertEqual(
-            [block["id"] for block in material["blocks"]], ["b1", "b2"]
+            [block.id for block in material.blocks], ["b1", "b2"]
         )
-        self.assertEqual(material["blocks"][0]["preview"], "熵衡量不确定性。")
+        self.assertEqual(material.blocks[0].preview, "熵衡量不确定性。")
 
         self.assertEqual(fetch.urls, ["https://example.com/entropy"])
         self.assertEqual(stage.run_ids, ["task-1"])
@@ -804,8 +806,8 @@ class PickCardTests(TaskApiCase):
         self.assertIn("10 more block(s)", content)
 
         task = self.task()
-        self.assertEqual(len(task.materials[0]["blocks"]), 120)
-        self.assertEqual(task.materials[0]["blockCount"], 130)
+        self.assertEqual(len(task.materials[0].blocks), 120)
+        self.assertEqual(task.materials[0].block_count, 130)
 
     def test_an_unknown_card_is_not_found_and_writes_no_material(self) -> None:
         client = self.client(
@@ -981,12 +983,12 @@ class PickCardTests(TaskApiCase):
 
         task = self.task()
         material = task.materials[0]
-        self.assertTrue(material["id"].startswith("raw/web/"))
-        self.assertTrue(material["id"].endswith(".html"))
-        self.assertEqual(material["title"], "Entropy")
-        self.assertEqual(material["fidelity"], "ok")
+        self.assertTrue(material.id.startswith("raw/web/"))
+        self.assertTrue(material.id.endswith(".html"))
+        self.assertEqual(material.title, "Entropy")
+        self.assertEqual(material.fidelity, "ok")
         self.assertEqual(
-            [block["id"] for block in material["blocks"]], ["b1", "b2"]
+            [block.id for block in material.blocks], ["b1", "b2"]
         )
         manifests = list(
             (self.layout.staging / task.id).glob("*/manifest.json")
@@ -1062,7 +1064,7 @@ class HumanPickTests(TaskApiCase):
         self.assertEqual(task.ops[0].actor, "human")
         self.assertEqual(task.ops[0].status, "done")
         self.assertEqual(task.ops[0].expected_rev, 0)
-        self.assertEqual(task.materials[0]["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(task.materials[0].id, "raw/web/entropy-a1.html")
         self.assertEqual(stage.run_ids, ["task-7"])
 
     def test_a_pick_that_outlives_the_wait_returns_the_op_status(self) -> None:
@@ -1098,7 +1100,7 @@ class HumanPickTests(TaskApiCase):
         task = self.task()
         self.assertEqual(task.rev, 1)
         self.assertEqual(task.ops[0].status, "done")
-        self.assertEqual(task.materials[0]["id"], "raw/web/entropy-a1.html")
+        self.assertEqual(task.materials[0].id, "raw/web/entropy-a1.html")
 
     def test_a_person_picking_an_unknown_card_is_not_found(self) -> None:
         self.seed_task()
@@ -1258,8 +1260,8 @@ class FrameValidationTests(TaskApiCase):
         task = self.task()
         self.assertEqual(task.frames[0].blocks, ("b1", "b130"))
         # The preview index stays bounded; only the identity list is complete.
-        self.assertEqual(len(task.materials[0]["blocks"]), 120)
-        self.assertEqual(len(task.materials[0]["blockIds"]), 130)
+        self.assertEqual(len(task.materials[0].blocks), 120)
+        self.assertEqual(len(task.materials[0].block_ids), 130)
 
         material = observations[3]["materials"][0]
         self.assertEqual(material["blockCount"], 130)
@@ -1411,23 +1413,25 @@ def _stored_material(
     material: str = "raw/web/entropy-a1.html",
     *,
     block_ids: tuple[str, ...] = ("b1", "b2"),
-) -> dict[str, object]:
+) -> Material:
     """A material as the task stores it, for a test that seeds a task."""
-    return {
-        "id": material,
-        "title": "Entropy",
-        "url": "https://example.com/entropy",
-        "kind": "html",
-        "fidelity": "ok",
-        "state": "staged",
-        "runId": "task-7",
-        "blockCount": len(block_ids),
-        "blockIds": list(block_ids),
-        "blocks": [
-            {"id": block, "tag": "p", "preview": f"{block} 的预览"}
-            for block in block_ids
-        ],
-    }
+    return material_from_dict(
+        {
+            "id": material,
+            "title": "Entropy",
+            "url": "https://example.com/entropy",
+            "kind": "html",
+            "fidelity": "ok",
+            "state": "staged",
+            "runId": "task-7",
+            "blockCount": len(block_ids),
+            "blockIds": list(block_ids),
+            "blocks": [
+                {"id": block, "tag": "p", "preview": f"{block} 的预览"}
+                for block in block_ids
+            ],
+        }
+    )
 
 
 def _seed_approval() -> Approval:
@@ -4175,7 +4179,7 @@ class OpResumeNoticeTests(TaskApiCase):
         self.assertEqual(notice.kind, "pick")
         self.assertEqual(notice.status, "done")
         self.assertEqual(
-            notice.result["material"]["id"], task.materials[0]["id"]
+            notice.result["material"]["id"], task.materials[0].id
         )
         self.assertEqual(task.ops[-1].input["sessionId"], session_id)
 
