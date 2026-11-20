@@ -659,7 +659,11 @@
       "picking": "仍在抓取",
       "blocks": "{{count}} 段",
       "needsApproval": "等待你批准",
-      "approved": "已批准"
+      "approved": "已批准",
+      "written": "已写入",
+      "writeSkipped": "已跳过",
+      "writeFailed": "写入失败",
+      "writing": "仍在写入"
     },
     "wait": {
       "title": "等待你开始",
@@ -1566,6 +1570,7 @@
         "missing": "这一页已不在项目中，可能已被删除。",
         "notAPage": "这不是这个项目里的一篇笔记。",
         "changed": "这一页在你打开后又被写入过，请重新打开后再修改。",
+        "busy": "这一页正在被写入，等这次写入结束后再试。",
         "exists": "已经有同名的页面了，换一个名字。",
         "nameEmpty": "页面必须有名称。",
         "nameNotAllowed": "这个页面名不可用，请更换。",
@@ -1697,9 +1702,16 @@
     "reject": "拒绝",
     "approving": "正在批准…",
     "rejecting": "正在拒绝…",
-    "approvedNotice": "已批准。这一步还不会写入页面。",
+    "approvedNotice": "已批准。助手现在可以写入这一页。",
     "rejectedNotice": "已拒绝。助手可以修改请求后再提。",
     "decisionFailed": "写页请求没能处理",
+    "writeResult": "页面写入",
+    "writeDiff": "差异（+{{added}} / -{{removed}}）",
+    "writeStatus": {
+      "written": "已写入",
+      "skipped": "已跳过",
+      "failed": "失败"
+    },
     "action": {
       "create": "新建页面",
       "update": "更新页面"

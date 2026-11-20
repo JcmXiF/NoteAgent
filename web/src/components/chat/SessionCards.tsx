@@ -114,8 +114,9 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
       continue;
     }
     if (observation.tool === "compose_page" || observation.request) {
-      writeRequestRows(observation, rows, seen);
-      continue;
+      // A compose with no answer at all (a refusal, a handler error) falls
+      // through to the generic row, which says it failed.
+      if (writeRequestRows(observation, rows, seen)) continue;
     }
     if (observation.frames && observation.frames.length > 0) {
       frameRows(observation, rows, seen);
@@ -250,49 +251,95 @@ function materialRows(
 }
 
 /**
- * A write request is the page it proposes and the sections it is written from.
+ * A compose_page is the page it proposes or the page it wrote.
  *
- * The same request the task's confirmation panel shows, read from one Task; a
- * row says what the agent proposes and whether the person's go-ahead is still
- * missing or has been given.
+ * Without an answer it is the same request the task's confirmation panel
+ * shows: the page and its sections, waiting for a person. Once answered it is
+ * one row saying written/skipped/failed (or still writing) with the page's
+ * identity. The diff stays in the task's result view, not in the chat card.
  */
 function writeRequestRows(
   observation: ObservationPayload,
   rows: Row[],
   seen: Set<string>,
-): void {
+): boolean {
   const request = observation.request;
-  const spec = request?.spec;
-  const title = (spec?.title || spec?.slug || observation.title || "").trim();
-  const key = `compose:${request?.frameId ?? ""}:${observation.rev ?? ""}:${title}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  rows.push({
-    key,
-    kind: "approval",
-    label: title || observation.tool,
-    path: null,
-    open: null,
-    note:
-      observation.status === "approved"
-        ? { key: "chat.looked.approved" }
-        : { key: "chat.looked.needsApproval" },
-  });
-  for (const [index, section] of (spec?.sections ?? []).entries()) {
-    const label = (section.title || "").trim();
-    if (!label) continue;
+  if (request) {
+    const spec = request.spec;
+    const title = (spec?.title || spec?.slug || observation.title || "").trim();
+    const key = `compose:${request.frameId}:${observation.rev ?? ""}:${title}`;
+    if (seen.has(key)) return true;
+    seen.add(key);
     rows.push({
-      key: `${key}:section:${index}`,
+      key,
       kind: "approval",
-      label,
+      label: title || observation.tool,
       path: null,
       open: null,
       note:
-        section.blocks.length > 0
-          ? { key: "chat.looked.blocks", count: section.blocks.length }
-          : null,
+        observation.status === "approved"
+          ? { key: "chat.looked.approved" }
+          : { key: "chat.looked.needsApproval" },
     });
+    for (const [index, section] of (spec?.sections ?? []).entries()) {
+      const label = (section.title || "").trim();
+      if (!label) continue;
+      rows.push({
+        key: `${key}:section:${index}`,
+        kind: "approval",
+        label,
+        path: null,
+        open: null,
+        note:
+          section.blocks.length > 0
+            ? { key: "chat.looked.blocks", count: section.blocks.length }
+            : null,
+      });
+    }
+    return true;
   }
+  const status = (observation.status ?? "").trim();
+  if (
+    status !== "written" &&
+    status !== "skipped" &&
+    status !== "failed" &&
+    status !== "requested" &&
+    status !== "running"
+  ) {
+    return false;
+  }
+  const title = (
+    observation.title ||
+    observation.slug ||
+    observation.path ||
+    ""
+  ).trim();
+  if (!title) return false;
+  const key = `compose:${status}:${observation.rev ?? ""}:${
+    observation.path ?? title
+  }`;
+  if (seen.has(key)) return true;
+  seen.add(key);
+  rows.push({
+    key,
+    kind: "page",
+    label: title,
+    path: observation.path?.trim() || null,
+    // Only a written page exists to open; a skipped or failed one does not.
+    open:
+      status === "written"
+        ? observation.slug?.trim() || null
+        : null,
+    note:
+      status === "written"
+        ? { key: "chat.looked.written" }
+        : status === "skipped"
+          ? { key: "chat.looked.writeSkipped" }
+          : status === "failed"
+            ? { key: "chat.looked.writeFailed" }
+            : { key: "chat.looked.writing" },
+  });
+  return true;
 }
 
 /**
@@ -341,9 +388,15 @@ function noteFor(observation: ObservationPayload): Row["note"] {
       key:
         observation.tool === "pick_card"
           ? "chat.looked.picking"
-          : "chat.looked.searching",
+          : observation.tool === "compose_page" || observation.tool === "inspect"
+            ? "chat.looked.writing"
+            : "chat.looked.searching",
     };
   }
+  // An inspect("result") reads the last page write's outcome.
+  if (observation.status === "written") return { key: "chat.looked.written" };
+  if (observation.status === "skipped") return { key: "chat.looked.writeSkipped" };
+  if (observation.status === "failed") return { key: "chat.looked.writeFailed" };
   if (observation.omitted) return { key: "chat.looked.omitted" };
   if (observation.truncated) return { key: "chat.looked.truncated" };
   if (typeof observation.hits === "number") {

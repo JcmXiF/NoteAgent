@@ -957,10 +957,14 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.get("/api/v1/task")
     def kernel_task(
         view: Literal[
-            "summary", "cards", "materials", "frames", "approval"
+            "summary", "cards", "materials", "frames", "approval", "result"
         ] = Query("summary"),
     ) -> dict[str, object]:
-        """The active project's writing task, as a bounded view with its rev."""
+        """The active project's writing task, as a bounded view with its rev.
+
+        ``result`` is the last approved page write with its diff; the model's
+        ``inspect`` tool deliberately does not offer it.
+        """
         return task_view_payload(deps, view)
 
     @app.post("/api/v1/task/pick")
@@ -1552,7 +1556,13 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/projects/{name}/page/save")
     def project_page_save(name: str, body: PageSaveBody) -> dict[str, object]:
         try:
-            return page_save_payload(require_project_layout(name), body.model_dump())
+            return page_save_payload(
+                require_project_layout(name),
+                body.model_dump(),
+                # The task's executor holds the same lock while it writes a
+                # composed page, so whichever writer comes second is refused.
+                page_locks=deps.task_page_locks,
+            )
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
 

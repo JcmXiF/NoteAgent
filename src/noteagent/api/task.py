@@ -81,6 +81,10 @@ def task_service_for(deps: AppDeps, layout: ProjectLayout) -> TaskService:
         spawn=deps.task_spawn,
         wait_s=deps.task_wait_s,
         pick_wait_s=deps.task_pick_wait_s,
+        compose_wait_s=deps.task_compose_wait_s,
+        compose=deps.task_compose,
+        save=deps.task_save,
+        page_locks=deps.task_page_locks,
     )
 
 

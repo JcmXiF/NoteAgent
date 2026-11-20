@@ -6,6 +6,7 @@ import {
   fetchTaskCards,
   fetchTaskFrames,
   fetchTaskMaterials,
+  fetchTaskResult,
   fetchTaskSummary,
   frameTaskMaterial,
   pickTaskCard,
@@ -15,6 +16,7 @@ import type {
   TaskCardsView,
   TaskFramesView,
   TaskMaterialsView,
+  TaskResultView,
   TaskSummaryView,
 } from "@/lib/api/types";
 import i18n from "@/i18n";
@@ -35,6 +37,8 @@ type TaskState = {
   frames: TaskFramesView | null;
   /** The standing approval and the write request waiting for a person. */
   approvalView: TaskApprovalView | null;
+  /** The last approved page write: its outcome, summary and page diff. */
+  resultView: TaskResultView | null;
   error: string;
   /** The card being picked, while its op is in flight. */
   picking: string;
@@ -75,6 +79,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   materials: null,
   frames: null,
   approvalView: null,
+  resultView: null,
   error: "",
   picking: "",
   pickError: "",
@@ -90,16 +95,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const mine = ++generation;
     set({ status: "loading", error: "" });
     try {
-      const [summary, cards, materials, frames, approvalView] =
+      const [summary, cards, materials, frames, approvalView, resultView] =
         await Promise.all([
           fetchTaskSummary(),
           fetchTaskCards(),
           fetchTaskMaterials(),
           fetchTaskFrames(),
           fetchTaskApproval(),
+          fetchTaskResult(),
         ]);
       if (mine !== generation) return;
-      set({ status: "ready", summary, cards, materials, frames, approvalView });
+      set({
+        status: "ready",
+        summary,
+        cards,
+        materials,
+        frames,
+        approvalView,
+        resultView,
+      });
     } catch (reason) {
       if (mine !== generation) return;
       set({
@@ -204,6 +218,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       materials: null,
       frames: null,
       approvalView: null,
+      resultView: null,
       error: "",
       picking: "",
       pickError: "",

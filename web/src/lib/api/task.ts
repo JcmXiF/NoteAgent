@@ -15,6 +15,7 @@ import type {
   TaskMaterialsView,
   TaskPageSpec,
   TaskPickResult,
+  TaskResultView,
   TaskSummaryView,
 } from "@/lib/api/types";
 
@@ -42,6 +43,16 @@ export function fetchTaskFrames(): Promise<TaskFramesView> {
  */
 export function fetchTaskApproval(): Promise<TaskApprovalView> {
   return getJson<TaskApprovalView>("/task?view=approval");
+}
+
+/**
+ * The last approved page write: its fate, the page identity and the diff.
+ *
+ * The core records this with the task, so the panel shows the one state the
+ * executor wrote rather than a copy assembled from chat events.
+ */
+export function fetchTaskResult(): Promise<TaskResultView> {
+  return getJson<TaskResultView>("/task?view=result");
 }
 
 /**

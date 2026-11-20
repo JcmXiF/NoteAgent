@@ -313,8 +313,10 @@ class DefaultToolTests(unittest.TestCase):
                 "inspect",
             ],
         )
-        # No agent tool writes an approval; only the person's route does.
+        # No agent tool writes an approval; only the person's route does. The
+        # page save is the executor's internal node, never a tool either.
         self.assertIsNone(tools.get("approve"))
+        self.assertIsNone(tools.get("save_page"))
         # The model names a query and nothing else; the observed revision is
         # attached by the wrapper, not guessed by the model.
         search = tools.require("web_search")
@@ -339,8 +341,8 @@ class DefaultToolTests(unittest.TestCase):
         self.assertFalse(frame.parameters["additionalProperties"])
         self.assertEqual(frame.side_effect, "write")
         # The gate names exactly the frame and the spec; the session's observed
-        # revision travels on the call, not in the model's arguments. In this
-        # slice it writes local task state (the pending request), so the
+        # revision travels on the call, not in the model's arguments. With a
+        # matching approval it writes the page through the core, so the
         # contract's word for it is `write`, not `human` and not `network`.
         compose = tools.require("compose_page")
         self.assertEqual(
@@ -353,15 +355,32 @@ class DefaultToolTests(unittest.TestCase):
             set(compose.parameters["properties"]["spec"]["properties"]),
             {"slug", "title", "action", "sections"},
         )
+        # The handler waits three minutes for the write; the registry's wall
+        # clock must sit above it, or a slow compose would be a timeout error
+        # instead of the contract's requested/running answer.
+        self.assertGreater(compose.timeout_s, 180.0)
         inspect = tools.require("inspect")
+        # `result` is the last page write's bounded outcome: the agent needs it
+        # after a bounded wait or a resumed run. The route's diff stays out of
+        # it; the handler strips it from what the model reads.
         self.assertEqual(
             inspect.parameters["properties"]["view"]["enum"],
-            ["summary", "cards", "materials", "frames", "approval"],
+            [
+                "summary",
+                "cards",
+                "materials",
+                "frames",
+                "approval",
+                "result",
+            ],
         )
         self.assertEqual(inspect.side_effect, "read")
 
     def test_a_pick_gets_its_own_ninety_second_bounded_wait(self) -> None:
         self.assertEqual(AppDeps().task_pick_wait_s, 90.0)
+
+    def test_a_compose_gets_a_three_minute_bounded_wait(self) -> None:
+        self.assertEqual(AppDeps().task_compose_wait_s, 180.0)
 
     def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:
         tools = session_tools(AppDeps(sessions=FakeSessionStore()), None)
