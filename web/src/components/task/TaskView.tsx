@@ -56,9 +56,10 @@ export function TaskView() {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    // One change stream per project. The first overview is read when it opens,
-    // and every later revision is an invalidation of that same snapshot. A
-    // project switch or an unmount closes the connection with the panel.
+    // One change stream per project. The overview is read on connect, so the
+    // panel does not wait for the stream to open, and every later revision is
+    // an invalidation of that same snapshot. A project switch or an unmount
+    // closes the connection with the panel.
     if (project) connect(project);
     else reset();
     return () => disconnect();

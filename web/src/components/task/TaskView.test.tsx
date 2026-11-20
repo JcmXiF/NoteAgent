@@ -1101,6 +1101,22 @@ describe("the task change stream", () => {
     expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(2);
   });
 
+  it("reads the task even when the stream never opens", async () => {
+    // The stream is additive: a route, proxy or version mismatch may leave the
+    // EventSource connecting forever while the REST overview still works. The
+    // panel must not stay empty waiting for an `open` that never comes.
+    vi.mocked(subscribeTaskEvents).mockImplementation((handlers) => {
+      streams.push(handlers);
+      return closeStream;
+    });
+
+    await draw();
+    await act(async () => {});
+
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain(i18n.t("task.rev", { rev: 2 }));
+  });
+
   it("reads the task again when the stream reconnects", async () => {
     await draw();
     expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(1);

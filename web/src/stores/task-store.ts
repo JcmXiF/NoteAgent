@@ -70,8 +70,9 @@ type TaskState = {
   /** What the last op action left behind. */
   opNotice: string;
   /**
-   * Follow this project's task changes. The first snapshot is read when the
-   * stream opens; a reconnection reads it again to catch up on what was missed.
+   * Follow this project's task changes. The overview is read immediately, so
+   * the panel never depends on the stream opening; a reconnection reads it
+   * again to catch up on what was missed while the stream was away.
    */
   connect: (project: string) => void;
   /** Close the change stream; a project switch or an unmount does this. */
@@ -175,6 +176,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     closeStream = null;
     streamProject = project;
     const mine = project;
+    let openedOnce = false;
+    // The snapshot does not depend on the stream: read it now, so a stream that
+    // is unavailable (route/proxy mismatch) or still connecting cannot leave
+    // the panel empty. The first open is skipped as this read already covers
+    // it; each reconnection reads again for whatever landed while it was away.
+    void refreshTask();
     const handlers = {
       onEvent: () => {
         // An event from a stream that belonged to the previous project must
@@ -184,18 +191,19 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       },
       onOpen: () => {
         if (streamProject !== mine) return;
-        // The first open is the panel's initial read; after a reconnection it
-        // catches up on every write that landed while the stream was away.
+        if (!openedOnce) {
+          openedOnce = true;
+          return;
+        }
         void refreshTask();
       },
     };
     try {
       closeStream = subscribeTaskEvents(handlers);
     } catch {
-      // Without EventSource the panel still reads once; it simply does not
-      // follow later writes until an action or the chat refreshes it.
+      // Without EventSource the panel keeps the snapshot just read; actions
+      // and the chat's observation refresh still update it.
       closeStream = null;
-      void refreshTask();
     }
   },
 
