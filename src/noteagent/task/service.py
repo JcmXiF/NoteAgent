@@ -33,6 +33,7 @@ from noteagent.task.model import (
     MAX_MATERIAL_TITLE,
     MAX_VIEW_BLOCKS,
     TASK_VIEWS,
+    Approval,
     Card,
     FetchFn,
     Frame,
@@ -42,6 +43,8 @@ from noteagent.task.model import (
     StagedMaterial,
     StageFn,
     Task,
+    WriteRequest,
+    canonical_page_spec,
     task_view,
 )
 from noteagent.task.store import TaskStore
@@ -91,6 +94,13 @@ class TaskBadSpec(TaskToolError):
         super().__init__(message, code="bad_spec")
 
 
+class TaskNeedsApproval(TaskToolError):
+    """A person's decision names a request that is not the one pending now."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="needs_approval")
+
+
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
     """What a tool gets back from a search: cards, or where the op stands."""
@@ -124,6 +134,33 @@ class FrameOutcome:
     frame: Frame
     #: Whether this frame write cleared an approval the person had given.
     approval_cleared: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ComposeOutcome:
+    """What ``compose_page`` gets back: the gate's answer, not a written page.
+
+    ``needs_approval`` carries the write request that is now recorded in the
+    task. ``approved`` means a matching person's approval stands; the writing
+    itself belongs to the next ticket, so this outcome never names a page.
+    """
+
+    status: str
+    rev: int
+    frame_id: str
+    spec: Mapping[str, object]
+    request: WriteRequest | None = None
+    approval: Approval | None = None
+    approval_cleared: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveOutcome:
+    """What a person's decision leaves behind: a go-ahead, or none."""
+
+    decision: str
+    rev: int
+    approval: Approval | None = None
 
 
 class TaskRegistry:
@@ -420,8 +457,10 @@ class TaskService:
             if existing is None:
                 frames = frames + (frame,)
             # Any frame write changes the writing basis, so a person's earlier
-            # go-ahead no longer covers what would be written.
+            # go-ahead no longer covers what would be written, and a request
+            # that named the old frame cannot be decided either.
             approval_cleared = task.approval is not None
+            request_cleared = task.request is not None
             op = Op(
                 id=op_id,
                 kind="frame",
@@ -436,6 +475,7 @@ class TaskService:
                     "docId": cleaned_doc,
                     "blocks": list(ordered),
                     "approvalCleared": approval_cleared,
+                    "requestCleared": request_cleared,
                 },
             )
             saved = replace(
@@ -443,6 +483,13 @@ class TaskService:
                 frames=frames,
                 ops=task.ops + (op,),
                 approval=None if approval_cleared else task.approval,
+                request=None if request_cleared else task.request,
+                status=(
+                    "idle"
+                    if (approval_cleared or request_cleared)
+                    and task.status == "needs_approval"
+                    else task.status
+                ),
                 rev=task.rev + 1,
                 updated_at=now,
             )
@@ -456,6 +503,219 @@ class TaskService:
             frame=frame,
             approval_cleared=approval_cleared,
         )
+
+    def compose(
+        self,
+        frame_id: str,
+        spec: object,
+        *,
+        session_id: str = "",
+        expected_rev: int | None = None,
+    ) -> ComposeOutcome:
+        """Ask the gate whether this frame and spec may be written.
+
+        A valid spec with no matching approval is recorded as the task's pending
+        request and answered ``needs_approval``: no op is written and no page is
+        touched. *expected_rev* is the revision the session last saw; it is
+        compared with the approval's binding, never trusted as a write token.
+        """
+        cleaned = (frame_id or "").strip()
+        if not cleaned:
+            raise TaskBadSpec(
+                "compose_page needs the frame it writes from. Do not retry "
+                'blindly; call inspect("frames") for its id.'
+            )
+        try:
+            canonical = canonical_page_spec(spec)
+        except ValueError as err:
+            raise TaskBadSpec(str(err)) from err
+        # The wrapper names the revision the session last saw; a caller with no
+        # observation is accepted at the revision the task is at, like a frame.
+        expected = (
+            expected_rev
+            if expected_rev is not None
+            else self._registry.observed(self._project_key, session_id)
+        )
+        now = iso_timestamp(self._clock)
+        with self._writing():
+            task = self._store.load() or self._create_locked()
+            expected = task.rev if expected is None else expected
+            if expected != task.rev:
+                raise TaskConflict(
+                    "the writing task changed since this session last saw it "
+                    f"(expected rev {expected}, now rev {task.rev}). Do not "
+                    "retry blindly; call inspect and decide again."
+                )
+            frame = next(
+                (item for item in task.frames if item.id == cleaned), None
+            )
+            if frame is None:
+                raise TaskNotFound(
+                    f"the writing task has no frame {cleaned!r}. Do not retry "
+                    'blindly; call inspect("frames") for the ids it holds.'
+                )
+            known = set(frame.blocks)
+            unknown: list[str] = []
+            for section in canonical["sections"]:
+                raw_blocks = section.get("blocks")
+                for block in raw_blocks if isinstance(raw_blocks, list) else []:
+                    if isinstance(block, str) and block not in known and block not in unknown:
+                        unknown.append(block)
+            if unknown:
+                shown = ", ".join(repr(block) for block in unknown[:5])
+                raise TaskBadSpec(
+                    f"block(s) {shown} are not in frame {cleaned!r}. Do not "
+                    'retry blindly; call inspect("frames") for the blocks that '
+                    "frame covers."
+                )
+            # The gate: an approval covers exactly this frame, this canonical
+            # spec, at exactly this revision. A match is ready to write, but the
+            # writing itself is the next ticket's step.
+            if _approval_covers(
+                task.approval, cleaned, canonical, task.rev
+            ):
+                self._registry.observe(
+                    self._project_key, session_id, task.rev
+                )
+                return ComposeOutcome(
+                    status="approved",
+                    rev=task.rev,
+                    frame_id=cleaned,
+                    spec=canonical,
+                    approval=task.approval,
+                )
+            # A standing approval did not match this request (or there is none).
+            # It no longer covers what would be written, so it is cleared rather
+            # than left to look usable.
+            approval_cleared = task.approval is not None
+            request = WriteRequest(
+                frame_id=cleaned,
+                spec=canonical,
+                rev=task.rev + 1,
+                at=now,
+            )
+            saved = replace(
+                task,
+                status="needs_approval",
+                approval=None,
+                request=request,
+                rev=task.rev + 1,
+                updated_at=now,
+            )
+            self._store.save(saved)
+            self._registry.observe(self._project_key, session_id, saved.rev)
+        return ComposeOutcome(
+            status="needs_approval",
+            rev=saved.rev,
+            frame_id=cleaned,
+            spec=canonical,
+            request=request,
+            approval_cleared=approval_cleared,
+        )
+
+    def approve(
+        self,
+        task_id: str,
+        rev: int,
+        frame_id: str,
+        spec: object,
+        decision: str,
+        *,
+        by: str = "human",
+    ) -> ApproveOutcome:
+        """Record a person's decision on the pending write request.
+
+        This is the one transition only a person may make. It refuses anything
+        but the request that is pending at the current revision: a stale
+        revision, another frame, another spec or no request at all is answered
+        with ``conflict``/``needs_approval`` and changes nothing. An approval is
+        written with the revision the decision creates, so the next task write
+        makes it stale by construction.
+        """
+        cleaned_task = (task_id or "").strip()
+        cleaned_frame = (frame_id or "").strip()
+        if decision not in ("approve", "reject"):
+            raise ValueError(f"unknown decision: {decision!r}")
+        try:
+            canonical = canonical_page_spec(spec)
+        except ValueError as err:
+            raise TaskBadSpec(str(err)) from err
+        now = iso_timestamp(self._clock)
+        with self._writing():
+            task = self._store.load()
+            if task is None or task.id != cleaned_task:
+                raise TaskConflict(
+                    "there is no active writing task with that id; read the "
+                    "task again before deciding"
+                )
+            if rev != task.rev:
+                raise TaskConflict(
+                    "the writing task changed since this view was read "
+                    f"(expected rev {rev}, now rev {task.rev}). Re-read the "
+                    "request before deciding."
+                )
+            request = task.request
+            if request is None:
+                raise TaskNeedsApproval(
+                    "there is no pending write request to decide on; the agent "
+                    "must call compose_page again"
+                )
+            if request.rev != task.rev or request.frame_id != cleaned_frame:
+                raise TaskNeedsApproval(
+                    "the pending write request changed; re-read it before "
+                    "deciding"
+                )
+            if not _same_page_spec(request.spec, canonical):
+                raise TaskNeedsApproval(
+                    "the pending write request proposes a different spec; "
+                    "re-read it before deciding"
+                )
+            frame = next(
+                (item for item in task.frames if item.id == cleaned_frame),
+                None,
+            )
+            if frame is None:
+                raise TaskNotFound(
+                    f"the writing task has no frame {cleaned_frame!r}; re-read "
+                    "the task before deciding"
+                )
+            approval = (
+                Approval(
+                    frame_id=cleaned_frame,
+                    spec=canonical,
+                    rev=task.rev + 1,
+                    by=by,
+                    at=now,
+                )
+                if decision == "approve"
+                else None
+            )
+            op = Op(
+                id=self._ids.new_id("op"),
+                kind="approve",
+                actor="human",
+                status="done",
+                input={
+                    "frameId": cleaned_frame,
+                    "spec": canonical,
+                    "decision": decision,
+                },
+                expected_rev=task.rev,
+                created_at=now,
+                updated_at=now,
+                result={"decision": decision, "frameId": cleaned_frame},
+            )
+            saved = replace(
+                task,
+                status="idle",
+                approval=approval,
+                request=None,
+                ops=task.ops + (op,),
+                rev=task.rev + 1,
+                updated_at=now,
+            )
+            self._store.save(saved)
+        return ApproveOutcome(decision, saved.rev, approval)
 
     def _request(
         self,
@@ -606,12 +866,23 @@ class TaskService:
             elif answer.material is not None:
                 materials = _upsert_material(task.materials, answer.material)
             done = replace(op, status="done", result=result, updated_at=now)
+            # Finishing an op moves the revision. An approval or a pending
+            # request is bound to the old revision, so it no longer stands: a
+            # person's go-ahead must not cover a task they did not approve.
+            cleared = task.approval is not None or task.request is not None
             self._store.save(
                 replace(
                     task,
                     cards=cards,
                     materials=materials,
                     ops=_replace_op(task, done),
+                    approval=None if cleared else task.approval,
+                    request=None if cleared else task.request,
+                    status=(
+                        "idle"
+                        if cleared and task.status == "needs_approval"
+                        else task.status
+                    ),
                     rev=task.rev + 1,
                     updated_at=now,
                 )
@@ -816,6 +1087,38 @@ def _upsert_material(
     return materials + (row,)
 
 
+def _approval_covers(
+    approval: Approval | None,
+    frame_id: str,
+    spec: Mapping[str, object],
+    rev: int,
+) -> bool:
+    """Whether an approval is exactly for this frame, spec and revision.
+
+    All three parts are compared: a different frame, a changed spec, or a task
+    that moved to another revision is a different write, and the person has not
+    approved it.
+    """
+    return (
+        approval is not None
+        and approval.frame_id == frame_id
+        and approval.rev == rev
+        and _same_page_spec(approval.spec, spec)
+    )
+
+
+def _same_page_spec(left: object, right: object) -> bool:
+    """Whether two specs canonicalize to the same request.
+
+    A stored spec was canonicalized when it was written; canonicalizing again is
+    what makes a hand-seeded or older row comparable instead of trusted.
+    """
+    try:
+        return canonical_page_spec(left) == canonical_page_spec(right)
+    except ValueError:
+        return False
+
+
 def _input_text(values: Mapping[str, object], key: str) -> str:
     value = values.get(key)
     return value.strip() if isinstance(value, str) else ""
@@ -837,11 +1140,14 @@ __all__ = [
     "DEFAULT_PICK_WAIT_S",
     "DEFAULT_POLL_S",
     "DEFAULT_WAIT_S",
+    "ApproveOutcome",
+    "ComposeOutcome",
     "FrameOutcome",
     "PickOutcome",
     "SearchOutcome",
     "TaskBadSpec",
     "TaskConflict",
+    "TaskNeedsApproval",
     "TaskNotFound",
     "TaskOpFailed",
     "TaskRegistry",

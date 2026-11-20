@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import type { TaskFrame } from "@/lib/api/types";
+import type { TaskFrame, TaskWriteRequest } from "@/lib/api/types";
 import { useTaskStore } from "@/stores/task-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
@@ -19,6 +19,7 @@ export function TaskView() {
   const cards = useTaskStore((state) => state.cards);
   const materials = useTaskStore((state) => state.materials);
   const frames = useTaskStore((state) => state.frames);
+  const approvalView = useTaskStore((state) => state.approvalView);
   const error = useTaskStore((state) => state.error);
   const picking = useTaskStore((state) => state.picking);
   const pickError = useTaskStore((state) => state.pickError);
@@ -26,9 +27,13 @@ export function TaskView() {
   const framing = useTaskStore((state) => state.framing);
   const frameError = useTaskStore((state) => state.frameError);
   const frameNotice = useTaskStore((state) => state.frameNotice);
+  const deciding = useTaskStore((state) => state.deciding);
+  const decisionError = useTaskStore((state) => state.decisionError);
+  const decisionNotice = useTaskStore((state) => state.decisionNotice);
   const load = useTaskStore((state) => state.load);
   const pick = useTaskStore((state) => state.pick);
   const frame = useTaskStore((state) => state.frame);
+  const decide = useTaskStore((state) => state.decide);
   const reset = useTaskStore((state) => state.reset);
   const project = useWorkspaceStore((state) => state.current);
 
@@ -64,6 +69,20 @@ export function TaskView() {
 
   const shown = cards?.cards ?? [];
   const staged = materials?.materials ?? [];
+  const request = approvalView?.request ?? null;
+  // The evidence a section names: the bounded previews the task already gave
+  // for the material and the frame. The block text itself never leaves staging.
+  const previews = new Map<string, string>();
+  for (const material of staged) {
+    for (const block of material.blocks ?? []) {
+      previews.set(block.id, block.preview);
+    }
+  }
+  for (const frame of frames?.frames ?? []) {
+    for (const block of frame.blocks ?? []) {
+      if (block.preview) previews.set(block.id, block.preview);
+    }
+  }
   return (
     <div className="px-2 py-1.5 text-[11px]">
       <div className="flex items-center gap-2">
@@ -91,6 +110,25 @@ export function TaskView() {
             })
           : t("task.noApproval")}
       </p>
+      {request ? (
+        <WriteRequestPanel
+          request={request}
+          rev={summary.rev}
+          previews={previews}
+          busy={deciding}
+          onDecide={(decision) => void decide(decision)}
+        />
+      ) : null}
+      {decisionNotice ? (
+        <p role="status" className="mt-1 text-muted-foreground">
+          {decisionNotice}
+        </p>
+      ) : null}
+      {decisionError ? (
+        <p role="alert" className="mt-1 text-destructive">
+          {decisionError}
+        </p>
+      ) : null}
       {shown.length > 0 ? (
         <ul className="mt-1 flex flex-col gap-0.5">
           {shown.map((card) => (
@@ -245,6 +283,91 @@ function FrameList({
         <p className="mt-1 text-muted-foreground">{t("task.framesEmpty")}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The person's gate: the page, action, sections and evidence an agent proposed.
+ *
+ * It renders the pending request stored in the shared task, so this panel and
+ * the chat card show the same proposal. Approve and reject go to the human-only
+ * route; no agent tool can write either.
+ */
+function WriteRequestPanel({
+  request,
+  rev,
+  previews,
+  busy,
+  onDecide,
+}: {
+  request: TaskWriteRequest;
+  rev: number;
+  previews: Map<string, string>;
+  busy: "" | "approve" | "reject";
+  onDecide: (decision: "approve" | "reject") => void;
+}) {
+  const { t } = useTranslation();
+  const spec = request.spec;
+  return (
+    <section
+      aria-label={t("task.writeRequest")}
+      className="mt-2 rounded-md border border-warning/50 bg-warning/5 p-1.5"
+    >
+      <div className="flex items-center gap-2">
+        <p className="font-medium">{t("task.writeRequest")}</p>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {t("task.rev", { rev })}
+        </span>
+      </div>
+      <p className="mt-0.5 truncate text-foreground" title={spec.title}>
+        {spec.title || spec.slug}
+      </p>
+      <p className="text-[10px] text-muted-foreground">
+        {spec.slug}
+        {" · "}
+        {t(`task.action.${spec.action}`, { defaultValue: spec.action })}
+      </p>
+      <ol className="mt-1 flex flex-col gap-1">
+        {spec.sections.map((section, index) => (
+          <li key={`${index}:${section.title}`} className="min-w-0">
+            <p className="truncate text-foreground" title={section.title}>
+              {section.title}
+            </p>
+            <ul className="mt-0.5 flex flex-col gap-px">
+              {section.blocks.map((block) => (
+                <li
+                  key={block}
+                  className="truncate text-[10px] text-muted-foreground"
+                  title={previews.get(block) ?? block}
+                >
+                  <span className="text-foreground/70">[{block}]</span>{" "}
+                  {previews.get(block) ?? ""}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-1 flex gap-1">
+        <Button
+          size="sm"
+          className="h-5 px-1.5"
+          disabled={busy !== ""}
+          onClick={() => onDecide("approve")}
+        >
+          {busy === "approve" ? t("task.approving") : t("task.approve")}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-5 px-1.5"
+          disabled={busy !== ""}
+          onClick={() => onDecide("reject")}
+        >
+          {busy === "reject" ? t("task.rejecting") : t("task.reject")}
+        </Button>
+      </div>
+    </section>
   );
 }
 

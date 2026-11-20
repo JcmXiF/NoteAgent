@@ -386,6 +386,30 @@ export type ObservedFrame = {
 };
 
 /**
+ * The page a write request proposes: its wiki name, title, action and the
+ * sections it is written from, each naming the frame's blocks as evidence.
+ */
+export type ObservedPageSpec = {
+  slug: string;
+  title: string;
+  action: string;
+  sections: { title: string; blocks: string[] }[];
+};
+
+/**
+ * One write request, as `compose_page` records it in the task.
+ *
+ * It is the same object the confirmation panel reads from the task view: the
+ * frame and canonical spec it is bound to, and the revision it was recorded at.
+ */
+export type ObservedWriteRequest = {
+  frameId: string;
+  spec: ObservedPageSpec;
+  rev: number;
+  at: string;
+};
+
+/**
  * One thing the assistant looked at.
  *
  * The shape is the core's: `tool` and `target` say what was touched and `title`
@@ -436,6 +460,8 @@ export type ObservationPayload = {
   materials?: ObservedMaterial[];
   /** The frames a frame_blocks call or an inspect("frames") touched. */
   frames?: ObservedFrame[];
+  /** The write request a compose_page recorded or inspect("approval") shows. */
+  request?: ObservedWriteRequest;
   /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
   diagnostics?: { severity: string; code: string; message: string }[];
 };

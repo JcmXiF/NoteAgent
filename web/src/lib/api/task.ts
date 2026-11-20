@@ -7,10 +7,13 @@
 
 import { getJson, postJson } from "@/lib/api/client";
 import type {
+  TaskApproveResult,
+  TaskApprovalView,
   TaskCardsView,
   TaskFrameResult,
   TaskFramesView,
   TaskMaterialsView,
+  TaskPageSpec,
   TaskPickResult,
   TaskSummaryView,
 } from "@/lib/api/types";
@@ -29,6 +32,16 @@ export function fetchTaskMaterials(): Promise<TaskMaterialsView> {
 
 export function fetchTaskFrames(): Promise<TaskFramesView> {
   return getJson<TaskFramesView>("/task?view=frames");
+}
+
+/**
+ * The go-ahead that stands, and the write request still waiting for a person.
+ *
+ * The panel renders the request from this view, not from a chat-only copy, so
+ * the person and the agent read one task.
+ */
+export function fetchTaskApproval(): Promise<TaskApprovalView> {
+  return getJson<TaskApprovalView>("/task?view=approval");
 }
 
 /**
@@ -61,5 +74,28 @@ export function frameTaskMaterial(
     docId,
     blocks,
     expectedRev,
+  });
+}
+
+/**
+ * A person's decision on the pending write request.
+ *
+ * This is the only way an approval is written; no agent tool reaches it. The
+ * revision is the one this view was read at, and the spec is the canonical one
+ * the task stored, so a request that moved is refused instead of decided on.
+ */
+export function approveTaskRequest(
+  taskId: string,
+  rev: number,
+  frameId: string,
+  spec: TaskPageSpec,
+  decision: "approve" | "reject",
+): Promise<TaskApproveResult> {
+  return postJson<TaskApproveResult>("/task/approve", {
+    taskId,
+    rev,
+    frameId,
+    spec,
+    decision,
   });
 }

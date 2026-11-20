@@ -8,6 +8,8 @@
 import type {
   ObservationPayload,
   ObservedMaterial,
+  ObservedPageSpec,
+  ObservedWriteRequest,
   WaitPayload,
 } from "@/lib/api/client";
 
@@ -504,6 +506,44 @@ export type TaskFramesView = {
   frames: TaskFrame[];
   /** Frames beyond the view's bound. */
   omitted: number;
+};
+
+/** The page a write request proposes, as the confirmation panel reads it. */
+export type TaskPageSpec = ObservedPageSpec;
+
+/** One pending write request: the frame, the canonical spec and its revision. */
+export type TaskWriteRequest = ObservedWriteRequest;
+
+/** The go-ahead a person gave, with the spec it covers. */
+export type TaskApprovalDetail = {
+  frameId: string;
+  spec: TaskPageSpec;
+  rev: number;
+  by: string;
+  at: string;
+};
+
+/**
+ * The approval that stands, or none, and the write request still waiting for a
+ * person. Both are bindings: one whose revision or frame no longer matches is
+ * reported as null with its `*Stale` flag set, so the panel cannot offer a
+ * decision the core would refuse.
+ */
+export type TaskApprovalView = {
+  view: "approval";
+  rev: number;
+  status: string;
+  approval: TaskApprovalDetail | null;
+  approvalStale: boolean;
+  request: TaskWriteRequest | null;
+  requestStale: boolean;
+};
+
+/** What a person's approve/reject answer leaves behind. */
+export type TaskApproveResult = {
+  decision: string;
+  rev: number;
+  approval?: TaskApprovalDetail;
 };
 
 /** What a person's frame answers with: the frame, its rev, and the approval. */

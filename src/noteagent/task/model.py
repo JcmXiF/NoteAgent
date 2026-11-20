@@ -35,11 +35,12 @@ TASK_STATUSES: tuple[TaskStatus, ...] = (
     "failed",
 )
 
-#: The kinds of operation the task knows. ``frame`` is pure state: the tool
-#: applies it itself and logs it; the executor never claims it.
-OpKind: TypeAlias = Literal["search", "pick", "frame"]
+#: The kinds of operation the task knows. ``frame`` and ``approve`` are pure
+#: state: the tool or the person applies them themselves and logs them; the
+#: executor never claims them. ``approve`` is written only by a person's route.
+OpKind: TypeAlias = Literal["search", "pick", "frame", "approve"]
 
-OP_KINDS: tuple[OpKind, ...] = ("search", "pick", "frame")
+OP_KINDS: tuple[OpKind, ...] = ("search", "pick", "frame", "approve")
 
 #: Where a frame came from. A person and the agent draw frames in this slice;
 #: ``model`` is the auto-framing node the pipeline already has, for later.
@@ -58,7 +59,15 @@ ACTIVE_OP_STATUSES = frozenset({"requested", "running"})
 Actor: TypeAlias = Literal["agent", "human"]
 
 #: The views ``inspect`` may ask for. Each is bounded; none is the task file.
-TASK_VIEWS: tuple[str, ...] = ("summary", "cards", "materials", "frames")
+#: ``approval`` carries the person's go-ahead (or none) and the pending write
+#: request the confirmation panel shows.
+TASK_VIEWS: tuple[str, ...] = (
+    "summary",
+    "cards",
+    "materials",
+    "frames",
+    "approval",
+)
 
 #: How many cards one bounded view carries.
 MAX_VIEW_CARDS = 20
@@ -83,6 +92,26 @@ MAX_VIEW_FRAME_BLOCKS = 60
 #: short already; a node is not trusted to keep them so.
 MAX_MATERIAL_TITLE = 200
 MAX_BLOCK_PREVIEW = 200
+
+#: What a writing spec may ask for. A page carries at most twelve sections and
+#: one section at most twenty passages; the spec is stored whole in the task and
+#: shown whole to the person who approves it, so these bounds are also what keeps
+#: that view bounded. ``MAX_SPEC_TITLE`` is the spec's stated title limit; a
+#: section title is bounded less tightly because it is a heading, not a page name.
+MAX_SPEC_SECTIONS = 12
+MAX_SECTION_BLOCKS = 20
+MAX_SPEC_TITLE = 120
+MAX_SECTION_TITLE = 200
+MAX_SPEC_SLUG = 80
+
+#: The two things writing a page can mean in this slice. ``create`` makes a new
+#: page; ``update`` rewrites one that exists. Whether the page really exists is
+#: the writer's business (ticket 05), not the spec's.
+PAGE_SPEC_ACTIONS: tuple[str, ...] = ("create", "update")
+
+_SPEC_KEYS = frozenset({"slug", "title", "action", "sections"})
+_SECTION_KEYS = frozenset({"title", "blocks"})
+_SLUG_SAFE = re.compile(r"[^\w\-]+", re.UNICODE)
 
 _ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
 
@@ -187,6 +216,23 @@ class Approval:
 
 
 @dataclass(frozen=True, slots=True)
+class WriteRequest:
+    """A writing spec the agent proposed and a person has not answered yet.
+
+    This is a deliberate extension of the spec's task shape: the approval lists
+    the go-ahead, but the interface also needs the *proposal* to show before it
+    is approved. The request is the same object for the chat card and the task
+    panel, so no second store is built; it is cleared by the approval, the
+    rejection, a frame change, or any other write that moves the revision.
+    """
+
+    frame_id: str
+    spec: Mapping[str, object] = field(default_factory=dict)
+    rev: int = 0
+    at: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Op:
     """One typed operation on the task.
 
@@ -226,6 +272,11 @@ class Task:
     frames: tuple[Frame, ...] = ()
     plan: tuple[Mapping[str, object], ...] = ()
     approval: Approval | None = None
+    #: The pending write request, from the last ``compose_page`` that found no
+    #: matching approval. It is not part of the spec's task shape; the shared
+    #: confirmation panel needs the proposal itself, and this is the one place
+    #: the chat card and the panel can read it from.
+    request: WriteRequest | None = None
     result: Mapping[str, object] | None = None
     ops: tuple[Op, ...] = ()
 
@@ -365,6 +416,139 @@ def approval_from_dict(raw: Mapping[str, object]) -> Approval | None:
     )
 
 
+def request_to_dict(request: WriteRequest) -> dict[str, object]:
+    return {
+        "frameId": request.frame_id,
+        "spec": dict(request.spec),
+        "rev": request.rev,
+        "at": request.at,
+    }
+
+
+def request_from_dict(raw: Mapping[str, object]) -> WriteRequest | None:
+    """The stored request, or ``None`` for one that cannot be read.
+
+    Losing a pending request only makes the agent propose again, which is the
+    safe side of the gate, so a malformed row is dropped like a malformed
+    approval.
+    """
+    frame_id = _text(raw.get("frameId"))
+    if not is_task_id(frame_id):
+        return None
+    spec = raw.get("spec")
+    return WriteRequest(
+        frame_id=frame_id,
+        spec=dict(spec) if isinstance(spec, Mapping) else {},
+        rev=_count(raw.get("rev")),
+        at=_text(raw.get("at")),
+    )
+
+
+def canonical_page_spec(raw: object) -> dict[str, object]:
+    """The one shape a writing spec is stored and compared in.
+
+    A spec is exactly ``slug``, ``title``, ``action`` and ``sections``; a
+    section is exactly ``title`` and ``blocks``. Anything else is refused rather
+    than ignored, because a field the writer would not honour (``coverage``,
+    ``wikiPath``, ...) must not look as if it were part of the request. The slug
+    is normalized the way the wiki names pages, so two spellings of one page are
+    one identity for the approval.
+    """
+    if not isinstance(raw, Mapping):
+        raise ValueError("a page spec must be an object")
+    extra = sorted(str(key) for key in raw if key not in _SPEC_KEYS)
+    if extra:
+        raise ValueError(
+            f"a page spec has no field {extra[0]!r}; it is exactly slug, title, "
+            "action and sections"
+        )
+    slug = canonical_slug(raw.get("slug"))
+    if not slug:
+        raise ValueError(
+            "a page spec needs a slug; use letters, digits, hyphens or '/'"
+        )
+    title = _text(raw.get("title")) or slug
+    if len(title) > MAX_SPEC_TITLE:
+        raise ValueError(
+            f"a page title is at most {MAX_SPEC_TITLE} characters"
+        )
+    action = _text(raw.get("action"))
+    if action not in PAGE_SPEC_ACTIONS:
+        raise ValueError("a page action is create or update")
+    raw_sections = raw.get("sections")
+    if not isinstance(raw_sections, list) or not raw_sections:
+        raise ValueError("a page spec needs at least one section")
+    if len(raw_sections) > MAX_SPEC_SECTIONS:
+        raise ValueError(
+            f"a page spec carries at most {MAX_SPEC_SECTIONS} sections"
+        )
+    sections: list[dict[str, object]] = []
+    for index, item in enumerate(raw_sections, 1):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"section {index} must be an object")
+        extra = sorted(str(key) for key in item if key not in _SECTION_KEYS)
+        if extra:
+            raise ValueError(
+                f"section {index} has no field {extra[0]!r}; it is exactly "
+                "title and blocks"
+            )
+        section_title = _text(item.get("title"))
+        if not section_title:
+            raise ValueError(f"section {index} needs a title")
+        if len(section_title) > MAX_SECTION_TITLE:
+            raise ValueError(
+                f"section {index}'s title is at most {MAX_SECTION_TITLE} "
+                "characters"
+            )
+        raw_blocks = item.get("blocks")
+        if not isinstance(raw_blocks, list) or not raw_blocks:
+            raise ValueError(f"section {index} needs at least one block")
+        blocks: list[str] = []
+        for value in raw_blocks:
+            block = _text(value)
+            if not block:
+                raise ValueError(
+                    f"section {index} names a blank block id"
+                )
+            if block not in blocks:
+                blocks.append(block)
+        if len(blocks) > MAX_SECTION_BLOCKS:
+            raise ValueError(
+                f"section {index} carries at most {MAX_SECTION_BLOCKS} blocks"
+            )
+        sections.append({"title": section_title, "blocks": blocks})
+    return {
+        "slug": slug,
+        "title": title,
+        "action": action,
+        "sections": sections,
+    }
+
+
+def canonical_slug(value: object) -> str:
+    """A page name as the wiki names pages: lower-case, hyphenated, no folders.
+
+    This mirrors ``ingest.topic_map.page_slug`` without importing the ingest
+    layer: the task module only needs the identity, and ticket 05's writer will
+    resolve the same name to a file. A name with nothing safe left in it is
+    empty, which the caller refuses.
+    """
+    text = _text(value).replace("\\", "/").strip("/")
+    if text.lower().startswith("wiki/"):
+        text = text[len("wiki/") :]
+    if text.lower().endswith(".md"):
+        text = text[:-3]
+    parts: list[str] = []
+    for part in text.split("/"):
+        item = part.strip().lower()
+        item = re.sub(r"\s+", "-", item)
+        item = _SLUG_SAFE.sub("", item)
+        item = re.sub(r"-{2,}", "-", item).strip("-")
+        if item:
+            parts.append(item)
+    return "/".join(parts)[:MAX_SPEC_SLUG]
+
+
 def task_to_dict(task: Task) -> dict[str, object]:
     """The task as one shape, used by the task file and by nothing else.
 
@@ -387,6 +571,8 @@ def task_to_dict(task: Task) -> dict[str, object]:
     }
     if task.approval is not None:
         body["approval"] = approval_to_dict(task.approval)
+    if task.request is not None:
+        body["request"] = request_to_dict(task.request)
     if task.result is not None:
         body["result"] = dict(task.result)
     return body
@@ -401,6 +587,7 @@ def task_from_dict(raw: Mapping[str, object]) -> Task:
     cards = raw.get("cards")
     ops = raw.get("ops")
     approval = raw.get("approval")
+    request = raw.get("request")
     result = raw.get("result")
     return Task(
         id=task_id,
@@ -423,6 +610,11 @@ def task_from_dict(raw: Mapping[str, object]) -> Task:
         approval=(
             approval_from_dict(approval)
             if isinstance(approval, Mapping)
+            else None
+        ),
+        request=(
+            request_from_dict(request)
+            if isinstance(request, Mapping)
             else None
         ),
         result=dict(result) if isinstance(result, Mapping) else None,
@@ -460,7 +652,7 @@ def task_view(task: Task, view: str) -> dict[str, object]:
             },
             # Whether a person's go-ahead still stands, and what it covers. The
             # writing spec is not part of a bounded summary.
-            "approval": _approval_summary(task.approval),
+            "approval": _approval_summary(task),
         }
     if view == "cards":
         shown = task.cards[:MAX_VIEW_CARDS]
@@ -492,6 +684,28 @@ def task_view(task: Task, view: str) -> dict[str, object]:
             "frames": [frame_view(task, frame) for frame in shown],
             "omitted": max(0, len(task.frames) - len(shown)),
         }
+    if view == "approval":
+        # The approval that stands, with the spec it covers, and the write
+        # request that is still waiting for a person. A spec is bounded by its
+        # own section and block caps, so it travels whole; nothing else of the
+        # task does. Both are bindings, not rows: one whose revision or frame
+        # no longer matches is reported as none and flagged stale, so the agent
+        # can see that it needs to ask again.
+        approval_stands = _approval_stands(task)
+        request_stands = _request_stands(task)
+        return {
+            "view": "approval",
+            "rev": task.rev,
+            "status": task.status,
+            "approval": (
+                _approval_detail(task.approval) if approval_stands else None
+            ),
+            "approvalStale": task.approval is not None and not approval_stands,
+            "request": (
+                _request_detail(task.request) if request_stands else None
+            ),
+            "requestStale": task.request is not None and not request_stands,
+        }
     raise ValueError(f"unknown task view: {view!r}")
 
 
@@ -520,9 +734,15 @@ def frame_view(task: Task, frame: Frame) -> dict[str, object]:
     }
 
 
-def _approval_summary(approval: Approval | None) -> dict[str, object] | None:
-    """The part of an approval a bounded view carries: what, who, when, at rev."""
-    if approval is None:
+def _approval_summary(task: Task) -> dict[str, object] | None:
+    """The part of an approval a bounded view carries: what, who, when, at rev.
+
+    An approval whose revision or frame no longer matches the task does not
+    stand, and the summary says none rather than showing a go-ahead that the
+    gate would refuse.
+    """
+    approval = task.approval
+    if approval is None or not _approval_stands(task):
         return None
     return {
         "frameId": approval.frame_id,
@@ -530,6 +750,42 @@ def _approval_summary(approval: Approval | None) -> dict[str, object] | None:
         "by": approval.by,
         "at": approval.at,
     }
+
+
+def _approval_stands(task: Task) -> bool:
+    """Whether the stored approval is still bound to this exact task state."""
+    approval = task.approval
+    if approval is None:
+        return False
+    if approval.rev != task.rev:
+        return False
+    return any(frame.id == approval.frame_id for frame in task.frames)
+
+
+def _request_stands(task: Task) -> bool:
+    """Whether the stored request is still bound to this exact task state."""
+    request = task.request
+    if request is None:
+        return False
+    if request.rev != task.rev:
+        return False
+    return any(frame.id == request.frame_id for frame in task.frames)
+
+
+def _approval_detail(approval: Approval | None) -> dict[str, object] | None:
+    """The whole approval a person gave, including the spec it covers."""
+    if approval is None:
+        return None
+    return approval_to_dict(approval)
+
+
+def _request_detail(
+    request: WriteRequest | None,
+) -> dict[str, object] | None:
+    """The pending write request, including the canonical spec it proposes."""
+    if request is None:
+        return None
+    return request_to_dict(request)
 
 
 def _block_previews(task: Task, doc_id: str) -> dict[str, str]:
@@ -642,6 +898,11 @@ __all__ = [
     "MAX_BLOCK_PREVIEW",
     "MAX_CARD_SNIPPET",
     "MAX_MATERIAL_TITLE",
+    "MAX_SECTION_BLOCKS",
+    "MAX_SECTION_TITLE",
+    "MAX_SPEC_SECTIONS",
+    "MAX_SPEC_SLUG",
+    "MAX_SPEC_TITLE",
     "MAX_VIEW_BLOCKS",
     "MAX_VIEW_CARDS",
     "MAX_VIEW_FRAME_BLOCKS",
@@ -649,6 +910,7 @@ __all__ = [
     "MAX_VIEW_MATERIALS",
     "OP_KINDS",
     "OP_STATUSES",
+    "PAGE_SPEC_ACTIONS",
     "TASK_STATUSES",
     "TASK_VIEWS",
     "Approval",
@@ -663,8 +925,11 @@ __all__ = [
     "StagedMaterial",
     "StageFn",
     "Task",
+    "WriteRequest",
     "approval_from_dict",
     "approval_to_dict",
+    "canonical_page_spec",
+    "canonical_slug",
     "frame_from_dict",
     "frame_to_dict",
     "frame_view",
@@ -673,6 +938,8 @@ __all__ = [
     "material_view",
     "op_from_dict",
     "op_to_dict",
+    "request_from_dict",
+    "request_to_dict",
     "task_from_dict",
     "task_to_dict",
     "task_view",

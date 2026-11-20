@@ -28,6 +28,7 @@ from noteagent.task.model import (
     SearchCard,
     StagedMaterial,
     Task,
+    WriteRequest,
 )
 from noteagent.task.store import TaskStore
 
@@ -1334,6 +1335,915 @@ class FrameInspectTests(TaskApiCase):
         self.assertEqual(inspected["hits"], 0)
         self.assertNotIn("error", inspected)
         self.assertIn("No frames", self.last_tool_result_content(session_id, "inspect"))
+
+
+PAGE_SPEC = {
+    "slug": "entropy",
+    "title": "Entropy",
+    "action": "create",
+    "sections": [
+        {"title": "What it is", "blocks": ["b1"]},
+        {"title": "Why it matters", "blocks": ["b2"]},
+    ],
+}
+
+
+class ComposePageTests(TaskApiCase):
+    def test_compose_without_approval_needs_approval_and_writes_nothing(self) -> None:
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "pick_card", '{"cardId": "card-1"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1", "b2"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t4",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        observations = [data for kind, data in events if kind == "observation"]
+        composed = observations[3]
+        self.assertEqual(composed["tool"], "compose_page")
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertEqual(composed["rev"], 4)
+        self.assertNotIn("error", composed)
+        request = composed["request"]
+        self.assertEqual(request["frameId"], "frame-1")
+        self.assertEqual(request["rev"], 4)
+        self.assertEqual(request["spec"]["slug"], "entropy")
+        self.assertEqual(
+            [section["title"] for section in request["spec"]["sections"]],
+            ["What it is", "Why it matters"],
+        )
+
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("needs_approval", content)
+        self.assertIn("no wiki page", content.lower())
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertEqual(task.status, "needs_approval")
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertEqual(task.request.frame_id, "frame-1")
+        self.assertEqual(task.request.rev, 4)
+        self.assertEqual(
+            [op.kind for op in task.ops], ["search", "pick", "frame"]
+        )
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+
+class ApprovalGateTests(TaskApiCase):
+    def seed(self, *, rev: int = 1) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=rev,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+            )
+        )
+
+    def seed_approved(self, *, rev: int = 3) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=rev,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(PAGE_SPEC),
+                    rev=rev,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                ),
+            )
+        )
+
+    def test_a_person_approves_and_the_agent_sees_it_inspect_approval(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            FauxModelClient.tool_call(
+                "t3", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.text("已获批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id, "看看再提议")
+        composed = self.task()
+        self.assertEqual(composed.rev, 2)
+        self.assertEqual(composed.request.frame_id, "frame-1")
+
+        approved = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 2,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(approved.status_code, 200, approved.text)
+        body = approved.json()
+        self.assertEqual(body["decision"], "approve")
+        self.assertEqual(body["rev"], 3)
+        approval = body["approval"]
+        self.assertEqual(approval["frameId"], "frame-1")
+        self.assertEqual(approval["spec"]["slug"], "entropy")
+        self.assertEqual(approval["rev"], 3)
+        self.assertEqual(approval["by"], "human")
+        self.assertTrue(approval["at"])
+
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.status, "idle")
+        self.assertIsNone(task.request)
+        self.assertIsNotNone(task.approval)
+        self.assertEqual(task.approval.frame_id, "frame-1")
+        self.assertEqual(task.approval.rev, 3)
+        self.assertEqual(task.approval.by, "human")
+        self.assertEqual(
+            [op.kind for op in task.ops], ["approve"]
+        )
+        op = task.ops[0]
+        self.assertEqual(op.actor, "human")
+        self.assertEqual(op.status, "done")
+        self.assertEqual(op.expected_rev, 2)
+        self.assertEqual(op.input["decision"], "approve")
+        self.assertFalse(any(op.kind == "write" for op in task.ops))
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+        # The agent reads the go-ahead through its bounded view; the spec is
+        # what it proposed, the rev is the one the approval is bound to.
+        events = self.ask(client, session_id, "批准了吗")
+        observed = next(
+            data for kind, data in events if kind == "observation"
+        )
+        self.assertEqual(observed["tool"], "inspect")
+        self.assertEqual(observed["rev"], 3)
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("approval", content.lower())
+        self.assertIn("frame-1", content)
+        self.assertIn("entropy", content)
+        self.assertIn("rev 3", content)
+
+
+    def test_compose_with_a_matching_approval_is_ready_without_writing(self) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=3,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(PAGE_SPEC),
+                    rev=3,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                ),
+            )
+        )
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("已批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "再提交一次")
+
+        observations = [data for kind, data in events if kind == "observation"]
+        composed = observations[1]
+        self.assertEqual(composed["tool"], "compose_page")
+        self.assertEqual(composed["status"], "approved")
+        self.assertEqual(composed["rev"], 3)
+        self.assertNotIn("request", composed)
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("approved", content.lower())
+        self.assertIn("no wiki page", content.lower())
+        self.assertIn("no write op", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertEqual(task.ops, ())
+        self.assertIsNone(task.request)
+        self.assertIsNotNone(task.approval)
+        self.assertEqual(task.approval.rev, 3)
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+
+    def test_a_rejection_clears_the_request_and_the_agent_can_revise(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            FauxModelClient.tool_call(
+                "t3", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t4",
+                "compose_page",
+                json.dumps(
+                    {
+                        "frameId": "frame-1",
+                        "spec": {
+                            **PAGE_SPEC,
+                            "sections": [
+                                {"title": "What it is", "blocks": ["b1", "b2"]}
+                            ],
+                        },
+                    }
+                ),
+            ).script,
+            FauxModelClient.text("改一版再请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id, "提议写页")
+        self.assertEqual(self.task().rev, 2)
+
+        rejected = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 2,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "reject",
+            },
+        )
+
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        body = rejected.json()
+        self.assertEqual(body["decision"], "reject")
+        self.assertEqual(body["rev"], 3)
+        self.assertNotIn("approval", body)
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertIsNone(task.approval)
+        self.assertIsNone(task.request)
+        self.assertEqual(task.status, "idle")
+        self.assertEqual([op.kind for op in task.ops], ["approve"])
+        self.assertEqual(task.ops[0].result["decision"], "reject")
+        self.assertEqual(task.ops[0].actor, "human")
+        self.assertFalse(any(op.kind == "write" for op in task.ops))
+
+        # The agent reads that nothing stands, then proposes a revised spec:
+        # the gate is not a dead end, and the revision is recorded anew.
+        events = self.ask(client, session_id, "再提议")
+        observations = [data for kind, data in events if kind == "observation"]
+        inspected = observations[0]
+        self.assertEqual(inspected["tool"], "inspect")
+        self.assertEqual(inspected["rev"], 3)
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("approval", content.lower())
+        self.assertIn("none", content.lower())
+
+        revised = observations[1]
+        self.assertEqual(revised["tool"], "compose_page")
+        self.assertEqual(revised["status"], "needs_approval")
+        self.assertEqual(revised["rev"], 4)
+        self.assertEqual(
+            revised["request"]["spec"]["sections"][0]["blocks"], ["b1", "b2"]
+        )
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+
+    def test_a_changed_rev_makes_the_approval_stale_and_compose_asks_again(
+        self,
+    ) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=3,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(PAGE_SPEC),
+                    rev=3,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                ),
+            )
+        )
+        # Another writer moved the task on after the person approved; the
+        # approval now names a revision that no longer exists.
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, rev=4, intent="a later edit"))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("批准过期了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        viewed = client.get("/api/v1/task", params={"view": "approval"})
+        self.assertEqual(viewed.status_code, 200, viewed.text)
+        self.assertEqual(viewed.json()["rev"], 4)
+        self.assertIsNone(viewed.json()["approval"])
+        self.assertTrue(viewed.json()["approvalStale"])
+        self.assertIsNone(viewed.json()["request"])
+
+        events = self.ask(client, session_id, "提交一次")
+        observations = [data for kind, data in events if kind == "observation"]
+        inspected = observations[0]
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("none", content.lower())
+        self.assertIn("stale", content.lower())
+
+        composed = observations[1]
+        self.assertEqual(composed["tool"], "compose_page")
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertEqual(composed["rev"], 5)
+        self.assertEqual(composed["request"]["frameId"], "frame-1")
+
+        task = self.task()
+        self.assertEqual(task.rev, 5)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.request.rev, 5)
+        self.assertEqual(task.status, "needs_approval")
+        self.assertFalse(any(op.kind == "write" for op in task.ops))
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+
+    def test_a_changed_spec_needs_approval_and_clears_the_approval(self) -> None:
+        self.seed_approved()
+        changed = {
+            **PAGE_SPEC,
+            "sections": [{"title": "What it is", "blocks": ["b2"]}],
+        }
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": changed}),
+            ).script,
+            FauxModelClient.text("规格变了，请再批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "换个规格")
+
+        observations = [data for kind, data in events if kind == "observation"]
+        composed = observations[1]
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertEqual(composed["rev"], 4)
+        self.assertEqual(
+            composed["request"]["spec"]["sections"][0]["blocks"], ["b2"]
+        )
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("cleared", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 4)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.request.spec["sections"][0]["blocks"], ["b2"])
+        self.assertEqual(task.ops, ())
+        self.assertEqual(task.status, "needs_approval")
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+    def test_a_spec_with_too_many_sections_is_bad_spec_and_writes_nothing(
+        self,
+    ) -> None:
+        self.seed()
+        sections = [
+            {"title": f"Part {index}", "blocks": ["b1"]}
+            for index in range(1, 14)
+        ]
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps(
+                    {
+                        "frameId": "frame-1",
+                        "spec": {**PAGE_SPEC, "sections": sections},
+                    }
+                ),
+            ).script,
+            FauxModelClient.text("章节太多了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "提交一个过大的规格")
+
+        composed = [data for kind, data in events if kind == "observation"][1]
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "bad_spec")
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("bad_spec", content)
+        self.assertIn("12 sections", content)
+
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertIsNone(task.request)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.ops, ())
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+    def test_a_block_outside_the_frame_is_bad_spec_and_writes_nothing(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps(
+                    {
+                        "frameId": "frame-1",
+                        "spec": {
+                            **PAGE_SPEC,
+                            "sections": [
+                                {"title": "What it is", "blocks": ["b9"]}
+                            ],
+                        },
+                    }
+                ),
+            ).script,
+            FauxModelClient.text("块不在画框里。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "用不在画框里的块")
+        composed = [data for kind, data in events if kind == "observation"][1]
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "bad_spec")
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("bad_spec", content)
+        self.assertIn("b9", content)
+
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertIsNone(task.request)
+        self.assertEqual(task.ops, ())
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+    def test_a_spec_with_an_unknown_field_is_bad_spec(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps(
+                    {
+                        "frameId": "frame-1",
+                        "spec": {**PAGE_SPEC, "coverage": "write"},
+                    }
+                ),
+            ).script,
+            FauxModelClient.text("多了一个字段。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "带上 coverage")
+        composed = [data for kind, data in events if kind == "observation"][1]
+        self.assertEqual(composed["diagnostics"][0]["code"], "bad_spec")
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("coverage", content)
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertIsNone(task.request)
+        self.assertEqual(task.ops, ())
+
+    def test_a_stale_compose_observation_is_a_conflict_and_writes_nothing(
+        self,
+    ) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.text("看过了。").script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("提交。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id, "先看看")
+        store = TaskStore(self.layout)
+        stored = store.load()
+        self.assertIsNotNone(stored)
+        store.save(replace(stored, rev=2, intent="a later edit"))
+
+        events = self.ask(client, session_id, "提交")
+        composed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "conflict")
+        content = self.last_tool_result_content(session_id, "compose_page")
+        self.assertIn("conflict", content)
+        self.assertIn("inspect", content.lower())
+
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertIsNone(task.request)
+        self.assertEqual(task.ops, ())
+
+    def test_a_search_that_moves_the_rev_invalidates_the_approval(self) -> None:
+        self.seed_approved()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("批准被新版本作废了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id, "搜一下再提交")
+
+        observations = [data for kind, data in events if kind == "observation"]
+        self.assertEqual(observations[0]["tool"], "web_search")
+        self.assertEqual(observations[1]["tool"], "inspect")
+        self.assertEqual(observations[1]["rev"], 4)
+        # The search's completion moved the revision, so the approval no longer
+        # stands. It is cleared rather than left to be mistaken for a go-ahead.
+        inspected = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("none", inspected.lower())
+        self.assertNotIn("stale", inspected.lower())
+        self.assertIsNone(TaskStore(self.layout).load().approval)
+
+        composed = observations[2]
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertEqual(composed["rev"], 5)
+
+        viewed = client.get("/api/v1/task", params={"view": "approval"})
+        self.assertEqual(viewed.status_code, 200, viewed.text)
+        body = viewed.json()
+        self.assertEqual(body["rev"], 5)
+        self.assertIsNone(body["approval"])
+        self.assertFalse(body["approvalStale"])
+        self.assertEqual(body["request"]["rev"], 5)
+
+        task = self.task()
+        self.assertEqual(task.rev, 5)
+        self.assertIsNone(task.approval)
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+    def test_approve_with_a_stale_rev_is_a_conflict_and_changes_nothing(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 1,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertEqual(task.ops, ())
+
+    def test_approve_with_a_changed_spec_is_needs_approval_and_changes_nothing(
+        self,
+    ) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 2,
+                "frameId": "frame-1",
+                "spec": {
+                    **PAGE_SPEC,
+                    "sections": [{"title": "Other", "blocks": ["b2"]}],
+                },
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "needs_approval")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertEqual(task.ops, ())
+
+    def test_approve_without_a_pending_request_is_needs_approval(self) -> None:
+        self.seed()
+        client = self.client(spawn=lambda work: work())
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 1,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "needs_approval")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.ops, ())
+
+    def test_approve_for_another_task_is_a_conflict(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-9",
+                "rev": 2,
+                "frameId": "frame-1",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertIsNotNone(task.request)
+        self.assertIsNone(task.approval)
+
+    def test_approve_with_an_invalid_spec_is_bad_spec_and_changes_nothing(
+        self,
+    ) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 2,
+                "frameId": "frame-1",
+                "spec": {**PAGE_SPEC, "sections": []},
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["code"], "bad_spec")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertEqual(task.ops, ())
+
+
+    def test_a_frame_change_clears_the_pending_request(self) -> None:
+        self.seed()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t2",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("请批准。").script,
+            FauxModelClient.tool_call(
+                "t3",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.tool_call(
+                "t4", "inspect", '{"view": "approval"}'
+            ).script,
+            FauxModelClient.text("框变了。").script,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id, "提议")
+        self.assertIsNotNone(self.task().request)
+
+        self.ask(client, session_id, "改框")
+        task = self.task()
+        self.assertEqual(task.rev, 3)
+        self.assertIsNone(task.request)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.frames[0].blocks, ("b1",))
+        self.assertEqual(task.ops[-1].result["requestCleared"], True)
+        content = self.last_tool_result_content(session_id, "inspect")
+        self.assertIn("none", content.lower())
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+
+    def test_approve_for_a_request_whose_frame_is_gone_is_not_found(self) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=1,
+                materials=(_stored_material(),),
+                request=WriteRequest(
+                    frame_id="frame-9",
+                    spec=dict(PAGE_SPEC),
+                    rev=1,
+                    at="2026-11-10T09:05:00Z",
+                ),
+            )
+        )
+        client = self.client(spawn=lambda work: work())
+
+        response = client.post(
+            "/api/v1/task/approve",
+            json={
+                "taskId": "task-7",
+                "rev": 1,
+                "frameId": "frame-9",
+                "spec": PAGE_SPEC,
+                "decision": "approve",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["code"], "not_found")
+        task = self.task()
+        self.assertEqual(task.rev, 1)
+        self.assertIsNone(task.approval)
+        self.assertEqual(task.ops, ())
 
 
 class HumanFrameTests(TaskApiCase):

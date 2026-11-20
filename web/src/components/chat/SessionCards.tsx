@@ -1,5 +1,13 @@
 import { useTranslation } from "react-i18next";
-import { FileText, Frame, Globe, Layers, Search, Wrench } from "lucide-react";
+import {
+  FileText,
+  Frame,
+  Globe,
+  Layers,
+  Search,
+  ShieldCheck,
+  Wrench,
+} from "lucide-react";
 import type { ObservationPayload } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
@@ -73,7 +81,7 @@ export function SessionCards({
 
 type Row = {
   key: string;
-  kind: "page" | "search" | "web" | "material" | "frame" | "other";
+  kind: "page" | "search" | "web" | "material" | "frame" | "approval" | "other";
   label: string;
   /** The page's file, the result's url or the material's id, for the tooltip. */
   path: string | null;
@@ -88,6 +96,7 @@ const ICONS = {
   web: Globe,
   material: Layers,
   frame: Frame,
+  approval: ShieldCheck,
   other: Wrench,
 } as const;
 
@@ -102,6 +111,10 @@ export function cardRows(observations: ObservationPayload[]): Row[] {
     }
     if (observation.tool === "pick_card") {
       materialRows(observation, rows, seen);
+      continue;
+    }
+    if (observation.tool === "compose_page" || observation.request) {
+      writeRequestRows(observation, rows, seen);
       continue;
     }
     if (observation.frames && observation.frames.length > 0) {
@@ -231,6 +244,52 @@ function materialRows(
       note:
         material.blockCount > 0
           ? { key: "chat.looked.blocks", count: material.blockCount }
+          : null,
+    });
+  }
+}
+
+/**
+ * A write request is the page it proposes and the sections it is written from.
+ *
+ * The same request the task's confirmation panel shows, read from one Task; a
+ * row says what the agent proposes and whether the person's go-ahead is still
+ * missing or has been given.
+ */
+function writeRequestRows(
+  observation: ObservationPayload,
+  rows: Row[],
+  seen: Set<string>,
+): void {
+  const request = observation.request;
+  const spec = request?.spec;
+  const title = (spec?.title || spec?.slug || observation.title || "").trim();
+  const key = `compose:${request?.frameId ?? ""}:${observation.rev ?? ""}:${title}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  rows.push({
+    key,
+    kind: "approval",
+    label: title || observation.tool,
+    path: null,
+    open: null,
+    note:
+      observation.status === "approved"
+        ? { key: "chat.looked.approved" }
+        : { key: "chat.looked.needsApproval" },
+  });
+  for (const [index, section] of (spec?.sections ?? []).entries()) {
+    const label = (section.title || "").trim();
+    if (!label) continue;
+    rows.push({
+      key: `${key}:section:${index}`,
+      kind: "approval",
+      label,
+      path: null,
+      open: null,
+      note:
+        section.blocks.length > 0
+          ? { key: "chat.looked.blocks", count: section.blocks.length }
           : null,
     });
   }

@@ -657,7 +657,9 @@
       "hits": "{{count}} hits",
       "searching": "still searching",
       "picking": "still fetching",
-      "blocks": "{{count}} blocks"
+      "blocks": "{{count}} blocks",
+      "needsApproval": "needs your approval",
+      "approved": "approved"
     },
     "wait": {
       "title": "Waiting on you",
@@ -1485,6 +1487,7 @@
       "conflict": "The writing task changed since this view was read. Re-read it and try again.",
       "not_found": "That card or material is no longer in the writing task.",
       "bad_spec": "The frame names passages that do not belong to this material.",
+      "needs_approval": "The write request changed or is no longer pending. Read it again before deciding.",
       "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
@@ -1689,6 +1692,18 @@
     "approved": "Approved by {{by}} at revision {{rev}}",
     "noApproval": "No approval yet",
     "approvalInvalidated": "The frame changed, so the previous approval no longer applies.",
+    "writeRequest": "Write request",
+    "approve": "Approve",
+    "reject": "Reject",
+    "approving": "Approving…",
+    "rejecting": "Rejecting…",
+    "approvedNotice": "Approved. No page is written in this step.",
+    "rejectedNotice": "Rejected. The agent can propose a revised request.",
+    "decisionFailed": "The write request could not be decided",
+    "action": {
+      "create": "new page",
+      "update": "update page"
+    },
     "source": {
       "agent": "the agent",
       "human": "you",
