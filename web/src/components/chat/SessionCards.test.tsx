@@ -163,6 +163,54 @@ describe("the cards beside an answer", () => {
     );
   });
 
+  it("draws a write request as its page and sections, waiting for approval", async () => {
+    await draw([
+      {
+        tool: "compose_page",
+        title: "Entropy",
+        status: "needs_approval",
+        rev: 4,
+        request: {
+          frameId: "frame-1",
+          rev: 4,
+          at: "2026-11-10T09:05:00Z",
+          spec: {
+            slug: "entropy",
+            title: "Entropy",
+            action: "create",
+            sections: [
+              { title: "What it is", blocks: ["b1"] },
+              { title: "Why it matters", blocks: ["b2", "b3"] },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain("What it is");
+    expect(host.textContent).toContain("Why it matters");
+    expect(host.textContent).toContain(i18n.t("chat.looked.needsApproval"));
+    expect(host.textContent).toContain(
+      i18n.t("chat.looked.blocks", { count: 2 }),
+    );
+  });
+
+  it("says a compose_page was approved", async () => {
+    await draw([
+      {
+        tool: "compose_page",
+        title: "Entropy",
+        status: "approved",
+        rev: 5,
+      },
+    ]);
+
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain(i18n.t("chat.looked.approved"));
+    expect(host.textContent).not.toContain(i18n.t("chat.looked.needsApproval"));
+  });
+
   it("says when a pick is still fetching", async () => {
     await draw([
       {

@@ -266,6 +266,41 @@ class ObservationTests(unittest.TestCase):
             },
         )
 
+    def test_a_compose_result_passes_its_write_request_but_not_the_task(self) -> None:
+        request = {
+            "frameId": "frame-1",
+            "spec": {
+                "slug": "entropy",
+                "title": "Entropy",
+                "action": "create",
+                "sections": [{"title": "What it is", "blocks": ["b1"]}],
+            },
+            "rev": 3,
+            "at": "2026-11-10T09:05:00Z",
+        }
+        result = ToolResult(
+            content="the request stays with the model",
+            meta={
+                "rev": 3,
+                "status": "needs_approval",
+                "request": request,
+                "ops": [{"id": "op-1"}],
+                "expectedRev": 2,
+            },
+        )
+
+        card = result.observation("compose_page")
+
+        self.assertEqual(
+            card,
+            {
+                "tool": "compose_page",
+                "rev": 3,
+                "status": "needs_approval",
+                "request": request,
+            },
+        )
+
 
 class ParallelDispatchTests(unittest.TestCase):
     def test_calls_in_one_batch_run_at_the_same_time_and_keep_their_order(self) -> None:

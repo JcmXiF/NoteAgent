@@ -28,11 +28,13 @@ from noteagent.task.model import (
     SearchFn,
     StagedMaterial,
     StageFn,
+    approval_to_dict,
     frame_to_dict,
 )
 from noteagent.task.service import (
     TaskBadSpec,
     TaskConflict,
+    TaskNeedsApproval,
     TaskNotFound,
     TaskOpFailed,
     TaskService,
@@ -150,6 +152,42 @@ def frame_task_material(
     }
 
 
+def approve_task_request(
+    deps: AppDeps,
+    task_id: str,
+    rev: int,
+    frame_id: str,
+    spec: Mapping[str, object],
+    decision: str,
+) -> dict[str, object]:
+    """A person's decision on the pending write request.
+
+    The only door to an approval. It answers with the new revision and, for an
+    approval, the go-ahead that now stands. A stale decision is refused with the
+    spec's names: ``conflict``, ``needs_approval``, ``bad_spec`` or
+    ``not_found``; nothing is overwritten.
+    """
+    try:
+        outcome = task_service(deps).approve(
+            task_id, rev, frame_id, spec, decision
+        )
+    except TaskConflict as err:
+        raise CodedHTTPException(409, str(err), code="conflict") from err
+    except TaskNeedsApproval as err:
+        raise CodedHTTPException(409, str(err), code="needs_approval") from err
+    except TaskNotFound as err:
+        raise CodedHTTPException(404, str(err), code="not_found") from err
+    except TaskBadSpec as err:
+        raise CodedHTTPException(422, str(err), code="bad_spec") from err
+    body: dict[str, object] = {
+        "decision": outcome.decision,
+        "rev": outcome.rev,
+    }
+    if outcome.approval is not None:
+        body["approval"] = approval_to_dict(outcome.approval)
+    return body
+
+
 def default_search(layout: ProjectLayout) -> SearchFn:
     """The project's configured web search, as a pure card-returning node."""
     logger = RunLogger.for_layout(layout)
@@ -222,6 +260,7 @@ def default_stage(layout: ProjectLayout, clock: Clock) -> StageFn:
 
 
 __all__ = [
+    "approve_task_request",
     "default_fetch",
     "default_search",
     "default_stage",

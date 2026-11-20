@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { ApiError, errorMessage } from "@/lib/api/client";
 import {
+  approveTaskRequest,
+  fetchTaskApproval,
   fetchTaskCards,
   fetchTaskFrames,
   fetchTaskMaterials,
@@ -9,6 +11,7 @@ import {
   pickTaskCard,
 } from "@/lib/api/task";
 import type {
+  TaskApprovalView,
   TaskCardsView,
   TaskFramesView,
   TaskMaterialsView,
@@ -30,6 +33,8 @@ type TaskState = {
   cards: TaskCardsView | null;
   materials: TaskMaterialsView | null;
   frames: TaskFramesView | null;
+  /** The standing approval and the write request waiting for a person. */
+  approvalView: TaskApprovalView | null;
   error: string;
   /** The card being picked, while its op is in flight. */
   picking: string;
@@ -43,6 +48,12 @@ type TaskState = {
   frameError: string;
   /** What the last frame changed: saved, or an approval was cleared. */
   frameNotice: string;
+  /** The decision being written, while its request is in flight. */
+  deciding: "" | "approve" | "reject";
+  /** Why the last decision failed, in the reader's words. */
+  decisionError: string;
+  /** What the last decision left behind. */
+  decisionNotice: string;
   load: () => Promise<void>;
   pick: (cardId: string, expectedRev: number) => Promise<void>;
   frame: (
@@ -50,6 +61,7 @@ type TaskState = {
     blocks: string[],
     expectedRev: number,
   ) => Promise<void>;
+  decide: (decision: "approve" | "reject") => Promise<void>;
   reset: () => void;
 };
 
@@ -62,6 +74,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   cards: null,
   materials: null,
   frames: null,
+  approvalView: null,
   error: "",
   picking: "",
   pickError: "",
@@ -69,19 +82,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   framing: "",
   frameError: "",
   frameNotice: "",
+  deciding: "",
+  decisionError: "",
+  decisionNotice: "",
 
   load: async () => {
     const mine = ++generation;
     set({ status: "loading", error: "" });
     try {
-      const [summary, cards, materials, frames] = await Promise.all([
-        fetchTaskSummary(),
-        fetchTaskCards(),
-        fetchTaskMaterials(),
-        fetchTaskFrames(),
-      ]);
+      const [summary, cards, materials, frames, approvalView] =
+        await Promise.all([
+          fetchTaskSummary(),
+          fetchTaskCards(),
+          fetchTaskMaterials(),
+          fetchTaskFrames(),
+          fetchTaskApproval(),
+        ]);
       if (mine !== generation) return;
-      set({ status: "ready", summary, cards, materials, frames });
+      set({ status: "ready", summary, cards, materials, frames, approvalView });
     } catch (reason) {
       if (mine !== generation) return;
       set({
@@ -138,6 +156,45 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  decide: async (decision) => {
+    const { summary, approvalView } = get();
+    const request = approvalView?.request;
+    if (!summary || !request) return;
+    set({ deciding: decision, decisionError: "", decisionNotice: "" });
+    try {
+      await approveTaskRequest(
+        summary.id,
+        summary.rev,
+        request.frameId,
+        request.spec,
+        decision,
+      );
+      set({
+        deciding: "",
+        decisionNotice:
+          decision === "approve"
+            ? i18n.t("task.approvedNotice")
+            : i18n.t("task.rejectedNotice"),
+      });
+      // The decision moved the task: read the one task again rather than
+      // guessing what the approval or the removal left behind.
+      await get().load();
+    } catch (reason) {
+      set({
+        deciding: "",
+        decisionError: errorMessage(reason, i18n.t("task.decisionFailed")),
+      });
+      // A conflict or a changed request means this view is stale; reading it
+      // again shows the request the person would actually decide on.
+      if (
+        reason instanceof ApiError &&
+        (reason.code === "conflict" || reason.code === "needs_approval")
+      ) {
+        await get().load();
+      }
+    }
+  },
+
   reset: () => {
     generation += 1;
     set({
@@ -146,6 +203,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       cards: null,
       materials: null,
       frames: null,
+      approvalView: null,
       error: "",
       picking: "",
       pickError: "",
@@ -153,6 +211,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       framing: "",
       frameError: "",
       frameNotice: "",
+      deciding: "",
+      decisionError: "",
+      decisionNotice: "",
     });
   },
 }));

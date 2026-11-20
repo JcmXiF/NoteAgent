@@ -298,8 +298,9 @@ class DefaultToolTests(unittest.TestCase):
             tools = session_tools(AppDeps(sessions=None), layout)
 
         # The wiki's two read tools, then the writing task's search, pick,
-        # frame and bounded read. The order is also the toolset fingerprint a
-        # resume records, so it is asserted rather than left to sort itself out.
+        # frame, approval gate and bounded read. The order is also the toolset
+        # fingerprint a resume records, so it is asserted rather than left to
+        # sort itself out.
         self.assertEqual(
             [tool.name for tool in tools.enabled()],
             [
@@ -308,9 +309,12 @@ class DefaultToolTests(unittest.TestCase):
                 "web_search",
                 "pick_card",
                 "frame_blocks",
+                "compose_page",
                 "inspect",
             ],
         )
+        # No agent tool writes an approval; only the person's route does.
+        self.assertIsNone(tools.get("approve"))
         # The model names a query and nothing else; the observed revision is
         # attached by the wrapper, not guessed by the model.
         search = tools.require("web_search")
@@ -334,10 +338,25 @@ class DefaultToolTests(unittest.TestCase):
         self.assertEqual(frame.parameters["required"], ["docId", "blocks"])
         self.assertFalse(frame.parameters["additionalProperties"])
         self.assertEqual(frame.side_effect, "write")
+        # The gate names exactly the frame and the spec; the session's observed
+        # revision travels on the call, not in the model's arguments. In this
+        # slice it writes local task state (the pending request), so the
+        # contract's word for it is `write`, not `human` and not `network`.
+        compose = tools.require("compose_page")
+        self.assertEqual(
+            set(compose.parameters["properties"]), {"frameId", "spec"}
+        )
+        self.assertEqual(compose.parameters["required"], ["frameId", "spec"])
+        self.assertFalse(compose.parameters["additionalProperties"])
+        self.assertEqual(compose.side_effect, "write")
+        self.assertEqual(
+            set(compose.parameters["properties"]["spec"]["properties"]),
+            {"slug", "title", "action", "sections"},
+        )
         inspect = tools.require("inspect")
         self.assertEqual(
             inspect.parameters["properties"]["view"]["enum"],
-            ["summary", "cards", "materials", "frames"],
+            ["summary", "cards", "materials", "frames", "approval"],
         )
         self.assertEqual(inspect.side_effect, "read")
 

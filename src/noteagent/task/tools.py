@@ -1,10 +1,12 @@
-"""The writing-task tools: one search, and one bounded read.
+"""The writing-task tools: a search, a pick, a frame, the gate, and a read.
 
-Their schemas are deliberately small. The model names a query or a view; the
-session's observed task revision travels on the op the wrapper writes, never as
-an argument the model has to guess. A tool result carries cards and the revision
-for the model, and the same card data on the observation channel for the reader;
-the task itself, its ops and its other fields stay behind.
+Their schemas are deliberately small. The model names a query, a card, a frame or
+a view; the session's observed task revision travels on the op the wrapper
+writes, never as an argument the model has to guess. A tool result carries the
+task data and the revision for the model, and the same card data on the
+observation channel for the reader; the task itself and its op log stay behind.
+``compose_page`` is the gate: it can record a write request but never approves
+one, and no tool can write an approval.
 """
 
 from __future__ import annotations
@@ -19,14 +21,17 @@ from noteagent.agent.tools import (
 )
 from noteagent.task.model import (
     MAX_CARD_SNIPPET,
+    MAX_SPEC_SECTIONS,
     MAX_VIEW_BLOCKS,
     MAX_VIEW_CARDS,
     MAX_VIEW_MATERIALS,
     Card,
     Frame,
     material_summary,
+    request_to_dict,
 )
 from noteagent.task.service import (
+    ComposeOutcome,
     FrameOutcome,
     PickOutcome,
     SearchOutcome,
@@ -36,6 +41,7 @@ from noteagent.task.service import (
 WEB_SEARCH = "web_search"
 PICK_CARD = "pick_card"
 FRAME_BLOCKS = "frame_blocks"
+COMPOSE_PAGE = "compose_page"
 INSPECT = "inspect"
 
 _WEB_SEARCH_DESCRIPTION = (
@@ -58,6 +64,17 @@ _FRAME_BLOCKS_DESCRIPTION = (
     "revision. A frame change invalidates any approval the person had given, so "
     "ask for approval again afterwards. If the task changed since your last "
     "look, call inspect before drawing."
+)
+_COMPOSE_PAGE_DESCRIPTION = (
+    "Propose the page to write from one frame: a writing spec with a slug, a "
+    "title, an action (create or update) and 1-12 sections, each with a title and "
+    "1-20 block ids that frame covers. compose_page never writes a page by "
+    "itself; without a person's matching approval it records the write request "
+    "and returns needs_approval, with no page and no write op. The person approves "
+    "or rejects the request in the confirmation panel; inspect(\"approval\") says "
+    "what stands. A changed spec, frame or task revision needs a new approval, so "
+    "call compose_page again with the same frame and spec only after the approval "
+    "is visible. If the task changed since your last look, call inspect first."
 )
 _INSPECT_DESCRIPTION = (
     "Read a bounded view of the current writing task. `summary` says what the "
@@ -124,12 +141,71 @@ FRAME_BLOCKS_PARAMETERS = {
 }
 
 
+COMPOSE_PAGE_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "frameId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"\S",
+            "description": (
+                "The id of a frame the task holds, as inspect(frames) shows it"
+            ),
+        },
+        "spec": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The page's wiki name, as page links use it",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "The page's title, at most 120 characters",
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "update"],
+                    "description": "Make a new page, or rewrite an existing one",
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "minLength": 1},
+                            "blocks": {
+                                "type": "array",
+                                "items": {"type": "string", "pattern": r"\S"},
+                            },
+                        },
+                        "required": ["title", "blocks"],
+                    },
+                    "description": (
+                        "At most 12 sections; each names at least one block of "
+                        "the frame and at most 20"
+                    ),
+                },
+            },
+            "required": ["slug", "title", "action", "sections"],
+            # The schema lists the shape the model should send. Limits and
+            # unknown fields are checked by the handler, so a spec that breaks
+            # them is answered with the model-facing `bad_spec`, not the
+            # registry's argument error.
+        },
+    },
+    "required": ["frameId", "spec"],
+    "additionalProperties": False,
+}
+
+
 INSPECT_PARAMETERS = {
     "type": "object",
     "properties": {
         "view": {
             "type": "string",
-            "enum": ["summary", "cards", "materials", "frames"],
+            "enum": ["summary", "cards", "materials", "frames", "approval"],
             "description": "Which bounded view of the writing task to read",
         }
     },
@@ -189,6 +265,23 @@ def task_tools(service: TaskService) -> tuple[ToolSpec, ...]:
             ),
             handler=_frame_handler(service),
             argument_hint="docId",
+        ),
+        ToolSpec(
+            name=COMPOSE_PAGE,
+            description=_COMPOSE_PAGE_DESCRIPTION,
+            parameters=COMPOSE_PAGE_PARAMETERS,
+            # In this slice it writes local task state (the pending request),
+            # never a wiki page: the actual write is a later ticket. The tool
+            # contract calls a local state write `write`.
+            side_effect="write",
+            timeout_s=10.0,
+            output_limits=OutputLimits(
+                max_items=MAX_SPEC_SECTIONS,
+                max_chars_per_item=MAX_CARD_SNIPPET + 400,
+                max_chars_total=8_000,
+            ),
+            handler=_compose_handler(service),
+            argument_hint="frameId",
         ),
         ToolSpec(
             name=INSPECT,
@@ -302,6 +395,32 @@ def _frame_handler(service: TaskService):
     return frame
 
 
+def _compose_handler(service: TaskService):
+    def compose(
+        arguments: Mapping[str, object], context: ToolContext
+    ) -> ToolResult:
+        frame_id = str(arguments["frameId"]).strip()
+        raw = arguments.get("spec")
+        spec = raw if isinstance(raw, Mapping) else {}
+        outcome = service.compose(
+            frame_id,
+            spec,
+            session_id=context.session_id,
+        )
+        meta: dict[str, object] = {
+            "title": _spec_title(outcome.spec, fallback=frame_id),
+            "rev": outcome.rev,
+            "status": outcome.status,
+        }
+        if outcome.request is not None:
+            # The confirmation card and the task panel read the same request,
+            # so the card carries the canonical spec the task stored.
+            meta["request"] = request_to_dict(outcome.request)
+        return ToolResult(content=_render_compose(outcome), meta=meta)
+
+    return compose
+
+
 def _inspect_handler(service: TaskService):
     def inspect(
         arguments: Mapping[str, object], context: ToolContext
@@ -334,6 +453,12 @@ def _inspect_handler(service: TaskService):
             # The view is already bounded; the card reads the same shape.
             meta["frames"] = rows
             meta["hits"] = len(rows)
+        if view == "approval":
+            request = payload.get("request")
+            if isinstance(request, Mapping):
+                # The same request the task panel shows; a chat card can render
+                # the proposal from the observation alone.
+                meta["request"] = dict(request)
         return ToolResult(content=_render_view(view, payload), meta=meta)
 
     return inspect
@@ -385,6 +510,69 @@ def _render_frame(outcome: FrameOutcome) -> str:
             "basis, so the person must approve again before compose_page."
         )
     return "\n".join(lines)
+
+
+def _render_compose(outcome: ComposeOutcome) -> str:
+    spec = outcome.spec
+    slug = spec.get("slug", "")
+    title = spec.get("title", "")
+    action = spec.get("action", "")
+    raw_sections = spec.get("sections")
+    sections = (
+        [item for item in raw_sections if isinstance(item, Mapping)]
+        if isinstance(raw_sections, list)
+        else []
+    )
+    blocks = 0
+    for section in sections:
+        raw = section.get("blocks")
+        blocks += len(raw) if isinstance(raw, list) else 0
+    if outcome.status == "approved":
+        return (
+            f'Task rev {outcome.rev}. compose_page is approved: a person approved '
+            f'writing page "{title}" ({slug}, {action}) from frame '
+            f"{outcome.frame_id} with {len(sections)} section(s) and {blocks} "
+            "block(s). No wiki page was written and no write op was started in "
+            "this step; the approved request is ready for the writing step."
+        )
+    lines = [
+        f'Task rev {outcome.rev}. compose_page needs_approval: writing page '
+        f'"{title}" ({slug}, {action}) from frame {outcome.frame_id} with '
+        f"{len(sections)} section(s) and {blocks} block(s) has no person's "
+        "approval yet.",
+    ]
+    if outcome.approval_cleared:
+        lines.append(
+            "The previous approval did not match this request and was cleared; "
+            "it must be approved again."
+        )
+    lines.extend(
+        "   - {title} ({count} block(s))".format(
+            title=section.get("title", ""),
+            count=len(section.get("blocks"))
+            if isinstance(section.get("blocks"), list)
+            else 0,
+        )
+        for section in sections[:MAX_SPEC_SECTIONS]
+    )
+    lines.append(
+        "The request is recorded in the writing task; no wiki page was written "
+        "and no write op was started. Ask the person to approve or reject it in "
+        'the confirmation panel, then call inspect("approval") to see the '
+        "decision. Do not call compose_page with a different spec to get around "
+        "the gate."
+    )
+    return "\n".join(lines)
+
+
+def _spec_title(spec: Mapping[str, object], *, fallback: str = "") -> str:
+    title = spec.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    slug = spec.get("slug")
+    if isinstance(slug, str) and slug.strip():
+        return slug.strip()
+    return fallback
 
 
 def _frame_summary(frame: Frame) -> dict[str, object]:
@@ -465,6 +653,8 @@ def _render_view(view: str, payload: Mapping[str, object]) -> str:
         return _render_materials(rev, payload)
     if view == "frames":
         return _render_frames(rev, payload)
+    if view == "approval":
+        return _render_approval(rev, payload)
     cards = payload.get("cards")
     shown = [item for item in cards if isinstance(item, Mapping)] if isinstance(cards, list) else []
     if not shown:
@@ -542,6 +732,89 @@ def _render_materials(rev: object, payload: Mapping[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _render_approval(rev: object, payload: Mapping[str, object]) -> str:
+    lines = [
+        f"Task rev {rev}. status={payload.get('status', '')}."
+    ]
+    approval = payload.get("approval")
+    request = payload.get("request")
+    if isinstance(approval, Mapping):
+        lines.append(
+            "approval: "
+            + _spec_sentence(approval)
+            + " by {by} at rev {rev}.".format(
+                by=approval.get("by", ""), rev=approval.get("rev", "")
+            )
+        )
+    elif payload.get("approvalStale"):
+        lines.append(
+            "approval: none. The stored approval is stale: it was bound to "
+            "another revision or its frame is gone, so it no longer applies; a "
+            "new approval is needed."
+        )
+    else:
+        lines.append("approval: none.")
+    if isinstance(request, Mapping):
+        lines.append(
+            "request: "
+            + _spec_sentence(request)
+            + " recorded at rev {rev}.".format(rev=request.get("rev", ""))
+        )
+        raw_sections = _request_sections(request)
+        lines.extend(
+            "   - {title} ({count} block(s))".format(
+                title=section.get("title", ""),
+                count=len(section.get("blocks"))
+                if isinstance(section.get("blocks"), list)
+                else 0,
+            )
+            for section in raw_sections[:MAX_SPEC_SECTIONS]
+        )
+        lines.append(
+            "No person has approved this request yet; only a person can, in "
+            "the confirmation panel."
+        )
+    elif payload.get("requestStale"):
+        lines.append(
+            "No usable write request is pending; the previous one was bound to "
+            "another revision. compose_page again to propose it anew."
+        )
+    elif isinstance(approval, Mapping):
+        lines.append(
+            "No write request is pending; the approval above still covers a "
+            "compose_page with the same frame, spec and rev."
+        )
+    else:
+        lines.append("No write request is pending.")
+    return "\n".join(lines)
+
+
+def _spec_sentence(row: Mapping[str, object]) -> str:
+    spec = row.get("spec")
+    spec = spec if isinstance(spec, Mapping) else {}
+    sections = _request_sections(row)
+    blocks = 0
+    for section in sections:
+        raw = section.get("blocks")
+        blocks += len(raw) if isinstance(raw, list) else 0
+    return (
+        f'frame {row.get("frameId", "")}: page "{spec.get("title", "")}" '
+        f'({spec.get("slug", "")}, {spec.get("action", "")}), '
+        f"{len(sections)} section(s), {blocks} block(s)"
+    )
+
+
+def _request_sections(row: Mapping[str, object]) -> list[Mapping[str, object]]:
+    spec = row.get("spec")
+    spec = spec if isinstance(spec, Mapping) else {}
+    raw = spec.get("sections")
+    return (
+        [item for item in raw if isinstance(item, Mapping)]
+        if isinstance(raw, list)
+        else []
+    )
+
+
 def _render_frames(rev: object, payload: Mapping[str, object]) -> str:
     raw = payload.get("frames")
     rows = (
@@ -606,6 +879,8 @@ def _host(url: str) -> str:
 
 
 __all__ = [
+    "COMPOSE_PAGE",
+    "COMPOSE_PAGE_PARAMETERS",
     "FRAME_BLOCKS",
     "FRAME_BLOCKS_PARAMETERS",
     "INSPECT",

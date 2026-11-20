@@ -69,6 +69,10 @@ OBSERVATION_FIELDS = (
     # A writing-task frame (or several): which material, who drew it, and how
     # many blocks it covers. The block previews stay in the bounded view.
     "frames",
+    # The pending write request a compose_page recorded: the frame, the
+    # canonical page spec and the revision it is bound to. It is bounded by the
+    # spec's own section/block caps, and it is what the confirmation card shows.
+    "request",
 )
 
 

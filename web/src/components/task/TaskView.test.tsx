@@ -6,6 +6,8 @@ import i18n from "@/i18n";
 import { ApiError } from "@/lib/api/client";
 import { TaskView } from "@/components/task/TaskView";
 import {
+  approveTaskRequest,
+  fetchTaskApproval,
   fetchTaskCards,
   fetchTaskFrames,
   fetchTaskMaterials,
@@ -14,15 +16,19 @@ import {
   pickTaskCard,
 } from "@/lib/api/task";
 import type {
+  TaskApprovalView,
   TaskCardsView,
   TaskFramesView,
   TaskMaterialsView,
   TaskSummaryView,
+  TaskWriteRequest,
 } from "@/lib/api/types";
 import { useTaskStore } from "@/stores/task-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
 vi.mock("@/lib/api/task", () => ({
+  approveTaskRequest: vi.fn(),
+  fetchTaskApproval: vi.fn(),
   fetchTaskCards: vi.fn(),
   fetchTaskFrames: vi.fn(),
   fetchTaskMaterials: vi.fn(),
@@ -94,6 +100,43 @@ const oneMaterial: TaskMaterialsView = {
   ],
 };
 
+const PAGE_SPEC = {
+  slug: "entropy",
+  title: "Entropy",
+  action: "create",
+  sections: [
+    { title: "What it is", blocks: ["b1"] },
+    { title: "Why it matters", blocks: ["b2"] },
+  ],
+};
+
+const pendingRequest: TaskWriteRequest = {
+  frameId: "frame-1",
+  spec: PAGE_SPEC,
+  rev: 4,
+  at: "2026-11-10T09:05:00Z",
+};
+
+const noApprovalView: TaskApprovalView = {
+  view: "approval",
+  rev: 2,
+  status: "idle",
+  approval: null,
+  approvalStale: false,
+  request: null,
+  requestStale: false,
+};
+
+const requestView: TaskApprovalView = {
+  view: "approval",
+  rev: 4,
+  status: "needs_approval",
+  approval: null,
+  approvalStale: false,
+  request: pendingRequest,
+  requestStale: false,
+};
+
 const noFrames: TaskFramesView = {
   view: "frames",
   rev: 2,
@@ -134,6 +177,7 @@ beforeEach(() => {
     cards: null,
     materials: null,
     frames: null,
+    approvalView: null,
     error: "",
     picking: "",
     pickError: "",
@@ -141,15 +185,21 @@ beforeEach(() => {
     framing: "",
     frameError: "",
     frameNotice: "",
+    deciding: "",
+    decisionError: "",
+    decisionNotice: "",
   });
   vi.mocked(fetchTaskSummary).mockReset();
   vi.mocked(fetchTaskCards).mockReset();
   vi.mocked(fetchTaskMaterials).mockReset();
   vi.mocked(fetchTaskFrames).mockReset();
+  vi.mocked(fetchTaskApproval).mockReset();
   vi.mocked(pickTaskCard).mockReset();
   vi.mocked(frameTaskMaterial).mockReset();
+  vi.mocked(approveTaskRequest).mockReset();
   vi.mocked(fetchTaskMaterials).mockResolvedValue(noMaterials);
   vi.mocked(fetchTaskFrames).mockResolvedValue(noFrames);
+  vi.mocked(fetchTaskApproval).mockResolvedValue(noApprovalView);
 });
 
 afterEach(() => {
@@ -165,6 +215,12 @@ async function draw() {
     root.render(<TaskView />);
   });
   await act(async () => {});
+}
+
+function buttonByText(text: string) {
+  return [...host.querySelectorAll("button")].find((item) =>
+    item.textContent?.includes(text),
+  );
 }
 
 describe("the writing task view", () => {
@@ -408,5 +464,165 @@ describe("the writing task view", () => {
     );
     expect(host.textContent).toContain(i18n.t("task.approvalInvalidated"));
     expect(host.textContent).not.toContain(approved);
+  });
+
+  it("shows the write request with its sections and evidence, and approves it", async () => {
+    const approval = {
+      frameId: "frame-1",
+      spec: PAGE_SPEC,
+      rev: 5,
+      by: "human",
+      at: "2026-11-10T09:06:00Z",
+    };
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce({
+        ...summary,
+        rev: 4,
+        status: "needs_approval",
+        counts: { cards: 2, materials: 1, frames: 1 },
+      })
+      .mockResolvedValue({
+        ...summary,
+        rev: 5,
+        counts: { cards: 2, materials: 1, frames: 1 },
+        approval,
+      });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames).mockResolvedValue(oneFrame);
+    vi.mocked(fetchTaskApproval)
+      .mockResolvedValueOnce(requestView)
+      .mockResolvedValue({
+        ...noApprovalView,
+        rev: 5,
+        approval,
+      });
+    vi.mocked(approveTaskRequest).mockResolvedValue({
+      decision: "approve",
+      rev: 5,
+      approval,
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain(i18n.t("task.status.needs_approval"));
+    expect(host.textContent).toContain(i18n.t("task.writeRequest"));
+    expect(host.textContent).toContain("Entropy");
+    expect(host.textContent).toContain(i18n.t("task.action.create"));
+    expect(host.textContent).toContain("What it is");
+    expect(host.textContent).toContain("Why it matters");
+    // The evidence is the bounded preview of each block the section cites.
+    expect(host.textContent).toContain("熵衡量不确定性。");
+    expect(host.textContent).toContain("信息是不确定性的减少。");
+
+    const approve = buttonByText(i18n.t("task.approve"));
+    expect(approve).toBeTruthy();
+    await act(async () => {
+      approve?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(approveTaskRequest)).toHaveBeenCalledWith(
+      "task-1",
+      4,
+      "frame-1",
+      PAGE_SPEC,
+      "approve",
+    );
+    expect(host.textContent).toContain(i18n.t("task.approvedNotice"));
+  });
+
+  it("rejects the write request and lets the agent propose again", async () => {
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce({
+        ...summary,
+        rev: 4,
+        status: "needs_approval",
+      })
+      .mockResolvedValue({ ...summary, rev: 5 });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames).mockResolvedValue(oneFrame);
+    vi.mocked(fetchTaskApproval)
+      .mockResolvedValueOnce(requestView)
+      .mockResolvedValue({ ...noApprovalView, rev: 5 });
+    vi.mocked(approveTaskRequest).mockResolvedValue({
+      decision: "reject",
+      rev: 5,
+    });
+
+    await draw();
+    const reject = buttonByText(i18n.t("task.reject"));
+    expect(reject).toBeTruthy();
+    await act(async () => {
+      reject?.click();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(approveTaskRequest)).toHaveBeenCalledWith(
+      "task-1",
+      4,
+      "frame-1",
+      PAGE_SPEC,
+      "reject",
+    );
+    expect(host.textContent).toContain(i18n.t("task.rejectedNotice"));
+    expect(host.textContent).not.toContain(i18n.t("task.writeRequest"));
+  });
+
+  it("hides the write request when a frame change invalidates it", async () => {
+    vi.mocked(fetchTaskSummary)
+      .mockResolvedValueOnce({
+        ...summary,
+        rev: 4,
+        status: "needs_approval",
+        counts: { cards: 2, materials: 1, frames: 1 },
+      })
+      .mockResolvedValue({
+        ...summary,
+        rev: 5,
+        counts: { cards: 2, materials: 1, frames: 1 },
+      });
+    vi.mocked(fetchTaskCards).mockResolvedValue(cards);
+    vi.mocked(fetchTaskMaterials).mockResolvedValue(oneMaterial);
+    vi.mocked(fetchTaskFrames)
+      .mockResolvedValueOnce(oneFrame)
+      .mockResolvedValue({ ...oneFrame, rev: 5 });
+    vi.mocked(fetchTaskApproval)
+      .mockResolvedValueOnce(requestView)
+      .mockResolvedValue({ ...noApprovalView, rev: 5 });
+    vi.mocked(frameTaskMaterial).mockResolvedValue({
+      opId: "op-6",
+      status: "done",
+      rev: 5,
+      approvalCleared: true,
+      frame: {
+        id: "frame-1",
+        docId: "raw/web/entropy-a1.html",
+        blocks: ["b2"],
+        source: "human",
+      },
+    });
+
+    await draw();
+    expect(host.textContent).toContain(i18n.t("task.writeRequest"));
+
+    // The frame already covers b1 and b2; unticking b1 changes the basis the
+    // request was written from.
+    const toggle = host.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    expect(toggle?.checked).toBe(true);
+    await act(async () => {
+      toggle?.click();
+    });
+    const save = buttonByText(i18n.t("task.frameSave"));
+    await act(async () => {
+      save?.click();
+    });
+    await act(async () => {});
+
+    expect(host.textContent).toContain(i18n.t("task.approvalInvalidated"));
+    expect(host.textContent).not.toContain(i18n.t("task.writeRequest"));
   });
 });

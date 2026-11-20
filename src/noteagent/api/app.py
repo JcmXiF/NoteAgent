@@ -129,6 +129,7 @@ from noteagent.api.session_access import (
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.api.task import (
+    approve_task_request,
     frame_task_material,
     pick_task_card,
     task_view_payload,
@@ -279,6 +280,21 @@ class TaskFrameBody(BaseModel):
     docId: str = Field(..., min_length=1, max_length=500)
     blocks: list[str] = Field(..., max_length=2000)
     expectedRev: int = Field(..., ge=0)
+
+
+class TaskApproveBody(BaseModel):
+    """A person's decision on the pending write request.
+
+    The task id rules out a decision aimed at another project's task; the
+    revision is the one the confirmation panel read, so a task that moved since
+    then is refused rather than decided on.
+    """
+
+    taskId: str = Field(..., min_length=1, max_length=120)
+    rev: int = Field(..., ge=0)
+    frameId: str = Field(..., min_length=1, max_length=500)
+    spec: dict[str, object]
+    decision: Literal["approve", "reject"]
 
 
 class FolderOpenBody(BaseModel):
@@ -940,9 +956,9 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.get("/api/v1/task")
     def kernel_task(
-        view: Literal["summary", "cards", "materials", "frames"] = Query(
-            "summary"
-        ),
+        view: Literal[
+            "summary", "cards", "materials", "frames", "approval"
+        ] = Query("summary"),
     ) -> dict[str, object]:
         """The active project's writing task, as a bounded view with its rev."""
         return task_view_payload(deps, view)
@@ -957,6 +973,17 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """A person's frame, on the same task and writer as the agent's."""
         return frame_task_material(
             deps, body.docId, body.blocks, body.expectedRev
+        )
+
+    @app.post("/api/v1/task/approve")
+    def kernel_task_approve(body: TaskApproveBody) -> dict[str, object]:
+        """A person's decision on the pending write request.
+
+        This is the only way an approval is written. No agent tool reaches it:
+        the model is offered compose_page and inspect, never approve.
+        """
+        return approve_task_request(
+            deps, body.taskId, body.rev, body.frameId, body.spec, body.decision
         )
 
     @app.get("/api/v1/sessions")
