@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import contextmanager
 from dataclasses import replace
@@ -35,7 +36,8 @@ from noteagent.task.model import (
     canonical_page_spec,
 )
 from noteagent.task.service import TaskOpFailed, TaskService, TaskRegistry
-from noteagent.task.store import TaskStore
+from noteagent.task.store import TaskStore, TaskUnreadableError
+from noteagent.task.writer import TaskWriter
 from noteagent.task.writing import PageLocks, SaveOutcome
 
 PAGE_SPEC = {
@@ -91,13 +93,27 @@ STAGED = StagedMaterial(
 
 
 class FakeSearch:
-    def __init__(self, *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        gate: threading.Event | None = None,
+    ) -> None:
         self.error = error
+        self.gate = gate
+        self.entered = threading.Event()
+        self.exited = threading.Event()
 
     def __call__(self, query: str):
-        if self.error is not None:
-            raise self.error
-        return list(CARDS)
+        self.entered.set()
+        try:
+            if self.gate is not None:
+                self.gate.wait(5)
+            if self.error is not None:
+                raise self.error
+            return list(CARDS)
+        finally:
+            self.exited.set()
 
 
 class FakeFetch:
@@ -568,6 +584,143 @@ class TaskWriteSeamTests(unittest.TestCase):
         after = self.load()
         self.assert_log_only(before, after)
         self.assertTrue(after.ops[-1].interrupted)
+
+
+class TaskRevisionAuthorityTests(unittest.TestCase):
+    """Derived bindings carry the writer's committed revision, not a literal +1.
+
+    A pending request, an approval and a completion's ``resume_rev`` are all
+    bound to the revision the next content commit writes. They ask
+    :meth:`TaskWriter.next_rev` for it, so the writer's bump rule has exactly
+    one authority; a source check keeps a new call site from reintroducing a
+    hand-written ``task.rev + 1``.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.layout = init_project(Path(self._tmp.name) / "projects" / "demo")
+        self.store = TaskStore(self.layout)
+
+    def service(
+        self,
+        *,
+        search=None,
+        spawn=None,
+        wait_s: float = 0.01,
+    ) -> TaskService:
+        return TaskService(
+            self.layout,
+            clock=FixedClock(),
+            ids=SequentialIds(),
+            search=search or FakeSearch(),
+            fetch=FakeFetch(),
+            stage=FakeStage(),
+            compose=FakeCompose(),
+            save=FakeSave(),
+            spawn=spawn if spawn is not None else (lambda work: work()),
+            wait_s=wait_s,
+            pick_wait_s=0.01,
+            compose_wait_s=0.01,
+            poll_s=0.001,
+        )
+
+    def seed(self, task: Task) -> Task:
+        self.store.save(task)
+        return task
+
+    def wait_for_task(self, predicate, *, timeout: float = 5.0) -> Task:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                stored = self.store.load()
+            except TaskUnreadableError:
+                stored = None
+            if stored is not None and predicate(stored):
+                return stored
+            time.sleep(0.005)
+        self.fail("the task did not reach the expected state")
+
+    def test_a_pending_request_is_bound_to_the_committed_revision(self) -> None:
+        before = self.seed(_seed_task(approval_spec=OTHER_SPEC))
+
+        outcome = self.service().compose("frame-1", PAGE_SPEC)
+
+        after = self.store.load()
+        self.assertIsNotNone(after)
+        self.assertEqual(outcome.status, "needs_approval")
+        self.assertEqual(outcome.rev, after.rev)
+        self.assertIsNotNone(after.request)
+        self.assertEqual(after.request.rev, after.rev)
+        self.assertEqual(after.request.rev, before.rev + 1)
+
+    def test_an_approval_is_bound_to_the_committed_revision(self) -> None:
+        before = self.seed(_seed_task(request_spec=PAGE_SPEC))
+
+        self.service().approve(
+            "task-7", before.rev, "frame-1", PAGE_SPEC, "approve"
+        )
+
+        after = self.store.load()
+        self.assertIsNotNone(after)
+        self.assertIsNotNone(after.approval)
+        self.assertEqual(after.approval.rev, after.rev)
+        self.assertEqual(after.approval.rev, before.rev + 1)
+
+    def test_a_completion_resume_rev_is_the_committed_revision(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        before = self.seed(_seed_task())
+        service = self.service(
+            search=search,
+            wait_s=0.001,
+            spawn=lambda work: threading.Thread(target=work).start(),
+        )
+
+        outcome = service.search("entropy")
+
+        # The wait expired while the node was held; the completion now owes
+        # the session a resume at the revision its finish will create.
+        self.assertIn(outcome.status, ("requested", "running"))
+        pending = self.store.load()
+        self.assertIsNotNone(pending)
+        self.assertTrue(pending.ops[-1].resume_requested)
+        gate.set()
+        after = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].status == "done"
+        )
+        op = after.ops[-1]
+        self.assertEqual(op.resume_rev, after.rev)
+        self.assertEqual(op.resume_rev, before.rev + 1)
+
+    def test_commit_content_asks_the_writer_for_the_next_revision(self) -> None:
+        """The bump is delegated, not repeated inside the commit."""
+
+        class _Shifted(TaskWriter):
+            def next_rev(self, task: Task) -> int:
+                return task.rev + 7
+
+        writer = _Shifted(self.store, FixedClock())
+        before = _seed_task()
+
+        saved = writer.commit_content(before, {})
+
+        self.assertEqual(saved.rev, before.rev + 7)
+
+    def test_no_service_call_site_hand_writes_the_next_revision(self) -> None:
+        import noteagent.task.service as service_module
+
+        source = Path(service_module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("task.rev + 1", source)
+
+    def test_the_writer_owns_the_single_next_revision_expression(self) -> None:
+        import noteagent.task.writer as writer_module
+
+        source = Path(writer_module.__file__).read_text(encoding="utf-8")
+        self.assertEqual(source.count("task.rev + 1"), 1)
+        self.assertIn("def next_rev(self, task: Task) -> int:", source)
+        self.assertIn("self.next_rev(task)", source)
 
 
 class _Recorder:

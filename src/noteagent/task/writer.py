@@ -38,6 +38,16 @@ class TaskWriter:
         self._store.save(task)
         return task
 
+    def next_rev(self, task: Task) -> int:
+        """The revision a content commit of *task* will write.
+
+        This is the one place the next content revision is derived. A commit
+        uses it, and so does anything that must carry the revision it is bound
+        to in the same way (a pending request, an approval, a completion's
+        ``resume_rev``).
+        """
+        return task.rev + 1
+
     def commit_content(
         self, task: Task, changes: Mapping[str, object]
     ) -> Task:
@@ -55,7 +65,7 @@ class TaskWriter:
             # Clearing the request ends the waiting-for-approval state unless
             # the caller is writing the next thing to wait on.
             values.setdefault("status", "idle")
-        values["rev"] = task.rev + 1
+        values["rev"] = self.next_rev(task)
         values["updated_at"] = iso_timestamp(self._clock)
         return self._save(task, values)
 

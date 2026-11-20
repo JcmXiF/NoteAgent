@@ -861,7 +861,8 @@ class TaskService:
                 request = WriteRequest(
                     frame_id=cleaned,
                     spec=canonical,
-                    rev=task.rev + 1,
+                    # Bound to the revision this commit will write.
+                    rev=self._writer.next_rev(task),
                     at=now,
                 )
                 # A new request is content: it moves the revision once and
@@ -991,7 +992,8 @@ class TaskService:
                 Approval(
                     frame_id=cleaned_frame,
                     spec=canonical,
-                    rev=task.rev + 1,
+                    # Bound to the revision this commit will write.
+                    rev=self._writer.next_rev(task),
                     by=by,
                     at=now,
                     page_digest=approved_digest,
@@ -1715,7 +1717,11 @@ class TaskService:
             # A finish that owes a resume records the revision it creates: the
             # continuation must observe the completion, even if a person writes
             # while it is queued behind the session's running turn.
-            resume_rev=task.rev + 1 if op.resume_requested else op.resume_rev,
+            resume_rev=(
+                self._writer.next_rev(task)
+                if op.resume_requested
+                else op.resume_rev
+            ),
             updated_at=now,
         )
         # Finishing an op is a content write: the seam moves the revision once
@@ -1762,7 +1768,9 @@ class TaskService:
             # not task state: it stays a log write, so a wait that ends in
             # failure does not look like a task change to the views.
             changes_task = op.kind == "write"
-            completion_rev = task.rev + 1 if changes_task else task.rev
+            completion_rev = (
+                self._writer.next_rev(task) if changes_task else task.rev
+            )
             failed = replace(
                 op,
                 # A cancelled op is terminal under its own name: even if the
