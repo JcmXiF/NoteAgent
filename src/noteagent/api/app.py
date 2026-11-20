@@ -130,8 +130,11 @@ from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.api.task import (
     approve_task_request,
+    cancel_task_op,
     frame_task_material,
     pick_task_card,
+    recover_active_project_tasks,
+    resume_task_op,
     task_view_payload,
 )
 from noteagent.sessions.recovery import abandon_run, interrupted_run
@@ -711,6 +714,10 @@ async def _app_lifespan(_app: FastAPI):
     # originals that predate the material log get a record; both before any
     # route can read them.
     prepare_active_project(_app.state.deps)
+    # A writing task a previous core left mid-op is reconciled: active ops are
+    # marked interrupted (resumable or cancellable), and a completion that was
+    # never resumed is continued once, before any route reads the task.
+    recover_active_project_tasks(_app.state.deps)
 
     stop = asyncio.Event()
 
@@ -989,6 +996,16 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         return approve_task_request(
             deps, body.taskId, body.rev, body.frameId, body.spec, body.decision
         )
+
+    @app.post("/api/v1/task/ops/{op_id}/cancel")
+    def kernel_task_op_cancel(op_id: str) -> dict[str, object]:
+        """Stop an unfinished op; a cancelled op never saves, resumes or retries."""
+        return cancel_task_op(deps, op_id)
+
+    @app.post("/api/v1/task/ops/{op_id}/resume")
+    def kernel_task_op_resume(op_id: str) -> dict[str, object]:
+        """Re-run an op a restart interrupted; its completion resumes once."""
+        return resume_task_op(deps, op_id)
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:

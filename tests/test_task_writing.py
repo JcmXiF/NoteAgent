@@ -9,17 +9,22 @@ heading. The model is scripted: no network and no client.
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 from agent_fakes import FixedClock
 from noteagent.acquire.types import Capture
+from noteagent.effects.journal import COMMITTED, WIKI_PAGE_WRITE, EffectJournal
 from noteagent.pipeline.materials import Materials
 from noteagent.project.init import init_project
 from noteagent.task.writing import (
     ComposePageError,
     ComposeRequest,
+    SaveRequest,
     TaskPageCompose,
+    TaskPageSave,
+    WriteCancelled,
     locators_for_frame,
 )
 
@@ -158,6 +163,86 @@ class TaskPageComposeTests(unittest.TestCase):
                     locators=("raw/web/missing.html#b1",),
                 ),
             )
+
+
+class TaskPageSaveTests(unittest.TestCase):
+    """The save node is the one place a page lands, and it lands once."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.layout = init_project(Path(self._tmp.name) / "projects" / "demo")
+        self.materials = Materials(self.layout, clock=FixedClock())
+        self.staged = self.materials.stage(
+            CAPTURE, run_id="task-7", captured_at="2026-11-10T09:00:00Z"
+        )
+        rows = self.materials.blocks(self.staged.material, run_id="task-7") or []
+        self.block_ids = tuple(str(row.get("id")) for row in rows)
+        self.request = SaveRequest(
+            task_id="task-7",
+            op_id="op-9",
+            session_id="s-1",
+            wiki_path="wiki/entropy.md",
+            action="create",
+            content=(
+                "---\n"
+                "title: Entropy\n"
+                "created: 2026-11-10\n"
+                "updated: 2026-11-10\n"
+                "sources: [\"raw/web/entropy-a1.html#b1\"]\n"
+                "---\n\n"
+                "# Entropy\n\n"
+                f"<!-- na-clip:{self.staged.material} -->\n"
+                "## What it is\n\n熵衡量不确定性。\n"
+            ),
+            material=self.staged.material,
+            locators=locators_for_frame(
+                self.staged.material, self.block_ids
+            ),
+            expected_rev=3,
+        )
+
+    def save(self):
+        return TaskPageSave()(self.layout, self.request)
+
+    def test_saving_the_same_op_twice_writes_the_page_once(self) -> None:
+        first = self.save()
+        self.assertEqual(first.status, "written")
+        page = self.layout.wiki / "entropy.md"
+        self.assertTrue(page.is_file())
+
+        # A person edits the page after the write. Re-running the same op (its
+        # executor died after the save, say) must not write it again.
+        page.write_text(
+            "---\ntitle: Entropy\n---\n\n# Entropy\n\nperson text\n",
+            encoding="utf-8",
+        )
+        second = self.save()
+
+        self.assertEqual(second.status, "written")
+        self.assertIn("already wrote", second.summary)
+        self.assertIn("person text", page.read_text(encoding="utf-8"))
+        effects = EffectJournal(self.layout).query(
+            run_id="op-9", kind=WIKI_PAGE_WRITE, status=COMMITTED
+        )
+        self.assertEqual(len(effects), 1)
+
+    def test_a_cancelled_save_writes_no_page(self) -> None:
+        cancel = threading.Event()
+        cancel.set()
+
+        with self.assertRaises(WriteCancelled):
+            TaskPageSave()(self.layout, self.request, cancel)
+
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+        self.assertEqual(
+            list(
+                EffectJournal(self.layout).query(
+                    run_id="op-9", kind=WIKI_PAGE_WRITE, status=COMMITTED
+                )
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

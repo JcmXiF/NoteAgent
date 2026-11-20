@@ -625,6 +625,8 @@
     "aborted": "Stopped before this answer was finished.",
     "incomplete": "The model stream failed; this is only the part written before it.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
+    "resumedOp": "Resumed {{kind}} op · {{status}} · rev {{rev}}",
+    "resumedOpHint": "The executor finished a long op; the conversation continued from this result.",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
       "save": "Save as a remark",
@@ -1697,6 +1699,17 @@
     "approved": "Approved by {{by}} at revision {{rev}}",
     "noApproval": "No approval yet",
     "approvalInvalidated": "The frame changed, so the previous approval no longer applies.",
+    "ops": "Ops",
+    "opInterrupted": "a restart interrupted it; resume it or cancel it",
+    "opCancel": "Cancel",
+    "opResume": "Resume",
+    "opWorking": "Working…",
+    "opCancelledNotice": "Op {{id}} was cancelled and will not run again.",
+    "opAlreadyFinished": "The op had already finished; nothing was cancelled.",
+    "opResumedNotice": "Op {{id}} is running again.",
+    "opActionFailed": "The op could not be updated",
+    "opResumeFailed": "The resume failed: {{error}}",
+    "opCancelledLine": "cancelled; it will not be retried or resumed",
     "writeRequest": "Write request",
     "approve": "Approve",
     "reject": "Reject",
@@ -1727,6 +1740,13 @@
       "needs_approval": "needs approval",
       "done": "done",
       "failed": "failed"
+    },
+    "opStatus": {
+      "requested": "requested",
+      "running": "running",
+      "done": "done",
+      "failed": "failed",
+      "cancelled": "cancelled"
     }
   }
 }

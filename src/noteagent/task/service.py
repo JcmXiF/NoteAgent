@@ -13,13 +13,14 @@ made in between is a ``conflict`` rather than a silent overwrite.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from threading import Event, Lock
-from typing import Iterator
+from typing import Iterator, TypeAlias
 
 from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
@@ -32,9 +33,12 @@ from noteagent.project.layout import ProjectLayout
 from noteagent.task.model import (
     ACTIVE_OP_STATUSES,
     MAX_BLOCK_PREVIEW,
+    MAX_CARD_SNIPPET,
     MAX_MATERIAL_TITLE,
     MAX_VIEW_BLOCKS,
+    MAX_VIEW_CARDS,
     TASK_VIEWS,
+    TERMINAL_OP_STATUSES,
     Approval,
     Card,
     FetchFn,
@@ -47,6 +51,7 @@ from noteagent.task.model import (
     Task,
     WriteRequest,
     canonical_page_spec,
+    material_summary,
     task_view,
 )
 from noteagent.task.store import TaskStore
@@ -64,6 +69,8 @@ from noteagent.task.writing import (
     page_diff,
     page_path_for_spec,
 )
+
+logger = logging.getLogger(__name__)
 
 #: How long a search waits for its op before it says requested/running.
 DEFAULT_WAIT_S = 15.0
@@ -121,6 +128,41 @@ class TaskNeedsApproval(TaskToolError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, code="needs_approval")
+
+
+@dataclass(frozen=True, slots=True)
+class OpResumeNotice:
+    """A finished op the session was waiting on, with its bounded delta.
+
+    The delta is exactly what the resumed conversation needs: which op, what
+    kind, how it ended, the task revision it belongs to, and one bounded result
+    (the cards a search found, the material a pick staged, the page a write
+    produced). It is never the task and never the op log.
+    """
+
+    session_id: str
+    op_id: str
+    kind: str
+    status: str
+    rev: int
+    result: Mapping[str, object] = field(default_factory=dict)
+
+
+#: What an executor calls when an op finishes and its session asked to be
+#: resumed. The API composes one over the session store and runtime; a test
+#: records the notice instead of starting a run.
+TaskOpResumeFn: TypeAlias = Callable[[OpResumeNotice], None]
+
+
+@dataclass(frozen=True, slots=True)
+class OpOutcome:
+    """A person's cancel or resume of one op, and what it left standing."""
+
+    op: Op
+    rev: int
+    #: Whether this call changed the op. A second cancel of a finished op is a
+    #: no-op, not an error: the UI may lose the race with the executor.
+    changed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +244,7 @@ class TaskRegistry:
         self._lock = Lock()
         self._writers: dict[str, Lock] = {}
         self._observed: dict[tuple[str, str], int] = {}
+        self._op_cancels: dict[str, Event] = {}
 
     def writer(self, project_key: str) -> Lock:
         with self._lock:
@@ -217,6 +260,18 @@ class TaskRegistry:
     def observed(self, project_key: str, session_id: str) -> int | None:
         with self._lock:
             return self._observed.get((project_key, session_id))
+
+    def op_cancel(self, op_id: str) -> Event:
+        """The per-op stop signal, shared by the cancel route and its executor."""
+        with self._lock:
+            return self._op_cancels.setdefault(op_id, Event())
+
+    def cancel_op(self, op_id: str) -> None:
+        self.op_cancel(op_id).set()
+
+    def forget_op(self, op_id: str) -> None:
+        with self._lock:
+            self._op_cancels.pop(op_id, None)
 
 
 class TaskService:
@@ -241,6 +296,7 @@ class TaskService:
         compose: ComposePageFn | None = None,
         save: SavePageFn | None = None,
         page_locks: PageLocks | None = None,
+        on_resume: TaskOpResumeFn | None = None,
     ) -> None:
         if wait_s < 0 or pick_wait_s < 0 or compose_wait_s < 0:
             raise ValueError("a bounded wait cannot be negative")
@@ -260,6 +316,10 @@ class TaskService:
         self._compose = compose or TaskPageCompose()
         self._save = save or TaskPageSave()
         self._page_locks = page_locks or PageLocks()
+        # What the executor calls when an op finished after its wait expired.
+        # ``None`` leaves the op pending for a later trigger (startup recovery
+        # or the route that owns the session).
+        self._on_resume = on_resume
         self._project_key = str(layout.root.resolve())
         self._owner = f"task-{id(self)}"
         self._store = TaskStore(layout)
@@ -313,12 +373,17 @@ class TaskService:
         op_id = self._request(
             kind="search",
             actor="agent",
-            input={"query": cleaned},
+            # The session travels on the op so the executor can resume it when
+            # the search finishes after this tool has handed the turn back.
+            input={"query": cleaned, "sessionId": session_id},
             expected_rev=expected,
             session_id=session_id,
         )
         observed = self._wait(
             op_id, f'the web search "{cleaned}"', cancel, wait_s=self._wait_s
+        )
+        observed = self._settle(
+            op_id, f'the web search "{cleaned}"', observed
         )
         # A finished search moved the task; the session now knows that revision.
         self._registry.observe(self._project_key, session_id, observed.rev)
@@ -367,7 +432,7 @@ class TaskService:
         op_id = self._request(
             kind="pick",
             actor=actor,  # type: ignore[arg-type]
-            input={"cardId": cleaned},
+            input={"cardId": cleaned, "sessionId": session_id},
             expected_rev=expected,
             session_id=session_id,
         )
@@ -376,6 +441,9 @@ class TaskService:
             f'the pick of card "{cleaned}"',
             cancel,
             wait_s=self._pick_wait_s,
+        )
+        observed = self._settle(
+            op_id, f'the pick of card "{cleaned}"', observed
         )
         self._registry.observe(self._project_key, session_id, observed.rev)
         material: Mapping[str, object] = {}
@@ -690,6 +758,9 @@ class TaskService:
             cancel,
             wait_s=self._compose_wait_s,
         )
+        observed = self._settle(
+            op_id, f'the write of page "{canonical["slug"]}"', observed
+        )
         self._registry.observe(self._project_key, session_id, observed.rev)
         if observed.status != "done" or observed.op is None:
             return ComposeOutcome(
@@ -812,6 +883,233 @@ class TaskService:
             self._store.save(saved)
         return ApproveOutcome(decision, saved.rev, approval)
 
+    def claim_resume(self, op_id: str) -> OpResumeNotice | None:
+        """Set the once-only resume marker and return the op's delta, or none.
+
+        The marker and the delta are read and written under the task's writer
+        lock, before the continuation run starts. A duplicate completion, a
+        second app instance or a reconnect therefore finds ``resume_started``
+        and starts nothing; a cancelled op never resumes at all.
+        """
+        with self._writing():
+            task = self._store.load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None:
+                return None
+            if op.resume_started or not op.resume_requested:
+                return None
+            if op.status == "cancelled" or op.error_code == "cancelled":
+                return None
+            if op.status not in TERMINAL_OP_STATUSES:
+                return None
+            session_id = _input_text(op.input, "sessionId")
+            if not session_id:
+                return None
+            now = iso_timestamp(self._clock)
+            started = replace(op, resume_started=True, updated_at=now)
+            saved = replace(
+                task,
+                ops=_replace_op(task, started),
+                updated_at=now,
+            )
+            self._store.save(saved)
+            # The resumed run starts from the delta's revision.
+            self._registry.observe(self._project_key, session_id, saved.rev)
+            return OpResumeNotice(
+                session_id=session_id,
+                op_id=started.id,
+                kind=started.kind,
+                status=started.status,
+                rev=saved.rev,
+                result=op_delta(saved, started),
+            )
+
+    def resume_pending(self, op_id: str) -> bool:
+        """Whether this op still wants its one continuation (read only)."""
+        task = self._store.load()
+        op = task.op(op_id) if task is not None else None
+        if task is None or op is None:
+            return False
+        if not op.resume_requested or op.resume_started:
+            return False
+        if op.status not in TERMINAL_OP_STATUSES:
+            return False
+        if op.status == "cancelled" or op.error_code == "cancelled":
+            return False
+        return bool(_input_text(op.input, "sessionId"))
+
+    def record_resume_error(self, op_id: str, message: str) -> None:
+        """Leave why a claimed resume could not run on the op; never retry.
+
+        The op is already terminal and keeps its result; this only makes the
+        failure (a deleted session, an unreadable model configuration) visible
+        in the task the person and the agent read.
+        """
+        with self._writing():
+            task = self._store.load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None:
+                return
+            now = iso_timestamp(self._clock)
+            failed = replace(
+                op,
+                resume_error=(message or "the resume could not start")[:600],
+                updated_at=now,
+            )
+            self._store.save(
+                replace(
+                    task,
+                    ops=_replace_op(task, failed),
+                    updated_at=now,
+                )
+            )
+
+    def cancel_op(self, op_id: str) -> OpOutcome:
+        """Stop an unfinished op for good.
+
+        The terminal state is written under the writer lock before the per-op
+        stop signal is raised, so a late node cannot write its result back: the
+        executor's finishing guard sees ``cancelled`` and drops it. A finished
+        op is left as it is (a cancel that lost the race is not an error).
+        """
+        changed = False
+        with self._writing():
+            task = self._store.load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None:
+                raise TaskNotFound(
+                    f"the writing task has no op {op_id!r}. Read the task "
+                    "again before cancelling it."
+                )
+            if op.status not in ACTIVE_OP_STATUSES:
+                return OpOutcome(op, task.rev, changed=False)
+            now = iso_timestamp(self._clock)
+            cancelled = replace(
+                op,
+                status="cancelled",
+                error="the op was cancelled by a person",
+                error_code="cancelled",
+                updated_at=now,
+            )
+            saved = replace(
+                task,
+                ops=_replace_op(task, cancelled),
+                updated_at=now,
+            )
+            self._store.save(saved)
+            changed = True
+        if changed:
+            # After the state write: an executor that checks the signal and
+            # then its op sees cancelled either way.
+            self._registry.cancel_op(op_id)
+        return OpOutcome(cancelled, saved.rev, changed=True)
+
+    def resume_op(self, op_id: str) -> OpOutcome:
+        """Run an op a restart interrupted, and let its completion resume.
+
+        ``interrupted`` is cleared and ``resume_requested`` set under the writer
+        lock, so the new executor carries the same once-only contract as a tool
+        that timed out: when it finishes it resumes the session once. Resuming
+        a write re-runs its compose but the save node's effect journal makes the
+        page land once.
+        """
+        with self._writing():
+            task = self._store.load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None:
+                raise TaskNotFound(
+                    f"the writing task has no op {op_id!r}. Read the task "
+                    "again before resuming it."
+                )
+            if op.status == "cancelled" or op.error_code == "cancelled":
+                raise TaskConflict(
+                    "the op was cancelled and will not run again. Do not retry "
+                    "it; read the task as it stands."
+                )
+            if op.status not in ACTIVE_OP_STATUSES:
+                raise TaskConflict(
+                    "the op already finished; there is nothing to resume. Read "
+                    "its result in the task."
+                )
+            if not op.interrupted:
+                raise TaskConflict(
+                    "the op still has an executor and is not interrupted; do "
+                    "not resume it twice."
+                )
+            now = iso_timestamp(self._clock)
+            resumed = replace(
+                op,
+                interrupted=False,
+                resume_requested=True,
+                # A new attempt replaces the record of an earlier failed one.
+                resume_error="",
+                updated_at=now,
+            )
+            saved = replace(
+                task,
+                ops=_replace_op(task, resumed),
+                updated_at=now,
+            )
+            self._store.save(saved)
+        self._spawn(lambda: self._run_op(op_id))
+        return OpOutcome(resumed, saved.rev, changed=True)
+
+    def recover_ops(self) -> tuple[OpResumeNotice, ...]:
+        """Reconcile a restarted task and return the completions still owed.
+
+        An op that was active has no executor now: it is marked ``interrupted``
+        so the panel can offer resume or cancel, and it is never retried by
+        itself. An op that finished while the process was gone but never started
+        its continuation is returned as a notice; the caller hands each to the
+        resumer, which sets the once-only marker before running it. A cancelled
+        op is terminal and is left alone.
+        """
+        notices: list[OpResumeNotice] = []
+        with self._writing():
+            task = self._store.load()
+            if task is None:
+                return ()
+            now = iso_timestamp(self._clock)
+            ops = list(task.ops)
+            changed = False
+            for index, op in enumerate(ops):
+                if op.status in ACTIVE_OP_STATUSES and not op.interrupted:
+                    ops[index] = replace(
+                        op, interrupted=True, updated_at=now
+                    )
+                    changed = True
+            saved = (
+                replace(task, ops=tuple(ops), updated_at=now)
+                if changed
+                else task
+            )
+            if changed:
+                self._store.save(saved)
+            for op in saved.ops:
+                if op.status not in TERMINAL_OP_STATUSES:
+                    continue
+                if op.status == "cancelled" or op.error_code == "cancelled":
+                    continue
+                if not op.resume_requested or op.resume_started:
+                    continue
+                if not _input_text(op.input, "sessionId"):
+                    continue
+                notices.append(
+                    OpResumeNotice(
+                        session_id=_input_text(op.input, "sessionId"),
+                        op_id=op.id,
+                        kind=op.kind,
+                        status=op.status,
+                        rev=saved.rev,
+                        result=op_delta(saved, op),
+                    )
+                )
+        return tuple(notices)
+
+    def deliver_resume(self, notice: OpResumeNotice) -> None:
+        """Hand a completion found at startup to the session's resumer."""
+        self._notify(notice)
+
     def _request(
         self,
         *,
@@ -852,12 +1150,14 @@ class TaskService:
 
     def _run_op(self, op_id: str) -> None:
         """The executor's side: claim, run the typed node(s), write the answer."""
+        cancel = self._registry.op_cancel(op_id)
         try:
+            _check_op_cancel(cancel)
             claimed = self._claim(op_id)
             if claimed is None:
                 return
             try:
-                answer = self._execute(*claimed)
+                answer = self._execute(*claimed, cancel)
             except _OpFailure as err:
                 self._finish_failed(op_id, err.code, str(err))
                 return
@@ -874,17 +1174,23 @@ class TaskService:
                 )
             except Exception:
                 pass
+        finally:
+            self._registry.forget_op(op_id)
 
-    def _execute(self, task: Task, op: Op) -> "_OpAnswer":
+    def _execute(
+        self, task: Task, op: Op, cancel: Event | None
+    ) -> "_OpAnswer":
         """Dispatch one claimed op to its pure node(s). No task writes here."""
         if op.kind == "search":
             query = _input_text(op.input, "query")
+            _check_op_cancel(cancel)
             try:
                 cards = list(self._search(query))
             except Exception as err:  # noqa: BLE001 - named in the op
                 raise _OpFailure(
                     "op_failed", f"{type(err).__name__}: {err}"
                 ) from err
+            _check_op_cancel(cancel)
             return _OpAnswer("search", {"hits": len(cards)}, cards=tuple(cards))
         if op.kind == "pick":
             card_id = _input_text(op.input, "cardId")
@@ -895,7 +1201,9 @@ class TaskService:
                     f"the writing task has no card {card_id!r}; call "
                     'inspect("cards") for the ids it holds',
                 )
+            _check_op_cancel(cancel)
             capture = self._fetch(card.url)
+            _check_op_cancel(cancel)
             if capture.fidelity == FIDELITY_FAILED:
                 raise _OpFailure(
                     "op_failed",
@@ -903,6 +1211,7 @@ class TaskService:
                     "not staged",
                 )
             staged = self._stage(capture, task.id)
+            _check_op_cancel(cancel)
             row = _material_row(staged, run_id=task.id)
             return _OpAnswer(
                 "pick",
@@ -915,10 +1224,12 @@ class TaskService:
                 material=row,
             )
         if op.kind == "write":
-            return self._execute_write(task, op)
+            return self._execute_write(task, op, cancel)
         raise _OpFailure("op_failed", f"unknown op kind: {op.kind!r}")
 
-    def _execute_write(self, task: Task, op: Op) -> "_OpAnswer":
+    def _execute_write(
+        self, task: Task, op: Op, cancel: Event | None
+    ) -> "_OpAnswer":
         """Compose the approved page, then save it if the approval still holds.
 
         The compose is the long part; nothing is written until it returns. The
@@ -1001,14 +1312,21 @@ class TaskService:
             locators=locators_for_frame(frame.doc_id, frame.blocks),
             spec=spec,
         )
+        _check_op_cancel(cancel)
         try:
-            block = self._compose(self._layout, request, None)
+            # The compose node holds the same stop signal: a cancelled write
+            # stops inside the long model run, not only after it.
+            block = self._compose(self._layout, request, cancel)
         except Exception as err:  # noqa: BLE001 - named on the op
             raise _OpFailure(
                 "op_failed", f"the page could not be composed: {err}"
             ) from err
+        # Composing is the long part; a person may have cancelled it while the
+        # model was working. Nothing is saved in that case.
+        _check_op_cancel(cancel)
         after = ""
         with self._writing():
+            _check_op_cancel(cancel)
             current = self._store.load()
             if (
                 current is None
@@ -1029,6 +1347,9 @@ class TaskService:
                 # human editor takes, so a save that lands after the compose but
                 # before this point is seen rather than overwritten.
                 with self._page_locks.holding(self._project_key, wiki_path):
+                    # Last checkpoint before the page lands: the cancel route
+                    # sets the op terminal before it raises this signal.
+                    _check_op_cancel(cancel)
                     now_text = (
                         absolute.read_text(encoding="utf-8")
                         if absolute.is_file()
@@ -1058,7 +1379,7 @@ class TaskService:
                             locators=request.locators,
                             expected_rev=approval_rev,
                         ),
-                        None,
+                        cancel,
                     )
                     # The diff is read before the lock is released, so a later
                     # person's edit is never reported as part of this write.
@@ -1142,7 +1463,11 @@ class TaskService:
             if task is None or op is None or op.status not in ACTIVE_OP_STATUSES:
                 return None
             now = iso_timestamp(self._clock)
-            claimed = replace(op, status="running", updated_at=now)
+            # Claiming an op is also how an interrupted op is resumed: the new
+            # executor owns it now, so the restart mark no longer applies.
+            claimed = replace(
+                op, status="running", interrupted=False, updated_at=now
+            )
             self._store.save(
                 replace(
                     task,
@@ -1153,6 +1478,7 @@ class TaskService:
             return task, claimed
 
     def _finish_done(self, op_id: str, answer: "_OpAnswer") -> None:
+        notice: OpResumeNotice | None = None
         with self._writing():
             task = self._store.load()
             op = task.op(op_id) if task is not None else None
@@ -1197,22 +1523,27 @@ class TaskService:
                 status = (
                     "failed" if task_result.get("status") == "failed" else "done"
                 )
-            self._store.save(
-                replace(
-                    task,
-                    cards=cards,
-                    materials=materials,
-                    ops=_replace_op(task, done),
-                    approval=None if cleared else task.approval,
-                    request=None if cleared else task.request,
-                    result=task_result,
-                    status=status,
-                    rev=task.rev + 1,
-                    updated_at=now,
-                )
+            saved = replace(
+                task,
+                cards=cards,
+                materials=materials,
+                ops=_replace_op(task, done),
+                approval=None if cleared else task.approval,
+                request=None if cleared else task.request,
+                result=task_result,
+                status=status,
+                rev=task.rev + 1,
+                updated_at=now,
             )
+            self._store.save(saved)
+            notice = self._resume_notice(saved, done)
+        # The continuation starts outside the task lock: it loads the session
+        # and asks the runtime for a run, and neither may hold this writer.
+        if notice is not None:
+            self._notify(notice)
 
     def _finish_failed(self, op_id: str, code: str, error: str) -> None:
+        notice: OpResumeNotice | None = None
         with self._writing():
             task = self._store.load()
             op = task.op(op_id) if task is not None else None
@@ -1221,29 +1552,71 @@ class TaskService:
             now = iso_timestamp(self._clock)
             result = task.result
             status = task.status
+            failed = replace(
+                op,
+                # A cancelled op is terminal under its own name: even if the
+                # executor noticed the person's signal before the route wrote
+                # the state, the op must not read as a retryable failure.
+                status="cancelled" if code == "cancelled" else "failed",
+                error=error[:1000],
+                error_code=code,
+                updated_at=now,
+            )
             if op.kind == "write":
                 # A compose or save that failed still leaves the attempt on the
                 # task: the reader sees the page it aimed at and why it is not
                 # there. The op carries the same failure for the agent.
                 result = _write_failure_result(op, code, error)
                 status = "failed"
-            self._store.save(
-                replace(
-                    task,
-                    ops=_replace_op(
-                        task,
-                        replace(
-                            op,
-                            status="failed",
-                            error=error[:1000],
-                            error_code=code,
-                            updated_at=now,
-                        ),
-                    ),
-                    result=result,
-                    status=status,
-                    updated_at=now,
-                )
+            saved = replace(
+                task,
+                ops=_replace_op(task, failed),
+                result=result,
+                status=status,
+                updated_at=now,
+            )
+            self._store.save(saved)
+            notice = self._resume_notice(saved, failed)
+        if notice is not None:
+            self._notify(notice)
+
+    def _resume_notice(
+        self, task: Task, op: Op
+    ) -> OpResumeNotice | None:
+        """The continuation a finished op asks for, or ``None``.
+
+        Only an op whose wait expired asks; the session it names must exist in
+        the op's input. The agent's next observation is the delta's revision, so
+        a change made after it is a ``conflict`` rather than a silent overwrite.
+        The once-only marker is not set here: the resumer sets it under the
+        writer lock immediately before the run, and a cancelled op never asks.
+        """
+        session_id = _input_text(op.input, "sessionId")
+        if not session_id:
+            return None
+        self._registry.observe(self._project_key, session_id, task.rev)
+        if op.status == "cancelled" or op.error_code == "cancelled":
+            return None
+        if not op.resume_requested or op.resume_started:
+            return None
+        return OpResumeNotice(
+            session_id=session_id,
+            op_id=op.id,
+            kind=op.kind,
+            status=op.status,
+            rev=task.rev,
+            result=op_delta(task, op),
+        )
+
+    def _notify(self, notice: OpResumeNotice) -> None:
+        """Hand a completion to the session's resumer, outside every lock."""
+        if self._on_resume is None:
+            return
+        try:
+            self._on_resume(notice)
+        except Exception:  # noqa: BLE001 - the op is already saved and readable
+            logger.exception(
+                "the resume callback for op %s failed", notice.op_id
             )
 
     def _wait(
@@ -1269,35 +1642,86 @@ class TaskService:
                 rev = task.rev
             if op is not None:
                 status = op.status
-            if op is not None and op.status == "failed":
-                detail = op.error or "the node behind it failed"
-                if op.error_code == "conflict":
-                    raise TaskConflict(
-                        f"{what} did not write because the task or the page "
-                        f"changed: {detail}. conflict. Do not retry blindly; "
-                        "call inspect and read the page again."
-                    )
-                if op.error_code == "bad_spec":
-                    raise TaskBadSpec(
-                        f"{detail}. bad_spec. Do not retry blindly; call "
-                        "inspect and use a page name it can write."
-                    )
-                if op.error_code == "not_found":
-                    raise TaskNotFound(
-                        f"{detail}. not_found. Do not retry blindly; call "
-                        "inspect and use an id it shows."
-                    )
-                raise TaskOpFailed(
-                    f"{what} could not finish: {detail}. op_failed. "
-                    "Do not retry blindly; call inspect before deciding "
-                    "whether to try again."
-                )
+            if op is not None and op.status in ("failed", "cancelled"):
+                raise self._failure(op, what)
             if op is not None and op.status == "done":
                 return _Observed("done", rev, task, op)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return _Observed(status, rev, task, op)
             time.sleep(min(self._poll_s, remaining))
+
+    def _settle(
+        self, op_id: str, what: str, observed: "_Observed"
+    ) -> "_Observed":
+        """Decide the wait/completion race under the task's writer lock.
+
+        The tool timed out. If the op is still active, it is marked so the
+        executor will carry the completion back to the session. If the executor
+        completed between the deadline and this lock, the tool returns the real
+        completion instead: a finished op is never resumed and never reported
+        as still running. The marker is source of truth across a duplicate
+        completion and a restart, so it lives on the op, not in memory.
+        """
+        if observed.status not in ACTIVE_OP_STATUSES:
+            return observed
+        with self._writing():
+            task = self._store.load()
+            op = task.op(op_id) if task is not None else None
+            if task is None or op is None:
+                return observed
+            if op.status in ACTIVE_OP_STATUSES:
+                if not op.resume_requested:
+                    now = iso_timestamp(self._clock)
+                    requested = replace(
+                        op, resume_requested=True, updated_at=now
+                    )
+                    self._store.save(
+                        replace(
+                            task,
+                            ops=_replace_op(task, requested),
+                            updated_at=now,
+                        )
+                    )
+                return _Observed(op.status, task.rev, task, op)
+        # The executor won the race: report its answer, not a stale wait.
+        return self._completion(task, op, what)
+
+    def _completion(self, task: Task, op: Op, what: str) -> "_Observed":
+        """The op's terminal state: its result, or the failure it names."""
+        if op.status in ("failed", "cancelled"):
+            raise self._failure(op, what)
+        return _Observed(op.status, task.rev, task, op)
+
+    def _failure(self, op: Op, what: str) -> ToolError:
+        """The model-facing error for an op that ended without an answer."""
+        if op.status == "cancelled":
+            return TaskOpFailed(
+                f"{what} was cancelled by a person and will not run again. "
+                "Do not retry it; call inspect to read the task as it stands."
+            )
+        detail = op.error or "the node behind it failed"
+        if op.error_code == "conflict":
+            return TaskConflict(
+                f"{what} did not write because the task or the page "
+                f"changed: {detail}. conflict. Do not retry blindly; "
+                "call inspect and read the page again."
+            )
+        if op.error_code == "bad_spec":
+            return TaskBadSpec(
+                f"{detail}. bad_spec. Do not retry blindly; call "
+                "inspect and use a page name it can write."
+            )
+        if op.error_code == "not_found":
+            return TaskNotFound(
+                f"{detail}. not_found. Do not retry blindly; call "
+                "inspect and use an id it shows."
+            )
+        return TaskOpFailed(
+            f"{what} could not finish: {detail}. op_failed. "
+            "Do not retry blindly; call inspect before deciding "
+            "whether to try again."
+        )
 
     def _create_locked(self) -> Task:
         now = iso_timestamp(self._clock)
@@ -1333,6 +1757,14 @@ class _OpFailure(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _check_op_cancel(cancel: Event | None) -> None:
+    """Stop at an executor checkpoint when a person cancelled the op."""
+    if cancel is not None and cancel.is_set():
+        raise _OpFailure(
+            "cancelled", "the operation was cancelled by a person"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1505,6 +1937,93 @@ def _public_write_result(result: Mapping[str, object]) -> dict[str, object]:
     return {key: result[key] for key in _PUBLIC_WRITE_KEYS if key in result}
 
 
+def op_delta(task: Task, op: Op) -> dict[str, object]:
+    """The bounded answer a finished op gives the session that resumes on it.
+
+    This is the whole payload the model reads when the executor boundary brings
+    the conversation back: the op's identity and one result shaped for its kind.
+    It never carries the task, the op log, the effect ids or the page's text;
+    the model calls ``inspect`` for anything more.
+    """
+    if op.status == "done":
+        if op.kind == "search":
+            raw_ids = op.result.get("cardIds")
+            wanted = (
+                [item for item in raw_ids if isinstance(item, str)]
+                if isinstance(raw_ids, list)
+                else []
+            )
+            by_id = {card.id: card for card in task.cards}
+            cards: list[dict[str, object]] = []
+            for ident in wanted:
+                if len(cards) >= MAX_VIEW_CARDS:
+                    break
+                card = by_id.get(ident)
+                if card is None:
+                    continue
+                cards.append(
+                    {
+                        "id": card.id,
+                        "title": card.title,
+                        "url": card.url,
+                        "site": card.site,
+                        "snippet": card.snippet[:MAX_CARD_SNIPPET],
+                    }
+                )
+            hits = op.result.get("hits")
+            return {
+                "status": "done",
+                "hits": (
+                    hits
+                    if isinstance(hits, int) and not isinstance(hits, bool)
+                    else len(cards)
+                ),
+                "cards": cards,
+            }
+        if op.kind == "pick":
+            material_id = _text(op.result.get("materialId"))
+            row = next(
+                (
+                    item
+                    for item in task.materials
+                    if _text(item.get("id")) == material_id
+                ),
+                None,
+            )
+            if row is not None:
+                return {
+                    "status": "done",
+                    "material": material_summary(row),
+                }
+            return {
+                "status": "done",
+                "material": {
+                    "id": material_id,
+                    "title": _text(op.result.get("title")),
+                    "fidelity": _text(op.result.get("fidelity")),
+                    "blockCount": _input_count(op.result.get("blocks")),
+                },
+            }
+        if op.kind == "write":
+            return _public_write_result(op.result)
+        return {
+            "status": "done",
+            **{key: op.result[key] for key in ("hits",) if key in op.result},
+        }
+    delta: dict[str, object] = {
+        "status": op.status,
+        "errorCode": op.error_code or op.status,
+        "error": op.error[:600],
+    }
+    if op.kind == "write":
+        failure = _write_failure_result(
+            op, op.error_code or op.status, op.error
+        )
+        for key in ("page", "slug", "title", "summary", "reason"):
+            delta[key] = failure[key]
+    return delta
+
+
 def _write_failure_result(
     op: Op, code: str, error: str
 ) -> dict[str, object]:
@@ -1567,6 +2086,8 @@ __all__ = [
     "ApproveOutcome",
     "ComposeOutcome",
     "FrameOutcome",
+    "OpOutcome",
+    "OpResumeNotice",
     "PickOutcome",
     "SearchOutcome",
     "TaskBadSpec",
@@ -1574,7 +2095,9 @@ __all__ = [
     "TaskNeedsApproval",
     "TaskNotFound",
     "TaskOpFailed",
+    "TaskOpResumeFn",
     "TaskRegistry",
     "TaskService",
     "TaskToolError",
+    "op_delta",
 ]

@@ -446,6 +446,28 @@ export type TaskApprovalSummary = {
   at: string;
 };
 
+/**
+ * One op as the summary carries it: enough to show its state and to cancel or
+ * resume it, never its input or result.
+ */
+export type TaskOpSummary = {
+  id: string;
+  kind: string;
+  actor: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  /** The process ended while this op was active; a person may resume/cancel. */
+  interrupted: boolean;
+  /** The conversation asked to be resumed when this op finished. */
+  resumeRequested: boolean;
+  /** The once-only resume marker: already continued (or failed to). */
+  resumeStarted: boolean;
+  resumeError: string;
+  errorCode: string;
+  error: string;
+};
+
 /** The task as metadata: what it is, how much it holds, and its revision. */
 export type TaskSummaryView = {
   view: "summary";
@@ -458,6 +480,25 @@ export type TaskSummaryView = {
   counts: { cards: number; materials: number; frames: number };
   /** The approval that still stands, or null when the task has none. */
   approval: TaskApprovalSummary | null;
+  /** Actionable ops first, then the latest finished ones; bounded. */
+  ops: TaskOpSummary[];
+  /** Ops beyond the summary's bound. */
+  opsOmitted: number;
+};
+
+/** What a person's cancel answer leaves behind. */
+export type TaskOpCancelResult = {
+  /** False when the op had already finished; the op is returned as it ended. */
+  cancelled: boolean;
+  rev: number;
+  op: TaskOpSummary;
+};
+
+/** What a person's resume answer leaves behind. */
+export type TaskOpResumeResult = {
+  resumed: boolean;
+  rev: number;
+  op: TaskOpSummary;
 };
 
 /** A bounded list of the cards the task has collected. */
@@ -639,13 +680,50 @@ export type SessionListPayload = {
   migration?: SessionMigration;
 };
 
+/**
+ * The bounded delta of one task op that finished after its session stopped
+ * waiting: the result the resumed conversation continued from.
+ */
+export type TaskOpDelta = {
+  status?: string;
+  page?: string;
+  slug?: string;
+  title?: string;
+  action?: string;
+  summary?: string;
+  reason?: string;
+  error?: string;
+  errorCode?: string;
+  hits?: number;
+  added?: number;
+  removed?: number;
+  cards?: TaskCard[];
+  material?: TaskMaterial;
+  written?: string[];
+  skipped?: { path: string; reason: string }[];
+  failed?: { path: string; reason: string }[];
+  [key: string]: unknown;
+};
+
+/** One executor-finished op, as the session state carries it on reconnect. */
+export type TaskOpResultPayload = {
+  opId: string;
+  kind: string;
+  status: string;
+  rev: number;
+  result: TaskOpDelta;
+};
+
 /** The transcript, and the same log read the way the model will see it. */
 export type SessionPayload = {
   id: string;
   title: string;
   updatedAt: string;
-  /** Whether a run is in progress, as of this read. */
-  state: { busy: boolean };
+  /**
+   * Whether a run is in progress, as of this read, and the last task op that
+   * resumed this conversation (the same delta the model read).
+   */
+  state: { busy: boolean; taskOp?: TaskOpResultPayload | null };
   /** The one collaboration node this session is waiting on, if any. */
   wait?: WaitPayload | null;
   messages: SessionTurn[];

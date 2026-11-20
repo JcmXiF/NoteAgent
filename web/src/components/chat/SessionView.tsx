@@ -18,12 +18,61 @@ import {
   postSessionQuery,
   postSessionWaitCancel,
 } from "@/lib/api/sessions";
-import type { SessionPayload } from "@/lib/api/types";
+import type {
+  SessionPayload,
+  TaskOpResultPayload,
+} from "@/lib/api/types";
 import { questionBefore } from "@/lib/chat";
 import type { PaneSlot } from "@/stores/layout-store";
 import { cn } from "@/lib/utils";
 
 type Activity = "think" | "tool" | "answer";
+
+/**
+ * The task op that resumed this conversation after its executor finished.
+ *
+ * It is the same bounded delta the model read: which op, how it ended, the task
+ * revision and one short result. The task panel carries the full result and its
+ * diff; this is the chat's notice that the long op came back.
+ */
+function ResumedOpCard({ op }: { op: TaskOpResultPayload }) {
+  const { t } = useTranslation();
+  const result = op.result ?? {};
+  const detail =
+    result.summary ||
+    result.error ||
+    (result.page ? String(result.page) : "") ||
+    (result.material?.title ? String(result.material.title) : "");
+  return (
+    <section
+      aria-label={t("chat.resumedOp", {
+        kind: op.kind,
+        status: t(`task.opStatus.${op.status}`, {
+          defaultValue: op.status,
+        }),
+        rev: op.rev,
+      })}
+      className="mb-3 rounded-md border bg-muted/30 px-2 py-1.5 text-[11px]"
+    >
+      <p className="font-medium">
+        {t("chat.resumedOp", {
+          kind: op.kind,
+          status: t(`task.opStatus.${op.status}`, {
+            defaultValue: op.status,
+          }),
+          rev: op.rev,
+        })}
+      </p>
+      {result.page ? (
+        <p className="truncate text-foreground">{String(result.page)}</p>
+      ) : null}
+      {detail ? <p className="text-muted-foreground">{String(detail)}</p> : null}
+      <p className="text-[10px] text-muted-foreground">
+        {t("chat.resumedOpHint")}
+      </p>
+    </section>
+  );
+}
 
 /**
  * A session as the JSONL log reads: what was asked, what was answered.
@@ -305,6 +354,10 @@ export function SessionView({
             ) : null}
           </article>
         ))}
+
+        {session.state.taskOp ? (
+          <ResumedOpCard op={session.state.taskOp} />
+        ) : null}
 
         {shownWait ? (
           <WaitCard

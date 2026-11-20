@@ -625,6 +625,8 @@
     "aborted": "这条回答没有写完就停止了。",
     "incomplete": "模型流中断，这只是中断前写出的部分。",
     "busy": "这个会话正在另一个标签页里作答；结束后刷新即可看到。",
+    "resumedOp": "已续跑 {{kind}} 操作 · {{status}} · 修订 {{rev}}",
+    "resumedOpHint": "执行器完成了这个长操作，对话从这里接着继续。",
     "compacted": "较早的轮次已压缩成摘要，以便放进模型窗口；原始记录仍保留在日志里。",
     "remark": {
       "save": "存为备注",
@@ -1697,6 +1699,17 @@
     "approved": "{{by}}已在修订 {{rev}} 批准",
     "noApproval": "还没有批准",
     "approvalInvalidated": "画框变了，之前的批准不再有效。",
+    "ops": "操作",
+    "opInterrupted": "因重启中断；可以续跑或取消",
+    "opCancel": "取消",
+    "opResume": "续跑",
+    "opWorking": "处理中…",
+    "opCancelledNotice": "操作 {{id}} 已取消，不会再运行。",
+    "opAlreadyFinished": "操作已经结束，没有取消任何东西。",
+    "opResumedNotice": "操作 {{id}} 已重新开始。",
+    "opActionFailed": "操作没能更新",
+    "opResumeFailed": "续跑失败：{{error}}",
+    "opCancelledLine": "已取消；不会再重试或续跑",
     "writeRequest": "写页请求",
     "approve": "批准",
     "reject": "拒绝",
@@ -1727,6 +1740,13 @@
       "needs_approval": "待批准",
       "done": "完成",
       "failed": "失败"
+    },
+    "opStatus": {
+      "requested": "已请求",
+      "running": "进行中",
+      "done": "完成",
+      "failed": "失败",
+      "cancelled": "已取消"
     }
   }
 }

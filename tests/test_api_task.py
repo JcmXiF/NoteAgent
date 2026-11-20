@@ -29,6 +29,7 @@ from noteagent.task.model import (
     Card,
     Frame,
     MaterialBlock,
+    Op,
     SearchCard,
     StagedMaterial,
     Task,
@@ -96,14 +97,18 @@ class FakeSearch:
         self.error = error
         self.gate = gate
         self.queries: list[str] = []
+        self.exited = threading.Event()
 
     def __call__(self, query: str):
         self.queries.append(query)
-        if self.gate is not None:
-            self.gate.wait(5)
-        if self.error is not None:
-            raise self.error
-        return list(self.cards)
+        try:
+            if self.gate is not None:
+                self.gate.wait(5)
+            if self.error is not None:
+                raise self.error
+            return list(self.cards)
+        finally:
+            self.exited.set()
 
 
 def _capture(
@@ -226,20 +231,26 @@ class FakeCompose:
         self.gate = gate
         self.on_call = on_call
         self.requests = []
+        self.cancels = []
         self.entered = threading.Event()
+        self.exited = threading.Event()
 
     def __call__(self, layout, request, cancel=None):
         self.requests.append(request)
+        self.cancels.append(cancel)
         self.entered.set()
-        if self.gate is not None:
-            self.gate.wait(5)
-        if self.on_call is not None:
-            self.on_call(request)
-        if self.error is not None:
-            raise self.error
-        if self.block is not None:
-            return self.block
-        return _composed_page(request)
+        try:
+            if self.gate is not None:
+                self.gate.wait(5)
+            if self.on_call is not None:
+                self.on_call(request)
+            if self.error is not None:
+                raise self.error
+            if self.block is not None:
+                return self.block
+            return _composed_page(request)
+        finally:
+            self.exited.set()
 
 
 class GapPageLocks(PageLocks):
@@ -264,6 +275,43 @@ class GapPageLocks(PageLocks):
             self.release.wait(5)
         with super().holding(project_key, page):
             yield
+
+
+class HoldingModel:
+    """A scripted model whose chosen call holds before it answers.
+
+    It is how a test keeps the original turn running while the executor
+    finishes the op the turn stopped waiting for.
+    """
+
+    def __init__(self, model: FauxModelClient, *, call: int) -> None:
+        self._model = model
+        self._target = call
+        self._calls = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.requests = model.requests
+
+    def stream(self, request):
+        self._calls += 1
+        if self._calls == self._target:
+            self.entered.set()
+            self.release.wait(5)
+        yield from self._model.stream(request)
+
+
+class RecordingResume:
+    """The op-completion callback, recorded instead of starting a run.
+
+    A test that only wants to see the delta hands this in; a test that wants the
+    production continuation passes ``resume=None`` so the app builds its own.
+    """
+
+    def __init__(self) -> None:
+        self.notices: list = []
+
+    def __call__(self, notice) -> None:
+        self.notices.append(notice)
 
 
 class FakeSave:
@@ -318,11 +366,14 @@ class TaskApiCase(unittest.TestCase):
         compose_wait_s=180.0,
         page_locks=None,
         ids=None,
+        resume=_UNSET,
     ) -> "TestClient":
         # ``None`` means "let the core build the production node"; leaving the
         # argument out gives the test fake. A test that wants the real staging
         # area passes ``stage=None``; ``save=None`` is the real writer, which is
-        # what a test that inspects the page on disk wants.
+        # what a test that inspects the page on disk wants. ``resume=None`` is
+        # the production op-completion callback; the default records the notice
+        # so a bounded wait cannot start an unexpected background run.
         deps = AppDeps(
             clock=FixedClock(),
             ids=ids or SequentialIds(),
@@ -337,6 +388,7 @@ class TaskApiCase(unittest.TestCase):
             task_spawn=spawn,
             task_wait_s=wait_s,
             task_pick_wait_s=pick_wait_s,
+            task_resume=RecordingResume() if resume is _UNSET else resume,
         )
         return TestClient(create_app(deps))
 
@@ -367,6 +419,63 @@ class TaskApiCase(unittest.TestCase):
                 return stored
             threading.Event().wait(0.01)
         self.fail("the task did not reach the expected state")
+
+    def session_entries(self, session_id: str) -> list[dict]:
+        text = self.layout.session_path(session_id).read_text(encoding="utf-8")
+        return [
+            json.loads(line) for line in text.splitlines() if line.strip()
+        ]
+
+    def wait_for_session(self, session_id: str, predicate, *, timeout: float = 5.0):
+        """Poll the committed session log until the resumed run lands."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            entries = self.session_entries(session_id)
+            if predicate(entries):
+                return entries
+            threading.Event().wait(0.01)
+        self.fail("the session did not reach the expected state")
+
+    def wait_for_resume_done(self, client, session_id: str, answer: str):
+        """Wait for the resumed run's answer, terminal marker and free slot.
+
+        The test harness must not clean the temp project while a background
+        resume is still writing; the marker is the last thing the run commits,
+        and the slot is released after it.
+        """
+
+        def done(entries: list[dict]) -> bool:
+            markers = [
+                entry
+                for entry in entries
+                if entry.get("type") == "run_marker"
+            ]
+            answers = [
+                entry
+                for entry in entries
+                if entry.get("type") == "message"
+                and entry.get("role") == "assistant"
+                and entry.get("content") == answer
+            ]
+            return (
+                bool(answers)
+                and sum(
+                    1 for marker in markers if marker.get("state") == "running"
+                )
+                >= 2
+                and bool(markers)
+                and markers[-1].get("state") == "finished"
+            )
+
+        entries = self.wait_for_session(session_id, done)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            state = client.get(f"/api/v1/sessions/{session_id}").json()["state"]
+            if not state.get("busy"):
+                return entries
+            threading.Event().wait(0.01)
+        self.fail("the resumed run did not release the session")
+        return entries
 
     def tool_results(self, session_id: str, name: str) -> list[dict]:
         entries = self.layout.session_path(session_id).read_text(encoding="utf-8")
@@ -3621,6 +3730,865 @@ class BoundedWaitTests(TaskApiCase):
         self.assertEqual(task.ops[0].status, "done")
         self.assertEqual(len(task.cards), 2)
         self.assertEqual(task.rev, 1)
+
+
+class OpResumeNoticeTests(TaskApiCase):
+    """The executor boundary asks for exactly one continuation, with a delta."""
+
+    def test_a_search_that_outlives_its_wait_asks_for_one_resume(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        resume = RecordingResume()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("还在搜。").script,
+            search=search,
+            wait_s=0.05,
+            resume=resume,
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        card = next(data for kind, data in events if kind == "observation")
+        self.assertIn(card["status"], ("requested", "running"))
+        # The wait ended before the node did: nothing to resume yet.
+        self.assertEqual(resume.notices, [])
+
+        gate.set()
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].status == "done"
+        )
+
+        self.assertEqual(len(resume.notices), 1)
+        notice = resume.notices[0]
+        self.assertEqual(notice.session_id, session_id)
+        self.assertEqual(notice.op_id, task.ops[0].id)
+        self.assertEqual(notice.kind, "search")
+        self.assertEqual(notice.status, "done")
+        self.assertEqual(notice.rev, task.rev)
+        self.assertEqual(notice.result["hits"], 2)
+        self.assertEqual(
+            [item["title"] for item in notice.result["cards"]],
+            ["Entropy", "Information"],
+        )
+        # The op carries the session and the once-only resume request; the
+        # completion did not start a resume behind the test's recorder.
+        op = task.ops[0]
+        self.assertEqual(op.input["sessionId"], session_id)
+        self.assertTrue(op.resume_requested)
+        self.assertFalse(op.resume_started)
+
+    def test_a_fast_search_never_asks_for_a_resume(self) -> None:
+        resume = RecordingResume()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("找到了。").script,
+            resume=resume,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id)
+
+        self.assertEqual(resume.notices, [])
+        op = self.task().ops[0]
+        self.assertFalse(op.resume_requested)
+        self.assertFalse(op.resume_started)
+
+    def test_a_pick_that_outlives_its_wait_asks_for_one_resume(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        fetch = FakeFetch(gate=gate)
+        resume = RecordingResume()
+        # One id source across both app instances: op ids name ops in one task,
+        # so a test that restarts the app must not reuse them.
+        ids = SequentialIds()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("搜到了。").script,
+            spawn=lambda work: work(),
+            ids=ids,
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        card_id = self.task().cards[0].id
+
+        pick_client = self.client(
+            FauxModelClient.tool_call(
+                "t2", "pick_card", json.dumps({"cardId": card_id})
+            ).script,
+            FauxModelClient.text("正在取。").script,
+            fetch=fetch,
+            pick_wait_s=0.05,
+            resume=resume,
+            ids=ids,
+        )
+        events = self.ask(pick_client, session_id, "取这张卡")
+
+        card = next(data for kind, data in events if kind == "observation")
+        self.assertIn(card["status"], ("requested", "running"))
+        self.assertEqual(resume.notices, [])
+
+        gate.set()
+        task = self.wait_for_task(
+            lambda item: len(item.ops) == 2 and item.ops[-1].status == "done"
+        )
+        self.assertEqual(len(resume.notices), 1)
+        notice = resume.notices[0]
+        self.assertEqual(notice.kind, "pick")
+        self.assertEqual(notice.status, "done")
+        self.assertEqual(
+            notice.result["material"]["id"], task.materials[0]["id"]
+        )
+        self.assertEqual(task.ops[-1].input["sessionId"], session_id)
+
+
+class OpCancelTests(TaskApiCase):
+    """A person stops an unfinished op; it never saves, resumes or retries."""
+
+    def seed(self, spec: dict | None = None, *, rev: int = 3) -> None:
+        TaskStore(self.layout).save(_seed_approved_task(spec, rev=rev))
+
+    def test_a_person_cancels_a_slow_write_before_it_saves_or_resumes(self) -> None:
+        self.seed()
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        compose = FakeCompose(gate=gate)
+        save = FakeSave()
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("还在写。").script,
+            FauxModelClient.text("这段只在续跑时才会被读到。").script,
+        )
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=FakeSearch(),
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=compose,
+                    task_save=save,
+                    task_compose_wait_s=0.05,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        card = next(data for kind, data in events if kind == "observation")
+        self.assertIn(card["status"], ("requested", "running"))
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].status == "running"
+        )
+        op_id = task.ops[-1].id
+        # The executor received the op's stop signal and is composing.
+        self.assertTrue(compose.cancels)
+        self.assertIsNotNone(compose.cancels[-1])
+        self.assertEqual(len(model.requests), 2)
+
+        response = client.post(f"/api/v1/task/ops/{op_id}/cancel")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["cancelled"])
+        self.assertEqual(body["op"]["status"], "cancelled")
+
+        # Let the compose finish. The executor must stop before the save, and
+        # the completion must not resume the session.
+        gate.set()
+        self.assertTrue(compose.exited.wait(5))
+        threading.Event().wait(0.1)
+
+        self.assertEqual(save.requests, [])
+        self.assertFalse((self.layout.wiki / "entropy.md").exists())
+        self.assertIsNone(self.task().result)
+        self.assertEqual(self.task().ops[-1].status, "cancelled")
+        self.assertEqual(
+            [
+                entry
+                for entry in self.session_entries(session_id)
+                if entry.get("type") == "task_op_result"
+            ],
+            [],
+        )
+        self.assertEqual(len(model.requests), 2)
+
+        # A second cancel is a no-op: the op is terminal.
+        again = client.post(f"/api/v1/task/ops/{op_id}/cancel")
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertFalse(again.json()["cancelled"])
+        self.assertEqual(again.json()["op"]["status"], "cancelled")
+
+        summary = client.get("/api/v1/task", params={"view": "summary"}).json()
+        shown = next(item for item in summary["ops"] if item["id"] == op_id)
+        self.assertEqual(shown["status"], "cancelled")
+
+    def test_a_search_that_finishes_after_cancel_writes_no_cards(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        resume = RecordingResume()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("还在搜。").script,
+            search=search,
+            wait_s=0.05,
+            resume=resume,
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        task = self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[-1].status == "running"
+        )
+        op_id = task.ops[-1].id
+
+        cancelled = client.post(f"/api/v1/task/ops/{op_id}/cancel")
+        self.assertTrue(cancelled.json()["cancelled"])
+
+        gate.set()
+        self.assertTrue(search.exited.wait(5))
+        threading.Event().wait(0.1)
+
+        task = self.task()
+        # The final guard dropped the late answer: no cards, no done op.
+        self.assertEqual(task.cards, ())
+        self.assertEqual(task.ops[-1].status, "cancelled")
+        self.assertEqual(resume.notices, [])
+        self.assertEqual(
+            self.last_tool_result_content(session_id, "web_search").count(
+                "still"
+            ),
+            1,
+        )
+
+    def test_cancelling_a_finished_op_changes_nothing(self) -> None:
+        resume = RecordingResume()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("找到了。").script,
+            spawn=lambda work: work(),
+            resume=resume,
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        task = self.task()
+        op_id = task.ops[0].id
+        rev = task.rev
+
+        response = client.post(f"/api/v1/task/ops/{op_id}/cancel")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertFalse(body["cancelled"])
+        self.assertEqual(body["op"]["status"], "done")
+        after = self.task()
+        self.assertEqual(after.rev, rev)
+        self.assertEqual(len(after.cards), 2)
+        self.assertEqual(resume.notices, [])
+
+
+class TaskRestartTests(TaskApiCase):
+    """A second app on the same store reconciles the task and resumes once."""
+
+    def deps(self, model, *, ids, resume=_UNSET, search=None, spawn=None):
+        return AppDeps(
+            clock=FixedClock(),
+            ids=ids,
+            model=model,
+            task_search=search if search is not None else FakeSearch(),
+            task_fetch=FakeFetch(),
+            task_stage=FakeStage(),
+            task_compose=FakeCompose(),
+            task_save=None,
+            task_spawn=spawn,
+            task_wait_s=0.05,
+            task_pick_wait_s=0.05,
+            task_resume=RecordingResume() if resume is _UNSET else resume,
+        )
+
+    def seed_running_op(
+        self, session_id: str, *, kind: str = "search", op_id: str = "op-99"
+    ) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-1",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=0,
+                ops=(
+                    Op(
+                        id=op_id,
+                        kind=kind,  # type: ignore[arg-type]
+                        actor="agent",
+                        status="running",
+                        input={
+                            "query": "entropy",
+                            "cardId": "card-1",
+                            "sessionId": session_id,
+                        },
+                        expected_rev=0,
+                        created_at="2026-11-10T09:00:00Z",
+                        updated_at="2026-11-10T09:00:00Z",
+                    ),
+                ),
+            )
+        )
+
+    def test_a_completed_op_left_unresumed_resumes_once_at_startup(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        resume = RecordingResume()
+        ids = SequentialIds()
+        first = TestClient(
+            create_app(
+                self.deps(
+                    FauxModelClient(
+                        FauxModelClient.tool_call(
+                            "t1", "web_search", '{"query": "entropy"}'
+                        ).script,
+                        FauxModelClient.text("还在搜。").script,
+                    ),
+                    ids=ids,
+                    resume=resume,
+                    search=search,
+                )
+            )
+        )
+        session_id = self.new_session(first)
+        self.ask(first, session_id)
+        gate.set()
+        self.wait_for_task(
+            lambda item: bool(item.ops) and item.ops[0].status == "done"
+        )
+        # The test recorder suppressed the continuation: this is the state a
+        # crash between completion and resume leaves behind.
+        self.assertEqual(len(resume.notices), 1)
+        self.assertFalse(self.task().ops[0].resume_started)
+
+        # A new core reads the same project and continues it once.
+        model = FauxModelClient(
+            FauxModelClient.text("搜好了，继续。").script
+        )
+        second_deps = self.deps(
+            model, ids=ids, resume=None, spawn=lambda work: work()
+        )
+        with TestClient(create_app(second_deps)) as client:
+            entries = self.wait_for_resume_done(
+                client, session_id, "搜好了，继续。"
+            )
+            delivered = [
+                entry
+                for entry in entries
+                if entry.get("type") == "task_op_result"
+            ]
+            self.assertEqual(len(delivered), 1)
+            self.assertTrue(self.task().ops[0].resume_started)
+            self.assertEqual(self.task().ops[0].resume_error, "")
+
+        # A third start sees the marker and starts nothing; the model has no
+        # script left, so a second resume would be recorded as a failure.
+        third_deps = self.deps(FauxModelClient(), ids=ids, resume=None)
+        with TestClient(create_app(third_deps)):
+            pass
+        after = self.session_entries(session_id)
+        self.assertEqual(
+            len(
+                [
+                    entry
+                    for entry in after
+                    if entry.get("type") == "task_op_result"
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(self.task().ops[0].resume_error, "")
+
+    def test_an_active_op_is_interrupted_then_cancelled_for_good(self) -> None:
+        ids = SequentialIds()
+        first = TestClient(
+            create_app(self.deps(FauxModelClient(), ids=ids))
+        )
+        session_id = self.new_session(first)
+        self.seed_running_op(session_id)
+
+        second_deps = self.deps(FauxModelClient(), ids=ids, resume=None)
+        with TestClient(create_app(second_deps)) as client:
+            summary = client.get(
+                "/api/v1/task", params={"view": "summary"}
+            ).json()
+            shown = next(item for item in summary["ops"] if item["id"] == "op-99")
+            self.assertTrue(shown["interrupted"])
+            self.assertEqual(shown["status"], "running")
+
+            cancelled = client.post("/api/v1/task/ops/op-99/cancel")
+            self.assertEqual(cancelled.status_code, 200, cancelled.text)
+            self.assertTrue(cancelled.json()["cancelled"])
+            self.assertEqual(cancelled.json()["op"]["status"], "cancelled")
+
+            # A cancelled op cannot be resumed, in this process or a later one.
+            refused = client.post("/api/v1/task/ops/op-99/resume")
+            self.assertEqual(refused.status_code, 409, refused.text)
+            self.assertEqual(refused.json()["code"], "conflict")
+
+        third_deps = self.deps(FauxModelClient(), ids=ids, resume=None)
+        with TestClient(create_app(third_deps)) as client:
+            summary = client.get(
+                "/api/v1/task", params={"view": "summary"}
+            ).json()
+            shown = next(item for item in summary["ops"] if item["id"] == "op-99")
+            self.assertEqual(shown["status"], "cancelled")
+            self.assertEqual(
+                [
+                    entry
+                    for entry in self.session_entries(session_id)
+                    if entry.get("type") == "task_op_result"
+                ],
+                [],
+            )
+
+    def test_an_interrupted_op_can_be_resumed_by_a_person(self) -> None:
+        ids = SequentialIds()
+        first = TestClient(
+            create_app(self.deps(FauxModelClient(), ids=ids))
+        )
+        session_id = self.new_session(first)
+        self.seed_running_op(session_id)
+        model = FauxModelClient(
+            FauxModelClient.text("续跑完成。").script
+        )
+        deps = self.deps(
+            model, ids=ids, resume=None, spawn=lambda work: work()
+        )
+
+        with TestClient(create_app(deps)) as client:
+            resumed = client.post("/api/v1/task/ops/op-99/resume")
+
+            self.assertEqual(resumed.status_code, 200, resumed.text)
+            self.assertTrue(resumed.json()["resumed"])
+            task = self.task()
+            op = next(item for item in task.ops if item.id == "op-99")
+            self.assertEqual(op.status, "done")
+            self.assertFalse(op.interrupted)
+            self.assertTrue(op.resume_requested)
+            self.assertTrue(op.resume_started)
+            entries = self.session_entries(session_id)
+            delivered = [
+                entry
+                for entry in entries
+                if entry.get("type") == "task_op_result"
+            ]
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(
+                [
+                    entry.get("content")
+                    for entry in entries
+                    if entry.get("type") == "message"
+                    and entry.get("role") == "assistant"
+                ][-1],
+                "续跑完成。",
+            )
+
+            # A second resume of the finished op is refused.
+            again = client.post("/api/v1/task/ops/op-99/resume")
+            self.assertEqual(again.status_code, 409, again.text)
+
+
+class OpResumeRunTests(TaskApiCase):
+    """The real resumer continues the session the executor finished for."""
+
+    def seed(self, spec: dict | None = None, *, rev: int = 3) -> None:
+        TaskStore(self.layout).save(_seed_approved_task(spec, rev=rev))
+
+    def test_a_finished_search_resumes_the_session_at_the_boundary(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        # One model across both turns: the first two scripts answer the
+        # conversation, and the third belongs to the resumed run.
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("还在搜。").script,
+            FauxModelClient.text("搜到了两篇，已经放进任务。").script,
+        )
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=search,
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=FakeCompose(),
+                    task_save=None,
+                    task_wait_s=0.05,
+                    task_pick_wait_s=0.05,
+                    task_resume=None,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        card = next(data for kind, data in events if kind == "observation")
+        self.assertIn(card["status"], ("requested", "running"))
+        self.assertEqual(
+            [
+                entry
+                for entry in self.session_entries(session_id)
+                if entry.get("type") == "task_op_result"
+            ],
+            [],
+        )
+
+        gate.set()
+        entries = self.wait_for_resume_done(
+            client, session_id, "搜到了两篇，已经放进任务。"
+        )
+
+        # The continuation is on the same session, delivered once: the delta
+        # record and the answer that followed it.
+        delivered = [
+            entry for entry in entries if entry.get("type") == "task_op_result"
+        ]
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["kind"], "search")
+        self.assertEqual(delivered[0]["status"], "done")
+        self.assertEqual(delivered[0]["result"]["hits"], 2)
+        self.assertEqual(
+            [item["title"] for item in delivered[0]["result"]["cards"]],
+            ["Entropy", "Information"],
+        )
+
+        task = self.task()
+        op = task.ops[0]
+        self.assertEqual(op.status, "done")
+        self.assertTrue(op.resume_requested)
+        self.assertTrue(op.resume_started)
+        self.assertEqual(delivered[0]["rev"], task.rev)
+
+        # A reconnecting reader sees the same continuation by session id.
+        session = client.get(f"/api/v1/sessions/{session_id}")
+        self.assertEqual(session.status_code, 200, session.text)
+        body = session.json()
+        self.assertEqual(body["state"]["taskOp"]["opId"], op.id)
+        self.assertEqual(body["state"]["taskOp"]["status"], "done")
+        self.assertEqual(body["state"]["taskOp"]["rev"], task.rev)
+        self.assertEqual(
+            [
+                message["content"]
+                for message in body["messages"]
+                if not message.get("isStep")
+                and message["role"] == "assistant"
+            ][-1],
+            "搜到了两篇，已经放进任务。",
+        )
+
+        # The model read a bounded delta, never the task or its op log.
+        prompt = "\n".join(
+            message.content for message in model.requests[-1].messages
+        )
+        self.assertIn(op.id, prompt)
+        self.assertIn("task rev", prompt)
+        self.assertIn("Entropy", prompt)
+        self.assertNotIn("expectedRev", prompt)
+        self.assertNotIn('"ops":', prompt)
+
+    def test_after_resume_a_human_change_makes_the_next_mutation_a_conflict(
+        self,
+    ) -> None:
+        TaskStore(self.layout).save(
+            Task(
+                id="task-1",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=0,
+                materials=(_stored_material(),),
+            )
+        )
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("还在搜。").script,
+            FauxModelClient.text("搜到了。").script,
+            # The next person question, after the resume.
+            FauxModelClient.tool_call(
+                "t2",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.text("框不了，先看看任务。").script,
+        )
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=search,
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=FakeCompose(),
+                    task_save=None,
+                    task_wait_s=0.05,
+                    task_pick_wait_s=0.05,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        gate.set()
+        self.wait_for_resume_done(client, session_id, "搜到了。")
+        delta_rev = self.task().rev
+        self.assertTrue(self.task().ops[0].resume_started)
+
+        # A person draws a frame from the view they saw, moving the task on.
+        human = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": delta_rev,
+            },
+        )
+        self.assertEqual(human.status_code, 200, human.text)
+        self.assertEqual(human.json()["rev"], delta_rev + 1)
+
+        # The resumed agent's observation is the delta's revision, not the
+        # human's newer one, so its next mutation is refused as a conflict.
+        events = self.ask(client, session_id, "画个框")
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(observed["error"])
+        self.assertEqual(observed["diagnostics"][0]["code"], "conflict")
+        content = self.last_tool_result_content(session_id, "frame_blocks")
+        self.assertIn("inspect", content.lower())
+        task = self.task()
+        self.assertEqual([op.kind for op in task.ops], ["search", "frame"])
+        self.assertEqual(task.rev, delta_rev + 1)
+
+    def test_a_resume_for_a_deleted_session_records_the_failure(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("还在搜。").script,
+        )
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=search,
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=FakeCompose(),
+                    task_save=None,
+                    task_wait_s=0.05,
+                    task_pick_wait_s=0.05,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+
+        deleted = client.delete(f"/api/v1/sessions/{session_id}")
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+
+        gate.set()
+        task = self.wait_for_task(
+            lambda item: bool(item.ops)
+            and item.ops[0].status == "done"
+            and bool(item.ops[0].resume_error)
+        )
+
+        # The completion is inspectable, terminal and not retried: the marker is
+        # consumed and the reason is on the op.
+        op = task.ops[0]
+        self.assertTrue(op.resume_requested)
+        self.assertTrue(op.resume_started)
+        self.assertIn("FileNotFoundError", op.resume_error)
+        self.assertEqual(len(task.ops), 1)
+        self.assertEqual(len(model.requests), 2)
+        # The failure is recorded asynchronously; let the resume thread finish
+        # before the temp project is cleaned up.
+        threading.Event().wait(0.1)
+
+    def test_a_completion_while_a_turn_is_running_queues_the_resume(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        self.addCleanup(lambda: model.release.set())
+        search = FakeSearch(gate=gate)
+        faux = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            # The second model call is held: the turn is still running when the
+            # executor finishes the search.
+            FauxModelClient.text("还在搜。").script,
+            FauxModelClient.text("搜完了，可以继续。").script,
+        )
+        model = HoldingModel(faux, call=2)
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=search,
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=FakeCompose(),
+                    task_save=None,
+                    task_wait_s=0.05,
+                    task_pick_wait_s=0.05,
+                    task_resume=None,
+                    task_resume_poll_s=0.01,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+        outcome: dict[str, object] = {}
+
+        def ask() -> None:
+            try:
+                outcome["events"] = self.ask(client, session_id)
+            except Exception as err:  # noqa: BLE001 - re-raised in the test
+                outcome["error"] = err
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        try:
+            # The tool returned requested/running, and the model is now in its
+            # second call: the session still owns its one run slot.
+            self.assertTrue(model.entered.wait(5))
+            gate.set()
+            self.wait_for_task(
+                lambda item: bool(item.ops) and item.ops[0].status == "done"
+            )
+            # The executor finished, but the session is busy, so the completion
+            # waits: no concurrent second run, no delta yet.
+            threading.Event().wait(0.1)
+            self.assertEqual(
+                [
+                    entry
+                    for entry in self.session_entries(session_id)
+                    if entry.get("type") == "task_op_result"
+                ],
+                [],
+            )
+            self.assertTrue(
+                client.get(f"/api/v1/sessions/{session_id}").json()["state"][
+                    "busy"
+                ]
+            )
+
+            model.release.set()
+            worker.join(5)
+        finally:
+            model.release.set()
+            worker.join(5)
+        self.assertNotIn("error", outcome)
+
+        entries = self.wait_for_resume_done(
+            client, session_id, "搜完了，可以继续。"
+        )
+        delivered = [
+            entry for entry in entries if entry.get("type") == "task_op_result"
+        ]
+        self.assertEqual(len(delivered), 1)
+        self.assertTrue(self.task().ops[0].resume_started)
+
+    def test_a_slow_write_resumes_with_the_page_result_and_rev(self) -> None:
+        self.seed()
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        compose = FakeCompose(gate=gate)
+        save = FakeSave()
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("还在写。").script,
+            FauxModelClient.text("页面已经写好。").script,
+        )
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=FakeSearch(),
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=compose,
+                    task_save=save,
+                    task_compose_wait_s=0.05,
+                    task_resume=None,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+
+        events = self.ask(client, session_id)
+
+        card = next(data for kind, data in events if kind == "observation")
+        self.assertIn(card["status"], ("requested", "running"))
+        self.assertIsNone(self.task().result)
+
+        gate.set()
+        entries = self.wait_for_resume_done(client, session_id, "页面已经写好。")
+
+        delivered = [
+            entry for entry in entries if entry.get("type") == "task_op_result"
+        ]
+        self.assertEqual(len(delivered), 1)
+        result = delivered[0]["result"]
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["page"], "wiki/entropy.md")
+        # The delta has the page's fate, not its text, diff or effect ids.
+        self.assertNotIn("diff", result)
+        self.assertNotIn("effectIds", result)
+        # The executor saved the page the composed block described.
+        self.assertEqual(len(save.requests), 1)
+        self.assertEqual(save.requests[0].wiki_path, "wiki/entropy.md")
+        task = self.task()
+        self.assertEqual(delivered[0]["rev"], task.rev)
+        self.assertEqual(task.result["status"], "written")
+        self.assertTrue(task.ops[-1].resume_started)
 
 
 if __name__ == "__main__":

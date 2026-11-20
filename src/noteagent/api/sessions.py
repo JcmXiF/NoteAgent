@@ -10,6 +10,7 @@ from __future__ import annotations
 from noteagent.agent.model import Message
 from noteagent.agent.projection import TranscriptItem, project
 from noteagent.agent.store import SessionStore, WaitStore, last_timestamp
+from noteagent.agent.task_op import latest_task_op
 from noteagent.agent.wait import wait_payload
 from noteagent.sessions.recovery import interrupted_payload
 
@@ -28,6 +29,11 @@ def session_payload(
     interrupted = interrupted_payload(snapshot.entries)
     if interrupted is not None:
         state["interrupted"] = interrupted
+    # The last executor-finished task op that continued this session: the
+    # reconnect view of the delta, on the same session id as the rest.
+    delivered = latest_task_op(snapshot.entries)
+    if delivered is not None:
+        state["taskOp"] = delivered
     body: dict[str, object] = {
         "id": snapshot.id,
         "title": snapshot.title,
