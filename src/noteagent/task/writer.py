@@ -22,20 +22,37 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 from noteagent.agent.clock import Clock, iso_timestamp
+from noteagent.task.events import TaskEvents
 from noteagent.task.model import Task
 from noteagent.task.store import TaskStore
 
 
 class TaskWriter:
-    """The task's single write seam: content commits bump, log commits do not."""
+    """The task's single write seam: content commits bump, log commits do not.
 
-    def __init__(self, store: TaskStore, clock: Clock) -> None:
+    It is also the one place a change is announced: every saved shape publishes
+    the revision it wrote. A content commit moves the revision; a log commit
+    repeats it; both are invalidations, because the panel reads op state from
+    the same overview and must see running, cancelled and resumed ops too.
+    """
+
+    def __init__(
+        self,
+        store: TaskStore,
+        clock: Clock,
+        *,
+        events: TaskEvents | None = None,
+        project_key: str = "",
+    ) -> None:
         self._store = store
         self._clock = clock
+        self._events = events
+        self._project_key = project_key
 
     def create(self, task: Task) -> Task:
         """Write a task that did not exist yet; there is no revision to move."""
         self._store.save(task)
+        self._publish(task.rev)
         return task
 
     def next_rev(self, task: Task) -> int:
@@ -80,7 +97,14 @@ class TaskWriter:
     ) -> Task:
         saved = replace(task, **dict(changes))
         self._store.save(saved)
+        self._publish(saved.rev)
         return saved
+
+    def _publish(self, rev: int) -> None:
+        """Announce a saved revision; a writer with no broker is silent."""
+        if self._events is None or not self._project_key:
+            return
+        self._events.publish(self._project_key, rev)
 
 
 __all__ = ["TaskWriter"]

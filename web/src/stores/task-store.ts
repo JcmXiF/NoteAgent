@@ -8,6 +8,7 @@ import {
   pickTaskCard,
   resumeTaskOp,
   searchTaskCards,
+  subscribeTaskEvents,
 } from "@/lib/api/task";
 import type {
   TaskApprovalView,
@@ -68,6 +69,14 @@ type TaskState = {
   opError: string;
   /** What the last op action left behind. */
   opNotice: string;
+  /**
+   * Follow this project's task changes. The overview is read immediately, so
+   * the panel never depends on the stream opening; a reconnection reads it
+   * again to catch up on what was missed while the stream was away.
+   */
+  connect: (project: string) => void;
+  /** Close the change stream; a project switch or an unmount does this. */
+  disconnect: () => void;
   load: () => Promise<void>;
   search: (query: string) => Promise<void>;
   pick: (cardId: string, expectedRev: number) => Promise<void>;
@@ -84,6 +93,57 @@ type TaskState = {
 
 /** A read that finishes after the reader switched projects must not land. */
 let generation = 0;
+
+/**
+ * The one open task change stream, and the read a burst of events asks for.
+ *
+ * Events are invalidations, not state: every one of them is answered by the
+ * same single `overview` read, so a burst coalesces into one read and a write
+ * that lands during a read asks for exactly one more.
+ */
+let streamProject: string | null = null;
+let closeStream: (() => void) | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let refreshing = false;
+let refreshAgain = false;
+
+/** How long a burst of writes may settle before the one snapshot is read. */
+const EVENT_REFRESH_MS = 40;
+
+function clearRefreshTimer(): void {
+  if (refreshTimer !== null) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+async function refreshTask(): Promise<void> {
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
+  refreshing = true;
+  try {
+    await useTaskStore.getState().load();
+  } finally {
+    refreshing = false;
+    if (refreshAgain) {
+      // A write landed while the last snapshot was being read. One more read
+      // makes the panel current; the generation guard drops any stale answer
+      // that is still on its way.
+      refreshAgain = false;
+      void refreshTask();
+    }
+  }
+}
+
+function scheduleRefresh(): void {
+  clearRefreshTimer();
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void refreshTask();
+  }, EVENT_REFRESH_MS);
+}
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   status: "idle",
@@ -109,6 +169,51 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   opBusy: "",
   opError: "",
   opNotice: "",
+
+  connect: (project) => {
+    if (streamProject === project && closeStream !== null) return;
+    closeStream?.();
+    closeStream = null;
+    streamProject = project;
+    const mine = project;
+    let openedOnce = false;
+    // The snapshot does not depend on the stream: read it now, so a stream that
+    // is unavailable (route/proxy mismatch) or still connecting cannot leave
+    // the panel empty. The first open is skipped as this read already covers
+    // it; each reconnection reads again for whatever landed while it was away.
+    void refreshTask();
+    const handlers = {
+      onEvent: () => {
+        // An event from a stream that belonged to the previous project must
+        // not make the panel read the current one.
+        if (streamProject !== mine) return;
+        scheduleRefresh();
+      },
+      onOpen: () => {
+        if (streamProject !== mine) return;
+        if (!openedOnce) {
+          openedOnce = true;
+          return;
+        }
+        void refreshTask();
+      },
+    };
+    try {
+      closeStream = subscribeTaskEvents(handlers);
+    } catch {
+      // Without EventSource the panel keeps the snapshot just read; actions
+      // and the chat's observation refresh still update it.
+      closeStream = null;
+    }
+  },
+
+  disconnect: () => {
+    closeStream?.();
+    closeStream = null;
+    streamProject = null;
+    clearRefreshTimer();
+    refreshAgain = false;
+  },
 
   load: async () => {
     const mine = ++generation;

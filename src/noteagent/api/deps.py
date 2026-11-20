@@ -28,6 +28,7 @@ from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
+from noteagent.task.events import TaskEvents
 from noteagent.task.model import FetchFn, SearchFn, StageFn
 from noteagent.task.service import (
     ObservedRevFn,
@@ -87,6 +88,9 @@ class AppDeps:
     #: The writing task's service, when a test hands one in; otherwise it is
     #: built from the active project on each request.
     tasks: TaskService | None = None
+    #: The task change stream's in-process fan-out. Every Task write publishes
+    #: its revision here; the SSE route and a test both subscribe to it.
+    task_events: TaskEvents = field(default_factory=TaskEvents)
     #: The pure search node behind ``web_search``. ``None`` uses the project's
     #: configured web search; a test scripts the hits and never touches a network.
     task_search: SearchFn | None = None

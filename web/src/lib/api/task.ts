@@ -30,23 +30,23 @@ import type {
  * two revisions at once. The individual views stay for other clients.
  */
 export function fetchTaskOverview(): Promise<TaskOverviewView> {
-  return getJson<TaskOverviewView>("/task?view=overview");
+  return getJson<TaskOverviewView>("/v1/task?view=overview");
 }
 
 export function fetchTaskSummary(): Promise<TaskSummaryView> {
-  return getJson<TaskSummaryView>("/task?view=summary");
+  return getJson<TaskSummaryView>("/v1/task?view=summary");
 }
 
 export function fetchTaskCards(): Promise<TaskCardsView> {
-  return getJson<TaskCardsView>("/task?view=cards");
+  return getJson<TaskCardsView>("/v1/task?view=cards");
 }
 
 export function fetchTaskMaterials(): Promise<TaskMaterialsView> {
-  return getJson<TaskMaterialsView>("/task?view=materials");
+  return getJson<TaskMaterialsView>("/v1/task?view=materials");
 }
 
 export function fetchTaskFrames(): Promise<TaskFramesView> {
-  return getJson<TaskFramesView>("/task?view=frames");
+  return getJson<TaskFramesView>("/v1/task?view=frames");
 }
 
 /**
@@ -56,7 +56,7 @@ export function fetchTaskFrames(): Promise<TaskFramesView> {
  * the person and the agent read one task.
  */
 export function fetchTaskApproval(): Promise<TaskApprovalView> {
-  return getJson<TaskApprovalView>("/task?view=approval");
+  return getJson<TaskApprovalView>("/v1/task?view=approval");
 }
 
 /**
@@ -66,7 +66,7 @@ export function fetchTaskApproval(): Promise<TaskApprovalView> {
  * executor wrote rather than a copy assembled from chat events.
  */
 export function fetchTaskResult(): Promise<TaskResultView> {
-  return getJson<TaskResultView>("/task?view=result");
+  return getJson<TaskResultView>("/v1/task?view=result");
 }
 
 /**
@@ -81,7 +81,7 @@ export function searchTaskCards(
   query: string,
   expectedRev: number,
 ): Promise<TaskSearchResult> {
-  return postJson<TaskSearchResult>("/task/search", { query, expectedRev });
+  return postJson<TaskSearchResult>("/v1/task/search", { query, expectedRev });
 }
 
 /**
@@ -95,7 +95,7 @@ export function pickTaskCard(
   cardId: string,
   expectedRev: number,
 ): Promise<TaskPickResult> {
-  return postJson<TaskPickResult>("/task/pick", { cardId, expectedRev });
+  return postJson<TaskPickResult>("/v1/task/pick", { cardId, expectedRev });
 }
 
 /**
@@ -110,7 +110,7 @@ export function frameTaskMaterial(
   blocks: string[],
   expectedRev: number,
 ): Promise<TaskFrameResult> {
-  return postJson<TaskFrameResult>("/task/frame", {
+  return postJson<TaskFrameResult>("/v1/task/frame", {
     docId,
     blocks,
     expectedRev,
@@ -157,11 +157,74 @@ export function approveTaskRequest(
   spec: TaskPageSpec,
   decision: "approve" | "reject",
 ): Promise<TaskApproveResult> {
-  return postJson<TaskApproveResult>("/task/approve", {
+  return postJson<TaskApproveResult>("/v1/task/approve", {
     taskId,
     rev,
     frameId,
     spec,
     decision,
   });
+}
+
+/* ------------------------------------------------------ change stream */
+
+/** Every Task write announces its revision here; the task itself is not sent. */
+export const TASK_EVENTS_URL = "/api/v1/task/events";
+
+/** What a task stream reports: one invalidation, and each (re)connection. */
+export type TaskStreamHandlers = {
+  onEvent: (rev: number) => void;
+  onOpen: () => void;
+};
+
+/**
+ * The browser's EventSource, narrowed to what the task stream uses.
+ *
+ * It is a seam: a test hands in a fake source, and the store never reaches the
+ * network. The real source reconnects on its own; the browser fires `open`
+ * again after it does, which is the client's cue to read the task once.
+ */
+export type TaskEventSource = {
+  addEventListener: (
+    kind: string,
+    listener: (event: MessageEvent) => void,
+  ) => void;
+  close: () => void;
+  onopen: (() => void) | null;
+};
+
+export type TaskEventSourceFactory = (url: string) => TaskEventSource;
+
+function openTaskEvents(url: string): TaskEventSource {
+  return new EventSource(url) as unknown as TaskEventSource;
+}
+
+/**
+ * Listen for the active project's task revisions.
+ *
+ * The stream carries `{rev}` only. A content write moves the revision; a log
+ * write (op status, cancel, resume) may repeat it and is still sent, because
+ * the panel reads op state from the same overview. The returned function
+ * closes the connection; a project switch or an unmount calls it.
+ */
+export function subscribeTaskEvents(
+  handlers: TaskStreamHandlers,
+  createSource: TaskEventSourceFactory = openTaskEvents,
+): () => void {
+  const source = createSource(TASK_EVENTS_URL);
+  source.addEventListener("task", (event) => {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    const rev =
+      typeof payload === "object" && payload !== null
+        ? (payload as { rev?: unknown }).rev
+        : undefined;
+    if (typeof rev === "number") handlers.onEvent(rev);
+  });
+  source.onopen = () => handlers.onOpen();
+  return () => source.close();
 }
