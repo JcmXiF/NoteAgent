@@ -90,8 +90,8 @@ Actor: TypeAlias = Literal["agent", "human"]
 #: The views the task can answer with. Each is bounded; none is the task file.
 #: ``approval`` carries the person's go-ahead (or none) and the pending write
 #: request the confirmation panel shows. ``result`` is the one page the last
-#: approved write produced, with its diff; only the interface's route asks for
-#: it, never the model (``inspect`` does not offer it).
+#: approved write produced, with its bounded summary and diff: both the
+#: interface's routes and the model's ``inspect`` offer it.
 TASK_VIEWS: tuple[str, ...] = (
     "summary",
     "cards",
@@ -235,9 +235,13 @@ class Frame:
 class Approval:
     """A person's go-ahead to write one frame with one writing spec.
 
-    The shape the task stores now, before the human approve route exists: the
-    frame and spec it is bound to, and the task revision it was given at.
-    Approving again is ticket 04's job; invalidating it is this slice's.
+    The approval is bound to the frame, the canonical spec and the task
+    revision it was given at. ``page_digest`` is the page the person approved
+    against, when it existed: a later writer compares it before saving, so a
+    page that changed after the approval (a person's edit, say) is never
+    overwritten even if the task's edit record could not be written. An empty
+    digest is an older or hand-seeded approval with no page binding; the page
+    digest captured at compose time still guards the compose itself.
     """
 
     frame_id: str
@@ -245,6 +249,7 @@ class Approval:
     rev: int = 0
     by: str = "human"
     at: str = ""
+    page_digest: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +295,12 @@ class Op:
     #: session has moved on and wants the completion to bring it back. The
     #: executor triggers a resume only when this is set.
     resume_requested: bool = False
+    #: The revision the op finished at, recorded when it finishes with the
+    #: resume request in force. It is the revision the continuation observes:
+    #: the completion's, not whatever the task has moved to by the time the
+    #: resume is claimed behind a busy turn. Zero when no resume was requested
+    #: (or for an older op), where the claim falls back to the task's revision.
+    resume_rev: int = 0
     #: The once-only resume marker. It is set under the task's writer lock
     #: before the continuation run starts, so a duplicate completion, a
     #: reconnect or a restart cannot continue the same op twice.
@@ -375,6 +386,7 @@ def op_to_dict(op: Op) -> dict[str, object]:
         "error": op.error,
         "errorCode": op.error_code,
         "resumeRequested": op.resume_requested,
+        "resumeRev": op.resume_rev,
         "resumeStarted": op.resume_started,
         "resumeError": op.resume_error,
         "interrupted": op.interrupted,
@@ -403,6 +415,7 @@ def op_from_dict(raw: Mapping[str, object]) -> Op:
         error=_text(raw.get("error")),
         error_code=_text(raw.get("errorCode")),
         resume_requested=raw.get("resumeRequested") is True,
+        resume_rev=_count(raw.get("resumeRev")),
         resume_started=raw.get("resumeStarted") is True,
         resume_error=_text(raw.get("resumeError")),
         interrupted=raw.get("interrupted") is True,
@@ -447,6 +460,7 @@ def approval_to_dict(approval: Approval) -> dict[str, object]:
         "rev": approval.rev,
         "by": approval.by,
         "at": approval.at,
+        "pageDigest": approval.page_digest,
     }
 
 
@@ -467,6 +481,7 @@ def approval_from_dict(raw: Mapping[str, object]) -> Approval | None:
         rev=_count(raw.get("rev")),
         by=_text(raw.get("by")) or "human",
         at=_text(raw.get("at")),
+        page_digest=_text(raw.get("pageDigest")),
     )
 
 
@@ -780,6 +795,22 @@ def task_view(task: Task, view: str) -> dict[str, object]:
     raise ValueError(f"unknown task view: {view!r}")
 
 
+def task_overview(task: Task) -> dict[str, object]:
+    """Every bounded interface view of one task, from one read, at one revision.
+
+    Separate route reads can straddle a write and show the panel two revisions;
+    this snapshot is built from the one task object, so each part carries the
+    same revision. The model does not see it; ``inspect`` serves one view.
+    """
+    body: dict[str, object] = {
+        "view": "overview",
+        "rev": task.rev,
+    }
+    for view in TASK_VIEWS:
+        body[view] = task_view(task, view)
+    return body
+
+
 def _ops_view(task: Task) -> tuple[list[dict[str, object]], int]:
     """The ops a summary carries: the actionable ones first, bounded.
 
@@ -1055,6 +1086,7 @@ __all__ = [
     "request_from_dict",
     "request_to_dict",
     "task_from_dict",
+    "task_overview",
     "task_to_dict",
     "task_view",
 ]

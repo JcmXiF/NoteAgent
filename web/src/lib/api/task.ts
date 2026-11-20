@@ -15,12 +15,23 @@ import type {
   TaskMaterialsView,
   TaskOpCancelResult,
   TaskOpResumeResult,
+  TaskOverviewView,
   TaskPageSpec,
   TaskPickResult,
   TaskResultView,
   TaskSearchResult,
   TaskSummaryView,
 } from "@/lib/api/types";
+
+/**
+ * Every bounded view from one task read, at one revision.
+ *
+ * The interface's snapshot: six separate reads could straddle a write and draw
+ * two revisions at once. The individual views stay for other clients.
+ */
+export function fetchTaskOverview(): Promise<TaskOverviewView> {
+  return getJson<TaskOverviewView>("/task?view=overview");
+}
 
 export function fetchTaskSummary(): Promise<TaskSummaryView> {
   return getJson<TaskSummaryView>("/task?view=summary");

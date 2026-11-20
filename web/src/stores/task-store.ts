@@ -3,12 +3,7 @@ import { ApiError, errorMessage } from "@/lib/api/client";
 import {
   approveTaskRequest,
   cancelTaskOp,
-  fetchTaskApproval,
-  fetchTaskCards,
-  fetchTaskFrames,
-  fetchTaskMaterials,
-  fetchTaskResult,
-  fetchTaskSummary,
+  fetchTaskOverview,
   frameTaskMaterial,
   pickTaskCard,
   resumeTaskOp,
@@ -119,24 +114,18 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const mine = ++generation;
     set({ status: "loading", error: "" });
     try {
-      const [summary, cards, materials, frames, approvalView, resultView] =
-        await Promise.all([
-          fetchTaskSummary(),
-          fetchTaskCards(),
-          fetchTaskMaterials(),
-          fetchTaskFrames(),
-          fetchTaskApproval(),
-          fetchTaskResult(),
-        ]);
+      // One read, one revision: six parallel reads could straddle a write and
+      // draw a task that mixes the old and the new state.
+      const overview = await fetchTaskOverview();
       if (mine !== generation) return;
       set({
         status: "ready",
-        summary,
-        cards,
-        materials,
-        frames,
-        approvalView,
-        resultView,
+        summary: overview.summary,
+        cards: overview.cards,
+        materials: overview.materials,
+        frames: overview.frames,
+        approvalView: overview.approval,
+        resultView: overview.result,
       });
     } catch (reason) {
       if (mine !== generation) return;

@@ -422,6 +422,22 @@ class TaskRetentionTests(unittest.TestCase):
             # The material is still staged, not dropped with a pipeline run.
             self.assertEqual(materials.states()[kept.material].state, "staged")
 
+    def test_a_corrupt_task_file_does_not_stop_a_pipeline_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = init_project(Path(tmp) / "projects" / "demo")
+            path = layout.task_file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{not json", encoding="utf-8")
+            materials = Materials(layout, clock=_clock())
+            materials.stage(_capture(), run_id="pr-9")
+
+            # Retention cannot read which task is active; it must not raise and
+            # must not touch the task file while pruning pipeline staging.
+            removed = materials.clean([_run("pr-9", 9)], keep=0)
+
+            self.assertEqual(removed, 1)
+            self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+
     def test_without_a_task_old_staging_is_still_dropped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             layout = init_project(Path(tmp) / "projects" / "demo")

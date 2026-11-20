@@ -575,6 +575,8 @@ export type TaskApprovalDetail = {
   rev: number;
   by: string;
   at: string;
+  /** The page the person approved against, when it existed. */
+  pageDigest?: string;
 };
 
 /**
@@ -628,6 +630,24 @@ export type TaskResultView = {
   rev: number;
   status: string;
   result: TaskWriteResult | null;
+};
+
+/**
+ * Every bounded view of the task, read in one snapshot at one revision.
+ *
+ * The panel draws this instead of six independent reads: a write between two
+ * of those would leave the panel a mix of revisions. Each part is the same
+ * shape a single view route returns, and every part's `rev` is the top `rev`.
+ */
+export type TaskOverviewView = {
+  view: "overview";
+  rev: number;
+  summary: TaskSummaryView;
+  cards: TaskCardsView;
+  materials: TaskMaterialsView;
+  frames: TaskFramesView;
+  approval: TaskApprovalView;
+  result: TaskResultView;
 };
 
 /** What a person's frame answers with: the frame, its rev, and the approval. */

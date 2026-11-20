@@ -406,6 +406,17 @@ class PipelineAcceptanceTests(unittest.TestCase):
                     second[0]["pages"][0]["action"], "mention"
                 )
 
+                # The event stream is a server-side poller over the run file.
+                # A run left waiting keeps that orphaned poller reading after
+                # the test, and Windows refuses to remove a file a reader still
+                # holds. Cancel it and give the poller one interval to see the
+                # terminal state before the temp project goes away.
+                cancelled = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/cancel"
+                )
+                self.assertEqual(cancelled.status_code, 200, cancelled.text)
+                threading.Event().wait(0.4)
+
     def test_the_agent_contract_uses_run_ids_for_every_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(projects_mod, "REPO_ROOT", Path(tmp)):

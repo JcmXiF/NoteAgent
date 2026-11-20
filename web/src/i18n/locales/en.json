@@ -627,6 +627,7 @@
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
     "resumedOp": "Resumed {{kind}} op · {{status}} · rev {{rev}}",
     "resumedOpHint": "The executor finished a long op; the conversation continued from this result.",
+    "reviewTask": "Review in the task panel",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
       "save": "Save as a remark",
@@ -1495,6 +1496,10 @@
       "bad_spec": "The frame names passages that do not belong to this material.",
       "needs_approval": "The write request changed or is no longer pending. Read it again before deciding.",
       "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
+      "task": {
+        "recordFailed": "The page was saved, but the writing task could not record the edit; its approval may no longer match the page.",
+        "unreadable": "The writing task file exists but cannot be read. It was not replaced; repair it before continuing."
+      },
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
       "busy": "This conversation is already answering. Wait for it to finish.",

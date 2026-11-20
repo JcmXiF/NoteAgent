@@ -22,6 +22,7 @@ from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import Capture
 from noteagent.agent.faux import FauxModelClient
 from noteagent.effects.journal import COMMITTED, WIKI_PAGE_WRITE, EffectJournal
+from noteagent.ingest.page_history import blob_digest
 from noteagent.ingest.parse_file_blocks import FileBlock
 from noteagent.project.init import init_project
 from noteagent.task.model import (
@@ -36,7 +37,7 @@ from noteagent.task.model import (
     WriteRequest,
 )
 from noteagent.task.service import TaskService
-from noteagent.task.store import TaskStore
+from noteagent.task.store import TaskStore, TaskUnreadableError
 from noteagent.task.writing import PageLocks, SaveOutcome
 
 try:
@@ -315,6 +316,30 @@ class RecordingResume:
         self.notices.append(notice)
 
 
+class _FailingEditService(TaskService):
+    """A real task service whose page-edit record cannot be written.
+
+    It is handed in through ``AppDeps.tasks``, the composition seam, rather than
+    patched onto the class: the route reaches the same service through the same
+    factory a production request uses, and only this one operation fails.
+    """
+
+    def record_page_edit(self, path: str, revision: str = "") -> object:
+        raise RuntimeError("the task file is on a full disk")
+
+
+class _CountingStore(TaskStore):
+    """A task store that counts loads, to prove a read takes one snapshot."""
+
+    def __init__(self, layout) -> None:
+        super().__init__(layout)
+        self.loads = 0
+
+    def load(self):
+        self.loads += 1
+        return super().load()
+
+
 class FakeSave:
     """A pure save node whose outcome, failure or wait the test chooses."""
 
@@ -368,6 +393,7 @@ class TaskApiCase(unittest.TestCase):
         page_locks=None,
         ids=None,
         resume=_UNSET,
+        tasks=None,
     ) -> "TestClient":
         # ``None`` means "let the core build the production node"; leaving the
         # argument out gives the test fake. A test that wants the real staging
@@ -390,6 +416,7 @@ class TaskApiCase(unittest.TestCase):
             task_wait_s=wait_s,
             task_pick_wait_s=pick_wait_s,
             task_resume=RecordingResume() if resume is _UNSET else resume,
+            tasks=tasks,
         )
         return TestClient(create_app(deps))
 
@@ -412,10 +439,19 @@ class TaskApiCase(unittest.TestCase):
         return stored
 
     def wait_for_task(self, predicate, *, timeout: float = 5.0):
-        """Poll the stored task until it reaches the state the test expects."""
+        """Poll the stored task until it reaches the state the test expects.
+
+        A load can still lose the race with an atomic replace under heavy load
+        (the store retries briefly, but this poll is the outer loop); the next
+        poll reads the file the writer finished. Tolerating that here keeps a
+        transient lock from masking the assertion the test is actually making.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            stored = TaskStore(self.layout).load()
+            try:
+                stored = TaskStore(self.layout).load()
+            except TaskUnreadableError:
+                stored = None
             if stored is not None and predicate(stored):
                 return stored
             threading.Event().wait(0.01)
@@ -2713,6 +2749,77 @@ class HumanFrameTests(TaskApiCase):
         self.assertEqual(self.task().frames, ())
 
 
+class TaskOverviewTests(TaskApiCase):
+    """The interface's one snapshot: all bounded views from one task load."""
+
+    VIEWS = ("summary", "cards", "materials", "frames", "approval", "result")
+
+    def test_the_overview_reads_one_task_and_reports_one_revision(self) -> None:
+        store = _CountingStore(self.layout)
+        store.save(_seed_approved_task(rev=3))
+        service = TaskService(
+            self.layout,
+            clock=FixedClock(),
+            ids=SequentialIds(),
+            search=FakeSearch(),
+            fetch=FakeFetch(),
+            stage=FakeStage(),
+            spawn=lambda work: work(),
+            compose=FakeCompose(),
+            store=store,
+        )
+        client = self.client(tasks=service)
+
+        body = client.get(
+            "/api/v1/task", params={"view": "overview"}
+        ).json()
+
+        self.assertEqual(body["view"], "overview")
+        self.assertEqual(body["rev"], 3)
+        # One snapshot, not six: every view is built from the same task read.
+        self.assertEqual(store.loads, 1)
+        for view in self.VIEWS:
+            self.assertEqual(body[view]["view"], view)
+            self.assertEqual(body[view]["rev"], 3)
+
+        # A write moves the task; the next snapshot carries the one new
+        # revision in every view rather than a mix of the old and the new.
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": 3,
+            },
+        )
+        self.assertEqual(framed.status_code, 200, framed.text)
+        self.assertEqual(framed.json()["rev"], 4)
+        store.loads = 0
+
+        body = client.get(
+            "/api/v1/task", params={"view": "overview"}
+        ).json()
+
+        self.assertEqual(store.loads, 1)
+        self.assertEqual(body["rev"], 4)
+        for view in self.VIEWS:
+            self.assertEqual(body[view]["rev"], 4)
+        # The person's frame is the writing basis the panel must show.
+        self.assertEqual(body["frames"]["frames"][0]["docId"], "raw/web/entropy-a1.html")
+        self.assertIsNone(body["approval"]["approval"])
+
+    def test_the_individual_views_remain_for_other_clients(self) -> None:
+        TaskStore(self.layout).save(_seed_approved_task(rev=3))
+        client = self.client(spawn=lambda work: work())
+
+        body = client.get(
+            "/api/v1/task", params={"view": "summary"}
+        ).json()
+
+        self.assertEqual(body["view"], "summary")
+        self.assertEqual(body["rev"], 3)
+
+
 class TaskSurvivalTests(TaskApiCase):
     def test_a_summary_read_creates_the_task_before_any_search(self) -> None:
         client = self.client()
@@ -2764,6 +2871,112 @@ class TaskSurvivalTests(TaskApiCase):
             [card["title"] for card in step["cards"][0]["cards"]],
             ["Entropy", "Information"],
         )
+
+    def test_a_restarted_session_still_knows_the_rev_it_last_saw(self) -> None:
+        """The session's observed revision survives the in-memory registry.
+
+        A person's write made while the core was down must still be a conflict
+        for the agent: the tool result the conversation saw is persisted with
+        its revision, and the restarted wrapper names that revision, not the
+        task's current one.
+        """
+        TaskStore(self.layout).save(
+            Task(
+                id="task-1",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=0,
+                materials=(_stored_material(),),
+            )
+        )
+        ids = SequentialIds()
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            FauxModelClient.text("找到了。").script,
+            spawn=lambda work: work(),
+            ids=ids,
+        )
+        session_id = self.new_session(client)
+        self.ask(client, session_id)
+        self.assertEqual(self.task().rev, 1)
+
+        # A new core: the in-memory observation is gone, the session file is
+        # not. The person writes before the agent comes back.
+        restarted = self.client(
+            FauxModelClient.tool_call(
+                "t2",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.text("框不了，先看看任务。").script,
+            spawn=lambda work: work(),
+            ids=ids,
+        )
+        human = restarted.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": 1,
+            },
+        )
+        self.assertEqual(human.status_code, 200, human.text)
+        self.assertEqual(human.json()["rev"], 2)
+
+        events = self.ask(restarted, session_id, "画个框")
+
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(observed["error"])
+        self.assertEqual(observed["diagnostics"][0]["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, 2)
+        self.assertEqual([op.kind for op in task.ops], ["search", "frame"])
+
+
+class CorruptTaskTests(TaskApiCase):
+    """A task file that exists but cannot be read is not a missing task."""
+
+    def corrupt(self, text: str = "{not json") -> Path:
+        path = self.layout.task_file
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_corrupt_task_file_is_an_error_and_is_left_alone(self) -> None:
+        path = self.corrupt()
+        client = self.client(spawn=lambda work: work())
+
+        read = client.get("/api/v1/task", params={"view": "overview"})
+
+        self.assertEqual(read.status_code, 500, read.text)
+        self.assertEqual(read.json()["code"], "task.unreadable")
+        self.assertIn("task file", read.json()["detail"])
+        # The file is not replaced by a fresh task: a read never overwrites.
+        self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+
+        # A mutation is refused the same way, and still writes nothing.
+        framed = client.post(
+            "/api/v1/task/frame",
+            json={
+                "docId": "raw/web/entropy-a1.html",
+                "blocks": ["b1"],
+                "expectedRev": 0,
+            },
+        )
+        self.assertGreaterEqual(framed.status_code, 500, framed.text)
+        self.assertEqual(path.read_text(encoding="utf-8"), "{not json")
+
+    def test_json_that_is_not_a_task_is_unreadable_too(self) -> None:
+        path = self.corrupt("[]")
+        client = self.client(spawn=lambda work: work())
+
+        read = client.get("/api/v1/task", params={"view": "summary"})
+
+        self.assertEqual(read.status_code, 500, read.text)
+        self.assertEqual(read.json()["code"], "task.unreadable")
+        self.assertEqual(path.read_text(encoding="utf-8"), "[]")
 
 
 class SearchFailureTests(TaskApiCase):
@@ -3052,6 +3265,68 @@ class ComposeWriteTests(TaskApiCase):
         self.assertEqual(task.ops[-1].status, "failed")
         self.assertEqual(task.ops[-1].error_code, "op_failed")
 
+    def test_a_failed_write_moves_the_revision_and_needs_a_new_approval(
+        self,
+    ) -> None:
+        """A failure that rewrites the task is a state write, so rev moves.
+
+        The failed attempt is the task's new result; the person's earlier
+        go-ahead was bound to the revision before it. It must not survive as
+        usable: the agent's next compose has to ask for approval again.
+        """
+        self.seed()
+        compose = FakeCompose(error=RuntimeError("the model refused"))
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("失败了。").script,
+            FauxModelClient.tool_call(
+                "t2", "inspect", '{"view": "summary"}'
+            ).script,
+            FauxModelClient.tool_call(
+                "t3",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": PAGE_SPEC}),
+            ).script,
+            FauxModelClient.text("需要再批准。").script,
+            compose=compose,
+            spawn=lambda work: work(),
+        )
+        session_id = self.new_session(client)
+
+        self.ask(client, session_id)
+
+        failed = self.task()
+        self.assertEqual(failed.rev, 4)
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.result["status"], "failed")
+        self.assertIsNone(failed.approval)
+        self.assertIsNone(failed.request)
+        self.assertEqual(failed.ops[-1].kind, "write")
+        self.assertEqual(failed.ops[-1].status, "failed")
+
+        events = self.ask(client, session_id, "再试试")
+
+        composed = [
+            data for kind, data in events if kind == "observation"
+        ][-1]
+        self.assertEqual(composed["tool"], "compose_page")
+        self.assertEqual(composed["status"], "needs_approval")
+        self.assertNotIn("error", composed)
+        self.assertEqual(len(compose.requests), 1)
+        task = self.task()
+        self.assertEqual(task.rev, 5)
+        self.assertEqual(task.status, "needs_approval")
+        self.assertIsNone(task.approval)
+        self.assertIsNotNone(task.request)
+        self.assertEqual(task.request.frame_id, "frame-1")
+        self.assertEqual(
+            [op.kind for op in task.ops], ["write"]
+        )
+
     def test_inspect_result_reads_the_outcome_without_the_diff(self) -> None:
         self.seed()
         client = self.client(
@@ -3307,7 +3582,9 @@ class ComposeWriteTests(TaskApiCase):
         self.assertFalse((self.layout.wiki / "entropy.md").exists())
 
         task = self.task()
-        self.assertEqual(task.rev, 4)
+        # The failure rewrites the task's result, so it is a state write and
+        # moves the revision once more.
+        self.assertEqual(task.rev, 5)
         self.assertEqual(task.status, "failed")
         self.assertEqual(task.result["status"], "failed")
         self.assertEqual(task.result["page"], "wiki/entropy.md")
@@ -3318,14 +3595,14 @@ class ComposeWriteTests(TaskApiCase):
         self.assertEqual(op.status, "failed")
         self.assertEqual(op.error_code, "conflict")
         self.assertFalse(EffectJournal(self.layout).query(run_id=op.id))
-        # The approval is still stored but no longer stands: its revision is
-        # history. inspect("approval") says so rather than offering a decision.
-        self.assertIsNotNone(task.approval)
+        # The revision move makes the go-ahead stale by construction; the
+        # failure clears it rather than leaving it to look usable.
+        self.assertIsNone(task.approval)
         approval_view = client.get(
             "/api/v1/task", params={"view": "approval"}
         ).json()
         self.assertIsNone(approval_view["approval"])
-        self.assertTrue(approval_view["approvalStale"])
+        self.assertFalse(approval_view["approvalStale"])
 
     def test_a_page_change_during_the_compose_keeps_the_other_write(self) -> None:
         spec = {**PAGE_SPEC, "action": "update"}
@@ -3500,9 +3777,9 @@ class ComposeWriteTests(TaskApiCase):
         self.assertNotIn("composed from", text)
 
         task = self.task()
-        # The person's save is also one more human op on the shared task; it
-        # moved the revision, which is what makes the approval stale.
-        self.assertEqual(task.rev, 4)
+        # The person's save is also one more human op on the shared task; the
+        # failed write then records its failure as a state write of its own.
+        self.assertEqual(task.rev, 5)
         self.assertEqual(task.ops[-1].kind, "edit")
         self.assertEqual(task.ops[-1].actor, "human")
         write = next(op for op in task.ops if op.kind == "write")
@@ -3582,7 +3859,9 @@ class ComposeWriteTests(TaskApiCase):
         self.assertNotIn("composed from", page.read_text(encoding="utf-8"))
 
         task = self.task()
-        self.assertEqual(task.rev, 4)
+        # The person's save moved the task to 4; the failed write records its
+        # failure as a state write, which moves it once more.
+        self.assertEqual(task.rev, 5)
         self.assertEqual(task.ops[-1].kind, "edit")
         self.assertEqual(task.ops[-1].actor, "human")
         write = next(op for op in task.ops if op.kind == "write")
@@ -4550,6 +4829,119 @@ class OpResumeRunTests(TaskApiCase):
         self.assertEqual(len(delivered), 1)
         self.assertTrue(self.task().ops[0].resume_started)
 
+    def test_a_queued_resume_keeps_the_completion_rev_across_a_human_write(
+        self,
+    ) -> None:
+        """The delta names the revision the op finished at, not the claim's.
+
+        A person may write while the completion is queued behind a running turn.
+        If the resumed session were told the newer revision, its next mutation
+        would be accepted and could overwrite what the person did. The delta must
+        carry the completion's revision, so that mutation is a conflict.
+        """
+        TaskStore(self.layout).save(
+            Task(
+                id="task-1",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:00:00Z",
+                rev=0,
+                materials=(_stored_material(),),
+            )
+        )
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        search = FakeSearch(gate=gate)
+        faux = FauxModelClient(
+            FauxModelClient.tool_call(
+                "t1", "web_search", '{"query": "entropy"}'
+            ).script,
+            # Held: the turn is still running when the search finishes.
+            FauxModelClient.text("还在搜。").script,
+            FauxModelClient.text("搜完了。").script,
+            FauxModelClient.tool_call(
+                "t2",
+                "frame_blocks",
+                '{"docId": "raw/web/entropy-a1.html", "blocks": ["b1"]}',
+            ).script,
+            FauxModelClient.text("框不了，先看看任务。").script,
+        )
+        model = HoldingModel(faux, call=2)
+        self.addCleanup(model.release.set)
+        client = TestClient(
+            create_app(
+                AppDeps(
+                    clock=FixedClock(),
+                    ids=SequentialIds(),
+                    model=model,
+                    task_search=search,
+                    task_fetch=FakeFetch(),
+                    task_stage=FakeStage(),
+                    task_compose=FakeCompose(),
+                    task_save=None,
+                    task_wait_s=0.05,
+                    task_pick_wait_s=0.05,
+                    task_resume=None,
+                    task_resume_poll_s=0.01,
+                )
+            )
+        )
+        session_id = self.new_session(client)
+        outcome: dict[str, object] = {}
+
+        def ask() -> None:
+            try:
+                outcome["events"] = self.ask(client, session_id)
+            except Exception as err:  # noqa: BLE001 - re-raised in the test
+                outcome["error"] = err
+
+        worker = threading.Thread(target=ask)
+        worker.start()
+        try:
+            self.assertTrue(model.entered.wait(5))
+            gate.set()
+            finished = self.wait_for_task(
+                lambda item: bool(item.ops) and item.ops[0].status == "done"
+            )
+            completion_rev = finished.rev
+            # The completion is saved but the resume is still queued; the person
+            # draws a frame from the revision the completion left behind.
+            human = client.post(
+                "/api/v1/task/frame",
+                json={
+                    "docId": "raw/web/entropy-a1.html",
+                    "blocks": ["b1"],
+                    "expectedRev": completion_rev,
+                },
+            )
+            self.assertEqual(human.status_code, 200, human.text)
+            self.assertEqual(human.json()["rev"], completion_rev + 1)
+            model.release.set()
+            worker.join(5)
+        finally:
+            model.release.set()
+            worker.join(5)
+        self.assertNotIn("error", outcome)
+
+        entries = self.wait_for_resume_done(client, session_id, "搜完了。")
+        delivered = [
+            entry for entry in entries if entry.get("type") == "task_op_result"
+        ]
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["rev"], completion_rev)
+        op = self.task().ops[0]
+        self.assertEqual(op.resume_rev, completion_rev)
+        self.assertTrue(op.resume_started)
+
+        # The resumed session observed the completion rev, so its next mutation
+        # is refused rather than overwriting the person's frame.
+        events = self.ask(client, session_id, "画个框")
+        observed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(observed["error"])
+        self.assertEqual(observed["diagnostics"][0]["code"], "conflict")
+        task = self.task()
+        self.assertEqual(task.rev, completion_rev + 1)
+        self.assertEqual([op.kind for op in task.ops], ["search", "frame"])
+
     def test_a_slow_write_resumes_with_the_page_result_and_rev(self) -> None:
         self.seed()
         gate = threading.Event()
@@ -4900,26 +5292,96 @@ class PageEditTaskTests(TaskApiCase):
             (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
         )
 
-    def test_a_failed_task_record_does_not_fail_the_page_save(self) -> None:
-        self.seed()
-        client = self.client(spawn=lambda work: work())
-        with patch.object(
-            TaskService,
-            "record_page_edit",
-            side_effect=RuntimeError("the task file is on a full disk"),
-        ):
-            saved = self.save(client)
+    def test_a_failed_task_record_is_surfaced_and_the_write_is_refused(
+        self,
+    ) -> None:
+        """A save whose task record fails is not reported as fully consistent.
 
-        # The page exists and is the person's; the task record is the part that
-        # failed, and it is reported rather than turning the save into an error.
-        self.assertEqual(saved.status_code, 200, saved.text)
-        self.assertIn(
-            "the person's edit",
-            (self.layout.wiki / "entropy.md").read_text(encoding="utf-8"),
+        The page is the person's and stays saved. The task could not record the
+        edit, so the go-ahead on it could not be cleared either; the approval's
+        page digest is the second line of defence, and a compose that would
+        overwrite the person's page is refused rather than silently accepted.
+        """
+        page = self.layout.wiki / "entropy.md"
+        original = (
+            "---\ntitle: Entropy\ncreated: 2026-11-01\n---\n\n"
+            "# Entropy\n\noriginal prose\n"
         )
+        page.write_text(original, encoding="utf-8")
+        spec = {**PAGE_SPEC, "action": "update"}
+        TaskStore(self.layout).save(
+            Task(
+                id="task-7",
+                created_at="2026-11-10T09:00:00Z",
+                updated_at="2026-11-10T09:05:00Z",
+                rev=3,
+                materials=(_stored_material(),),
+                frames=(
+                    Frame(
+                        id="frame-1",
+                        doc_id="raw/web/entropy-a1.html",
+                        blocks=("b1", "b2"),
+                        source="agent",
+                    ),
+                ),
+                approval=Approval(
+                    frame_id="frame-1",
+                    spec=dict(spec),
+                    rev=3,
+                    by="human",
+                    at="2026-11-10T09:05:00Z",
+                    page_digest=blob_digest(original),
+                ),
+            )
+        )
+        service = _FailingEditService(
+            self.layout,
+            clock=FixedClock(),
+            ids=SequentialIds(),
+            search=FakeSearch(),
+            fetch=FakeFetch(),
+            stage=FakeStage(),
+            spawn=lambda work: work(),
+            compose=FakeCompose(),
+        )
+        client = self.client(
+            FauxModelClient.tool_call(
+                "t1",
+                "compose_page",
+                json.dumps({"frameId": "frame-1", "spec": spec}),
+            ).script,
+            FauxModelClient.text("页面被改过，写不了。").script,
+            tasks=service,
+        )
+
+        saved = self.save(client)
+
+        # The page was saved; the route says so and names the record failure
+        # instead of reporting a fully consistent state.
+        self.assertEqual(saved.status_code, 500, saved.text)
+        self.assertEqual(saved.json()["code"], "task.recordFailed")
+        self.assertIn("saved", saved.json()["detail"].lower())
+        self.assertIn(
+            "the person's edit", page.read_text(encoding="utf-8")
+        )
+
+        # The record failure left the approval stored, but it is bound to the
+        # page the person approved; the person's save changed it, so the
+        # approved compose conflicts and the page is kept.
+        session_id = self.new_session(client)
+        events = self.ask(client, session_id)
+        composed = next(data for kind, data in events if kind == "observation")
+        self.assertTrue(composed["error"])
+        self.assertEqual(composed["diagnostics"][0]["code"], "conflict")
+        self.assertIn(
+            "the person's edit", page.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("composed from", page.read_text(encoding="utf-8"))
         task = self.task()
-        self.assertEqual(task.rev, 3)
-        self.assertEqual(task.ops, ())
+        self.assertEqual(task.result["status"], "failed")
+        self.assertIn("changed since", task.result["reason"])
+        write = next(op for op in task.ops if op.kind == "write")
+        self.assertFalse(EffectJournal(self.layout).query(run_id=write.id))
 
 
 class PageEditInvalidationTests(TaskApiCase):

@@ -29,7 +29,12 @@ from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
 from noteagent.task.model import FetchFn, SearchFn, StageFn
-from noteagent.task.service import TaskOpResumeFn, TaskRegistry, TaskService
+from noteagent.task.service import (
+    ObservedRevFn,
+    TaskOpResumeFn,
+    TaskRegistry,
+    TaskService,
+)
 from noteagent.task.writing import (
     ComposePageFn,
     PageLocks,
@@ -102,6 +107,10 @@ class AppDeps:
     #: The task's active revision per session, shared by every request in this
     #: process, so the wrapper can name the revision the run observed.
     task_registry: TaskRegistry = field(default_factory=TaskRegistry)
+    #: The revision a session's own transcript says it last saw, used after a
+    #: restart when the in-memory registry is empty. ``None`` reads the project's
+    #: session log; a test hands in a reader (or an injected session store).
+    task_observed: ObservedRevFn | None = None
     #: What a finished op calls to resume its session at the executor boundary.
     #: ``None`` builds the project's own resumer (session store + kernel runtime);
     #: a test hands one in to observe or suppress the continuation.

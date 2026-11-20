@@ -21,10 +21,17 @@ import { cn } from "@/lib/utils";
 export function SessionCards({
   observations,
   onOpen,
+  onReviewTask,
 }: {
   observations: ObservationPayload[];
   /** Opening a wiki page; absent leaves a card inert. */
   onOpen?: (path: string) => void;
+  /**
+   * Opening the writing-task panel on the request this card shows. A write
+   * request is the person's gate: the chat card is a pointer to it, and the
+   * Approve/Reject buttons live where the shared task view draws them.
+   */
+  onReviewTask?: () => void;
 }) {
   const { t } = useTranslation();
   const rows = cardRows(observations);
@@ -72,6 +79,15 @@ export function SessionCards({
                 {t(row.note.key, { count: row.note.count })}
               </span>
             ) : null}
+            {row.action === "review" && onReviewTask ? (
+              <button
+                type="button"
+                onClick={onReviewTask}
+                className="shrink-0 rounded border px-1 text-[10px] text-cite hover:underline"
+              >
+                {t("chat.reviewTask")}
+              </button>
+            ) : null}
           </div>
         );
       })}
@@ -88,6 +104,8 @@ type Row = {
   /** What opening this row means to the rest of the app: a page slug. */
   open: string | null;
   note: { key: string; count?: number } | null;
+  /** A write request row points at the task panel, where the gate is decided. */
+  action?: "review";
 };
 
 const ICONS = {
@@ -280,6 +298,10 @@ function writeRequestRows(
         observation.status === "approved"
           ? { key: "chat.looked.approved" }
           : { key: "chat.looked.needsApproval" },
+      // The panel is the one place a person approves or rejects: the card
+      // opens and refreshes it instead of growing a second decision path.
+      action:
+        observation.status === "approved" ? undefined : "review",
     });
     for (const [index, section] of (spec?.sections ?? []).entries()) {
       const label = (section.title || "").trim();
