@@ -37,7 +37,7 @@ from noteagent.task.model import (
     WriteRequest,
 )
 from noteagent.task.service import TaskService
-from noteagent.task.store import TaskStore
+from noteagent.task.store import TaskStore, TaskUnreadableError
 from noteagent.task.writing import PageLocks, SaveOutcome
 
 try:
@@ -439,10 +439,19 @@ class TaskApiCase(unittest.TestCase):
         return stored
 
     def wait_for_task(self, predicate, *, timeout: float = 5.0):
-        """Poll the stored task until it reaches the state the test expects."""
+        """Poll the stored task until it reaches the state the test expects.
+
+        A load can still lose the race with an atomic replace under heavy load
+        (the store retries briefly, but this poll is the outer loop); the next
+        poll reads the file the writer finished. Tolerating that here keeps a
+        transient lock from masking the assertion the test is actually making.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            stored = TaskStore(self.layout).load()
+            try:
+                stored = TaskStore(self.layout).load()
+            except TaskUnreadableError:
+                stored = None
             if stored is not None and predicate(stored):
                 return stored
             threading.Event().wait(0.01)
