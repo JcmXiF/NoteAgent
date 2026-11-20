@@ -30,6 +30,7 @@ from noteagent.ingest.page_history import blob_digest
 from noteagent.ingest.wiki_paths import resolve_wiki_write_path
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
+from noteagent.task.events import TaskEvents
 from noteagent.task.model import (
     ACTIVE_OP_STATUSES,
     MAX_BLOCK_PREVIEW,
@@ -330,6 +331,7 @@ class TaskService:
         on_resume: TaskOpResumeFn | None = None,
         observed: ObservedRevFn | None = None,
         store: TaskStore | None = None,
+        events: TaskEvents | None = None,
     ) -> None:
         if wait_s < 0 or pick_wait_s < 0 or compose_wait_s < 0:
             raise ValueError("a bounded wait cannot be negative")
@@ -363,7 +365,18 @@ class TaskService:
         self._store = store or TaskStore(layout)
         # Every mutation of the task goes through this one seam: content
         # commits move the revision and clear the gate, log commits do neither.
-        self._writer = TaskWriter(self._store, clock)
+        # It is also the one place a saved revision is announced.
+        self._writer = TaskWriter(
+            self._store,
+            clock,
+            events=events,
+            project_key=self._project_key,
+        )
+
+    @property
+    def project_key(self) -> str:
+        """The key this project's task writes and change stream are filed under."""
+        return self._project_key
 
     @property
     def wait_s(self) -> float:
@@ -386,12 +399,7 @@ class TaskService:
         """A bounded view and its rev; a missing task is made on first read."""
         if view not in TASK_VIEWS:
             raise ValueError(f"unknown task view: {view!r}")
-        task = self._load()
-        if task is None:
-            with self._writing():
-                task = self._load()
-                if task is None:
-                    task = self._create_locked()
+        task = self._read_or_create()
         self._registry.observe(self._project_key, session_id, task.rev)
         return task_view(task, view), task.rev
 
@@ -402,13 +410,28 @@ class TaskService:
         between two of those reads would leave the panel a mix of two revisions.
         The model never asks for it; it calls ``inspect`` for one bounded view.
         """
+        return task_overview(self._read_or_create())
+
+    def rev(self) -> int:
+        """The task's current revision, creating the task on a first read.
+
+        This is the snapshot a change stream sends when it connects; it is the
+        same read-on-first-use rule the views follow, so a panel that connects to
+        a project that has not written anything yet sees revision zero rather
+        than an absence.
+        """
+        return self._read_or_create().rev
+
+    def _read_or_create(self) -> Task:
+        """The task, made on the first read so every view has one to show."""
         task = self._load()
-        if task is None:
-            with self._writing():
-                task = self._load()
-                if task is None:
-                    task = self._create_locked()
-        return task_overview(task)
+        if task is not None:
+            return task
+        with self._writing():
+            task = self._load()
+            if task is None:
+                task = self._create_locked()
+            return task
 
     def _expected_rev(self, session_id: str) -> int | None:
         """The revision this session last saw, in memory or in its transcript.

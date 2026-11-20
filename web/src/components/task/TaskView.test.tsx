@@ -1,7 +1,15 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import i18n from "@/i18n";
 import { ApiError } from "@/lib/api/client";
 import { SessionCards } from "@/components/chat/SessionCards";
@@ -21,6 +29,7 @@ import {
   pickTaskCard,
   resumeTaskOp,
   searchTaskCards,
+  subscribeTaskEvents,
 } from "@/lib/api/task";
 import {
   fetchSession,
@@ -55,6 +64,7 @@ vi.mock("@/lib/api/task", () => ({
   pickTaskCard: vi.fn(),
   resumeTaskOp: vi.fn(),
   searchTaskCards: vi.fn(),
+  subscribeTaskEvents: vi.fn(),
 }));
 
 vi.mock("@/lib/api/sessions", () => ({
@@ -241,8 +251,16 @@ const sessionPayload: SessionPayload = {
   },
 };
 
+/** The handlers of each stream the store opened, newest last. */
+type StreamHandlers = {
+  onEvent: (rev: number) => void;
+  onOpen: () => void;
+};
+
 let host: HTMLDivElement;
 let root: Root;
+let streams: StreamHandlers[];
+let closeStream: Mock<() => void>;
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -289,12 +307,23 @@ beforeEach(() => {
   vi.mocked(searchTaskCards).mockReset();
   vi.mocked(fetchSession).mockReset();
   vi.mocked(postSessionQuery).mockReset();
+  vi.mocked(subscribeTaskEvents).mockReset();
+  streams = [];
+  closeStream = vi.fn<() => void>();
+  vi.mocked(subscribeTaskEvents).mockImplementation((handlers) => {
+    streams.push(handlers);
+    // A real EventSource reports its open after the connection is made; the
+    // first snapshot is read then, not on a separate mount path.
+    handlers.onOpen();
+    return closeStream;
+  });
   vi.mocked(fetchTaskOverview).mockResolvedValue(snapshot());
 });
 
 afterEach(() => {
   act(() => {
     root.unmount();
+    useTaskStore.getState().disconnect();
   });
   host.remove();
   useWorkspaceStore.setState({ current: null });
@@ -1053,6 +1082,76 @@ describe("the writing task view", () => {
       });
       chatHost.remove();
     }
+  });
+});
+
+describe("the task change stream", () => {
+  it("refreshes the one snapshot once for a burst of events", async () => {
+    await draw();
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(1);
+    expect(streams).toHaveLength(1);
+
+    await act(async () => {
+      streams[0].onEvent(3);
+      streams[0].onEvent(4);
+      // The debounce coalesces the burst into one snapshot read.
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the task again when the stream reconnects", async () => {
+    await draw();
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      streams[0].onOpen();
+    });
+    await act(async () => {});
+
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the old stream when the project changes", async () => {
+    await draw();
+    expect(streams).toHaveLength(1);
+    expect(closeStream).not.toHaveBeenCalled();
+
+    await act(async () => {
+      useWorkspaceStore.setState({ current: "other" });
+    });
+    await act(async () => {});
+
+    expect(closeStream).toHaveBeenCalledTimes(1);
+    expect(streams).toHaveLength(2);
+
+    // The stream that belonged to the old project cannot make the new panel
+    // read; only the one opened for this project can.
+    const reads = vi.mocked(fetchTaskOverview).mock.calls.length;
+    streams[0].onEvent(9);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+    expect(vi.mocked(fetchTaskOverview)).toHaveBeenCalledTimes(reads);
+  });
+
+  it("closes the stream when the panel unmounts", async () => {
+    const unmountHost = document.createElement("div");
+    document.body.append(unmountHost);
+    const unmountRoot = createRoot(unmountHost);
+    await act(async () => {
+      unmountRoot.render(<TaskView />);
+    });
+    await act(async () => {});
+    expect(streams).toHaveLength(1);
+
+    act(() => {
+      unmountRoot.unmount();
+    });
+    unmountHost.remove();
+
+    expect(closeStream).toHaveBeenCalledTimes(1);
   });
 });
 

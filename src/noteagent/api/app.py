@@ -137,8 +137,10 @@ from noteagent.api.task import (
     recover_active_project_tasks,
     resume_task_op,
     search_task_cards,
+    task_service,
     task_view_payload,
 )
+from noteagent.api.task_events import iter_task_events
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -1036,6 +1038,28 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def kernel_task_op_resume(op_id: str) -> dict[str, object]:
         """Re-run an op a restart interrupted; its completion resumes once."""
         return resume_task_op(deps, op_id)
+
+    @app.get("/api/v1/task/events")
+    def kernel_task_events() -> StreamingResponse:
+        """The task's revision changes, from the current one onward.
+
+        The first event carries the revision as it stands, so a client that just
+        connected reads one snapshot and is current. Each event is only
+        ``{rev}``: an invalidation, never the task itself. There is no replay
+        and no ``Last-Event-ID``; reconnecting reads the task again.
+        """
+        service = task_service(deps)
+        return StreamingResponse(
+            iter_task_events(
+                deps.task_events, service.project_key, service.rev
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:

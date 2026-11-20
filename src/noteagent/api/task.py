@@ -125,6 +125,7 @@ def task_service_for(
         page_locks=deps.task_page_locks,
         on_resume=on_resume,  # type: ignore[arg-type]
         observed=observed,
+        events=deps.task_events,
     )
 
 

@@ -43,6 +43,8 @@ export function TaskView() {
   const opError = useTaskStore((state) => state.opError);
   const opNotice = useTaskStore((state) => state.opNotice);
   const load = useTaskStore((state) => state.load);
+  const connect = useTaskStore((state) => state.connect);
+  const disconnect = useTaskStore((state) => state.disconnect);
   const search = useTaskStore((state) => state.search);
   const pick = useTaskStore((state) => state.pick);
   const frame = useTaskStore((state) => state.frame);
@@ -54,9 +56,13 @@ export function TaskView() {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    if (project) void load();
+    // One change stream per project. The first overview is read when it opens,
+    // and every later revision is an invalidation of that same snapshot. A
+    // project switch or an unmount closes the connection with the panel.
+    if (project) connect(project);
     else reset();
-  }, [project, load, reset]);
+    return () => disconnect();
+  }, [project, connect, disconnect, reset]);
 
   if (!project) return null;
   if (status === "loading" && summary === null) {
