@@ -6133,7 +6133,16 @@ class OriginEndToEndTests(TaskApiCase):
         gate = threading.Event()
         self.addCleanup(gate.set)
         search = FakeSearch(gate=gate)
-        client = self.client(search=search, wait_s=0.05)
+        spawned: list[threading.Thread] = []
+
+        def spawn(work) -> None:
+            thread = threading.Thread(
+                target=work, name="task-cancel-test", daemon=True
+            )
+            spawned.append(thread)
+            thread.start()
+
+        client = self.client(search=search, wait_s=0.05, spawn=spawn)
 
         found = client.post(
             "/api/v1/task/search",
@@ -6154,7 +6163,12 @@ class OriginEndToEndTests(TaskApiCase):
 
         gate.set()
         self.assertTrue(search.exited.wait(5))
-        threading.Event().wait(0.1)
+        # The executor takes the task lock once more on its way out. Join it,
+        # rather than sleeping, so no writer is still running when the
+        # temporary project is removed.
+        for thread in spawned:
+            thread.join(5)
+            self.assertFalse(thread.is_alive(), "the search executor did not stop")
         task = self.task()
         self.assertEqual(task.cards, ())
         self.assertEqual(task.ops[-1].status, "cancelled")

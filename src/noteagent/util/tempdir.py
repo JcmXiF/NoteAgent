@@ -3,11 +3,13 @@
 Windows refuses to delete a file or folder while any handle still has it open.
 A background thread can outlive the test that started it by an instant, and the
 run file, the task lock or an event log is still being written when cleanup
-begins. Temporary cleanup waits out that window a few times before failing.
+begins. A writer can also add a file after ``rmtree`` has scanned a folder,
+leaving a directory that was empty a moment before. Temporary cleanup waits
+out both windows a few times before failing.
 
-Only the transient sharing errors are retried. A missing path is already
-removed; a wrong path, a decode failure or any non-OS error is raised from the
-first attempt, because waiting cannot fix it.
+Only the transient sharing and repopulation errors are retried. A missing path
+is already removed; a wrong path, a decode failure or any non-OS error is
+raised from the first attempt, because waiting cannot fix it.
 """
 
 from __future__ import annotations
@@ -32,14 +34,15 @@ def _transient_cleanup_error(err: OSError) -> bool:
     """Whether the delete can succeed once the last handle closes.
 
     Windows reports an open file as ``PermissionError`` / WinError 32 (a
-    sharing violation); POSIX uses ``EACCES`` or ``EBUSY``. Everything else is
-    a real failure and is not retried.
+    sharing violation), and a folder a writer refilled after the scan as
+    WinError 145 (``ERROR_DIR_NOT_EMPTY``); POSIX uses ``EACCES``, ``EBUSY`` or
+    ``ENOTEMPTY``. Everything else is a real failure and is not retried.
     """
     if isinstance(err, PermissionError):
         return True
-    if err.errno in (errno.EACCES, errno.EBUSY):
+    if err.errno in (errno.EACCES, errno.EBUSY, errno.ENOTEMPTY):
         return True
-    return getattr(err, "winerror", None) == 32
+    return getattr(err, "winerror", None) in (32, 145)
 
 
 def remove_tree(
@@ -54,8 +57,8 @@ def remove_tree(
 
     ``remover`` and ``sleep`` are seams for the unit test; production uses
     ``shutil.rmtree`` and ``time.sleep``. A path that is already gone is
-    success. A persistent sharing error is raised after the last attempt, and a
-    non-transient error is raised without retrying.
+    success. A persistent sharing or repopulation error is raised after the
+    last attempt, and a non-transient error is raised without retrying.
     """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")

@@ -29,6 +29,66 @@ class RemoveTreeTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(sleeps, [0.01, 0.01])
 
+    def test_retries_a_directory_a_writer_refilled_after_the_scan(self) -> None:
+        calls: list[object] = []
+        sleeps: list[float] = []
+
+        def remover(path) -> None:
+            calls.append(path)
+            if len(calls) < 3:
+                raise OSError(errno.ENOTEMPTY, "the directory is not empty")
+
+        remove_tree(
+            "tree",
+            attempts=5,
+            delay=0.01,
+            sleep=sleeps.append,
+            remover=remover,
+        )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleeps, [0.01, 0.01])
+
+    def test_retries_winerror_145_even_when_errno_is_not_one_it_knows(self) -> None:
+        calls: list[object] = []
+
+        def remover(path) -> None:
+            calls.append(path)
+            if len(calls) < 3:
+                error = OSError(errno.EINVAL, "the directory is not empty")
+                setattr(error, "winerror", 145)  # noqa: B010
+                raise error
+
+        remove_tree(
+            "tree",
+            attempts=5,
+            delay=0,
+            sleep=lambda _seconds: None,
+            remover=remover,
+        )
+
+        self.assertEqual(len(calls), 3)
+
+    def test_a_persistent_winerror_145_is_raised_after_the_last_attempt(self) -> None:
+        calls: list[object] = []
+
+        def remover(path) -> None:
+            calls.append(path)
+            error = OSError(errno.EINVAL, "the directory is still not empty")
+            setattr(error, "winerror", 145)  # noqa: B010
+            raise error
+
+        with self.assertRaises(OSError):
+            remove_tree(
+                "tree",
+                attempts=3,
+                delay=0,
+                sleep=lambda _seconds: None,
+                remover=remover,
+            )
+
+        self.assertEqual(len(calls), 3)
+
     def test_a_persistent_sharing_error_is_raised_after_the_last_attempt(self) -> None:
         calls: list[object] = []
 
