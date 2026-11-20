@@ -18,12 +18,106 @@ import {
   postSessionQuery,
   postSessionWaitCancel,
 } from "@/lib/api/sessions";
-import type { SessionPayload } from "@/lib/api/types";
+import type {
+  SessionPayload,
+  TaskOpResultPayload,
+} from "@/lib/api/types";
 import { questionBefore } from "@/lib/chat";
-import type { PaneSlot } from "@/stores/layout-store";
+import { useLayoutStore, type PaneSlot } from "@/stores/layout-store";
+import { useTaskStore } from "@/stores/task-store";
 import { cn } from "@/lib/utils";
 
 type Activity = "think" | "tool" | "answer";
+
+/**
+ * The tools whose result lands in the shared writing task.
+ *
+ * A tool observation is how the chat learns the task moved while the agent was
+ * talking; the task panel reads the same task, so it is refreshed rather than
+ * left showing the state it had when it mounted.
+ */
+const TASK_TOOLS = new Set([
+  "web_search",
+  "pick_card",
+  "frame_blocks",
+  "compose_page",
+  "inspect",
+]);
+
+function touchesTask(observation: ObservationPayload): boolean {
+  return (
+    TASK_TOOLS.has(observation.tool) ||
+    observation.request !== undefined ||
+    typeof observation.rev === "number" ||
+    observation.cards !== undefined ||
+    observation.materials !== undefined ||
+    observation.frames !== undefined
+  );
+}
+
+/** Read the one task again; the panel draws whatever the agent just changed. */
+function refreshTask(): void {
+  void useTaskStore.getState().load();
+}
+
+/**
+ * Open the task panel on the request a chat card points at.
+ *
+ * The panel is where the person's gate lives: the chat card opens and refreshes
+ * it instead of keeping a second, inert copy of the proposal.
+ */
+function openTaskPanel(): void {
+  const layout = useLayoutStore.getState();
+  layout.setRightOpen(true);
+  layout.setSectionOpen("task", true);
+  refreshTask();
+}
+
+/**
+ * The task op that resumed this conversation after its executor finished.
+ *
+ * It is the same bounded delta the model read: which op, how it ended, the task
+ * revision and one short result. The task panel carries the full result and its
+ * diff; this is the chat's notice that the long op came back.
+ */
+function ResumedOpCard({ op }: { op: TaskOpResultPayload }) {
+  const { t } = useTranslation();
+  const result = op.result ?? {};
+  const detail =
+    result.summary ||
+    result.error ||
+    (result.page ? String(result.page) : "") ||
+    (result.material?.title ? String(result.material.title) : "");
+  return (
+    <section
+      aria-label={t("chat.resumedOp", {
+        kind: op.kind,
+        status: t(`task.opStatus.${op.status}`, {
+          defaultValue: op.status,
+        }),
+        rev: op.rev,
+      })}
+      className="mb-3 rounded-md border bg-muted/30 px-2 py-1.5 text-[11px]"
+    >
+      <p className="font-medium">
+        {t("chat.resumedOp", {
+          kind: op.kind,
+          status: t(`task.opStatus.${op.status}`, {
+            defaultValue: op.status,
+          }),
+          rev: op.rev,
+        })}
+      </p>
+      {result.page ? (
+        <p className="truncate text-foreground">{String(result.page)}</p>
+      ) : null}
+      {detail ? <p className="text-muted-foreground">{String(detail)}</p> : null}
+      <p className="text-[10px] text-muted-foreground">
+        {t("chat.resumedOpHint")}
+      </p>
+    </section>
+  );
+}
 
 /**
  * A session as the JSONL log reads: what was asked, what was answered.
@@ -98,6 +192,9 @@ export function SessionView({
   const adoptSession = (next: SessionPayload) => {
     setSession(next);
     setWait(next.wait ?? null);
+    // A resumed op means the executor moved the task while this view was away;
+    // the panel should show the result it now holds, not its mount-time copy.
+    if (next.state.taskOp) refreshTask();
   };
 
   useEffect(() => {
@@ -159,6 +256,10 @@ export function SessionView({
           if (!live()) return;
           setActivity("tool");
           setObservations((current) => [...current, observation]);
+          // The agent's tool result is an observation of the same shared task:
+          // a compose that just opened the gate must reach an already-mounted
+          // panel without waiting for a remount.
+          if (touchesTask(observation)) refreshTask();
         },
         onWait: (proposed) => {
           if (!live()) return;
@@ -280,7 +381,11 @@ export function SessionView({
               <>
                 <ChatMarkdown body={turn.content} onOpenLink={onOpenLink} />
                 {turn.cards?.length ? (
-                  <SessionCards observations={turn.cards} onOpen={onOpenLink} />
+                  <SessionCards
+                    observations={turn.cards}
+                    onOpen={onOpenLink}
+                    onReviewTask={openTaskPanel}
+                  />
                 ) : null}
                 {!turn.isStep &&
                 turn.stopReason !== "aborted" &&
@@ -305,6 +410,10 @@ export function SessionView({
             ) : null}
           </article>
         ))}
+
+        {session.state.taskOp ? (
+          <ResumedOpCard op={session.state.taskOp} />
+        ) : null}
 
         {shownWait ? (
           <WaitCard
@@ -335,7 +444,11 @@ export function SessionView({
             <p className="mb-1 text-[11px] text-muted-foreground">
               {t(`chat.activity.${activity}`)}
             </p>
-            <SessionCards observations={observations} onOpen={onOpenLink} />
+            <SessionCards
+              observations={observations}
+              onOpen={onOpenLink}
+              onReviewTask={openTaskPanel}
+            />
             {streaming ? (
               <ChatMarkdown body={streaming} onOpenLink={onOpenLink} />
             ) : null}

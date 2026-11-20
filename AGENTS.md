@@ -17,3 +17,9 @@ Single-context: `docs/GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/a
 One-command checks: `node scripts/check.mjs`; details in `docs/development.md`.
 Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; tool
 contracts: `docs/tool-contract.md`.
+
+### Ticket worktrees
+
+`node scripts/agent-worktree.mjs new <slug>` / `rm <slug>` creates and removes
+`.claude/worktrees/<slug>`; it links node_modules, `.scratch` and the local docs. See
+`docs/development.md`.

@@ -128,6 +128,17 @@ from noteagent.api.session_access import (
 )
 from noteagent.agent.store import summary_dict
 from noteagent.api.sessions import session_payload
+from noteagent.api.task import (
+    approve_task_request,
+    cancel_task_op,
+    frame_task_material,
+    pick_task_card,
+    record_task_page_edit,
+    recover_active_project_tasks,
+    resume_task_op,
+    search_task_cards,
+    task_view_payload,
+)
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
@@ -259,6 +270,51 @@ class PipelineStartBody(BaseModel):
         if not cleaned:
             raise ValueError("a pipeline run needs an intent")
         return cleaned
+
+
+class TaskSearchBody(BaseModel):
+    """A person's web search, from the task view they were looking at."""
+
+    query: str = Field(..., min_length=1, max_length=500)
+    expectedRev: int = Field(..., ge=0)
+
+    @field_validator("query")
+    @classmethod
+    def _query_is_not_blank(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("a search needs a query")
+        return cleaned
+
+
+class TaskPickBody(BaseModel):
+    """A person's pick, from the card view they were looking at."""
+
+    cardId: str = Field(..., min_length=1, max_length=120)
+    expectedRev: int = Field(..., ge=0)
+
+
+class TaskFrameBody(BaseModel):
+    """A person's frame, from the material view they were looking at."""
+
+    docId: str = Field(..., min_length=1, max_length=500)
+    blocks: list[str] = Field(..., max_length=2000)
+    expectedRev: int = Field(..., ge=0)
+
+
+class TaskApproveBody(BaseModel):
+    """A person's decision on the pending write request.
+
+    The task id rules out a decision aimed at another project's task; the
+    revision is the one the confirmation panel read, so a task that moved since
+    then is refused rather than decided on.
+    """
+
+    taskId: str = Field(..., min_length=1, max_length=120)
+    rev: int = Field(..., ge=0)
+    frameId: str = Field(..., min_length=1, max_length=500)
+    spec: dict[str, object]
+    decision: Literal["approve", "reject"]
 
 
 class FolderOpenBody(BaseModel):
@@ -675,6 +731,10 @@ async def _app_lifespan(_app: FastAPI):
     # originals that predate the material log get a record; both before any
     # route can read them.
     prepare_active_project(_app.state.deps)
+    # A writing task a previous core left mid-op is reconciled: active ops are
+    # marked interrupted (resumable or cancellable), and a completion that was
+    # never resumed is continued once, before any route reads the task.
+    recover_active_project_tasks(_app.state.deps)
 
     stop = asyncio.Event()
 
@@ -917,6 +977,65 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             run_id,
             [page.model_dump() for page in body.pages],
         )
+
+    @app.get("/api/v1/task")
+    def kernel_task(
+        view: Literal[
+            "summary",
+            "cards",
+            "materials",
+            "frames",
+            "approval",
+            "result",
+            "overview",
+        ] = Query("summary"),
+    ) -> dict[str, object]:
+        """The active project's writing task, as a bounded view with its rev.
+
+        ``overview`` reads every view from one task load, at one revision, so
+        the interface never draws a mix of two writes' revisions. ``result`` is
+        the last approved page write with its diff, which the model's
+        ``inspect`` also offers.
+        """
+        return task_view_payload(deps, view)
+
+    @app.post("/api/v1/task/search")
+    def kernel_task_search(body: TaskSearchBody) -> dict[str, object]:
+        """A person's web search, on the same task, node and executor as the agent."""
+        return search_task_cards(deps, body.query, body.expectedRev)
+
+    @app.post("/api/v1/task/pick")
+    def kernel_task_pick(body: TaskPickBody) -> dict[str, object]:
+        """A person's card pick, on the same task and executor as the agent."""
+        return pick_task_card(deps, body.cardId, body.expectedRev)
+
+    @app.post("/api/v1/task/frame")
+    def kernel_task_frame(body: TaskFrameBody) -> dict[str, object]:
+        """A person's frame, on the same task and writer as the agent's."""
+        return frame_task_material(
+            deps, body.docId, body.blocks, body.expectedRev
+        )
+
+    @app.post("/api/v1/task/approve")
+    def kernel_task_approve(body: TaskApproveBody) -> dict[str, object]:
+        """A person's decision on the pending write request.
+
+        This is the only way an approval is written. No agent tool reaches it:
+        the model is offered compose_page and inspect, never approve.
+        """
+        return approve_task_request(
+            deps, body.taskId, body.rev, body.frameId, body.spec, body.decision
+        )
+
+    @app.post("/api/v1/task/ops/{op_id}/cancel")
+    def kernel_task_op_cancel(op_id: str) -> dict[str, object]:
+        """Stop an unfinished op; a cancelled op never saves, resumes or retries."""
+        return cancel_task_op(deps, op_id)
+
+    @app.post("/api/v1/task/ops/{op_id}/resume")
+    def kernel_task_op_resume(op_id: str) -> dict[str, object]:
+        """Re-run an op a restart interrupted; its completion resumes once."""
+        return resume_task_op(deps, op_id)
 
     @app.get("/api/v1/sessions")
     def kernel_sessions() -> dict[str, object]:
@@ -1483,8 +1602,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/projects/{name}/page/save")
     def project_page_save(name: str, body: PageSaveBody) -> dict[str, object]:
+        layout = require_project_layout(name)
         try:
-            return page_save_payload(require_project_layout(name), body.model_dump())
+            # The task's executor holds the same page lock while it writes a
+            # composed page, so whichever writer comes second is refused. A
+            # real change is recorded on the writing task while that lock is
+            # still held: the page and its task record move together, and the
+            # edit removes any approval bound to the old page.
+            return page_save_payload(
+                layout,
+                body.model_dump(),
+                page_locks=deps.task_page_locks,
+                on_saved=(
+                    lambda path, revision: record_task_page_edit(
+                        deps, layout, path, revision
+                    )
+                ),
+            )
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
 

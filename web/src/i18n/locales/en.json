@@ -224,6 +224,7 @@
     },
     "storedHint": "Not stored yet. The page's text must be saved before pages can be written from it.",
     "fromRound": "from a deep search",
+    "task": "Writing task",
     "scope": {
       "label": "Which selections to show",
       "mine": "This search",
@@ -624,6 +625,9 @@
     "aborted": "Stopped before this answer was finished.",
     "incomplete": "The model stream failed; this is only the part written before it.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
+    "resumedOp": "Resumed {{kind}} op · {{status}} · rev {{rev}}",
+    "resumedOpHint": "The executor finished a long op; the conversation continued from this result.",
+    "reviewTask": "Review in the task panel",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
       "save": "Save as a remark",
@@ -653,7 +657,16 @@
       "truncated": "cut short",
       "timeout": "timed out",
       "omitted": "some left out",
-      "hits": "{{count}} hits"
+      "hits": "{{count}} hits",
+      "searching": "still searching",
+      "picking": "still fetching",
+      "blocks": "{{count}} blocks",
+      "needsApproval": "needs your approval",
+      "approved": "approved",
+      "written": "written",
+      "writeSkipped": "skipped",
+      "writeFailed": "write failed",
+      "writing": "still writing"
     },
     "wait": {
       "title": "Waiting on you",
@@ -1478,6 +1491,15 @@
     "openFolder": "Could not open that folder",
     "deleteProject": "Could not delete the project",
     "code": {
+      "conflict": "The writing task changed since this view was read. Re-read it and try again.",
+      "not_found": "That card or material is no longer in the writing task.",
+      "bad_spec": "The frame names passages that do not belong to this material.",
+      "needs_approval": "The write request changed or is no longer pending. Read it again before deciding.",
+      "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
+      "task": {
+        "recordFailed": "The page was saved, but the writing task could not record the edit; its approval may no longer match the page.",
+        "unreadable": "The writing task file exists but cannot be read. It was not replaced; repair it before continuing."
+      },
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
       "busy": "This conversation is already answering. Wait for it to finish.",
@@ -1555,6 +1577,7 @@
         "missing": "That page is no longer in the project; it may have been deleted.",
         "notAPage": "That is not a note in this project.",
         "changed": "This page was written again after you opened it. Open it afresh and make your change there.",
+        "busy": "This page is being written right now. Try again when that write has finished.",
         "exists": "A page already has that name. Choose another.",
         "nameEmpty": "A page needs a name.",
         "nameNotAllowed": "That page name cannot be used. Choose another.",
@@ -1652,6 +1675,89 @@
         "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
         "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
       }
+    }
+  },
+  "task": {
+    "title": "Writing task",
+    "rev": "rev {{rev}}",
+    "loading": "Loading the task",
+    "empty": "No cards yet",
+    "search": "Search",
+    "searching": "Searching…",
+    "searchPlaceholder": "Search the web for cards",
+    "searchDone": "Found {{count}} cards.",
+    "searchRunning": "The search is still running; read the task again later.",
+    "searchFailed": "The web search could not run",
+    "cards": "{{count}} cards",
+    "materials": "Materials {{count}}",
+    "blocks": "{{count}} blocks",
+    "moreBlocks": "{{count}} more",
+    "pick": "Pick",
+    "picking": "Picking…",
+    "pickFailed": "The card could not be picked",
+    "pickRunning": "The pick is still running; read the task again later.",
+    "loadFailed": "The writing task could not be read",
+    "retry": "Retry",
+    "frames": "Frames {{count}}",
+    "framesEmpty": "No frames yet",
+    "frameSource": "drawn by {{source}}",
+    "frameHint": "Tick the passages this material contributes.",
+    "frameSave": "Save frame",
+    "framing": "Saving the frame…",
+    "frameMore": "{{count}} more passages in this frame",
+    "frameSaved": "The frame was saved.",
+    "frameFailed": "The frame could not be saved",
+    "approved": "Approved by {{by}} at revision {{rev}}",
+    "noApproval": "No approval yet",
+    "approvalInvalidated": "The frame changed, so the previous approval no longer applies.",
+    "ops": "Ops",
+    "opInterrupted": "a restart interrupted it; resume it or cancel it",
+    "opCancel": "Cancel",
+    "opResume": "Resume",
+    "opWorking": "Working…",
+    "opCancelledNotice": "Op {{id}} was cancelled and will not run again.",
+    "opAlreadyFinished": "The op had already finished; nothing was cancelled.",
+    "opResumedNotice": "Op {{id}} is running again.",
+    "opActionFailed": "The op could not be updated",
+    "opResumeFailed": "The resume failed: {{error}}",
+    "opCancelledLine": "cancelled; it will not be retried or resumed",
+    "writeRequest": "Write request",
+    "approve": "Approve",
+    "reject": "Reject",
+    "approving": "Approving…",
+    "rejecting": "Rejecting…",
+    "approvedNotice": "Approved. The agent can now write this page.",
+    "rejectedNotice": "Rejected. The agent can propose a revised request.",
+    "decisionFailed": "The write request could not be decided",
+    "writeResult": "Page write",
+    "writeDiff": "Diff (+{{added}} / -{{removed}})",
+    "writeStatus": {
+      "written": "written",
+      "skipped": "skipped",
+      "failed": "failed"
+    },
+    "action": {
+      "create": "new page",
+      "update": "update page"
+    },
+    "source": {
+      "agent": "the agent",
+      "human": "you",
+      "model": "the model"
+    },
+    "status": {
+      "idle": "idle",
+      "running": "running",
+      "needs_approval": "needs approval",
+      "done": "done",
+      "failed": "failed"
+    },
+    "opStatus": {
+      "requested": "requested",
+      "running": "running",
+      "done": "done",
+      "failed": "failed",
+      "cancelled": "cancelled"
     }
   }
 }

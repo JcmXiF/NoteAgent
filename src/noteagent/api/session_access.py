@@ -30,6 +30,7 @@ from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
+from noteagent.api.task import task_service_for
 from noteagent.llm.config import load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
@@ -40,6 +41,7 @@ from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
 from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
+from noteagent.task.tools import task_tools
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
 
@@ -177,18 +179,21 @@ def open_session_store(
 
 
 def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
-    """The tools a kernel run offers: the injected set, or the project's wiki.
+    """The tools a kernel run offers: the injected set, or the project's own.
 
     The catalog is built per run because the active project can change while the
     server keeps running; a registry captured at startup would read the wrong
-    wiki after the reader switched projects.
+    wiki after the reader switched projects. The wiki tools stay as they are:
+    the writing task's tools are composed beside them, not folded into them.
     """
     if deps.tools is not None:
         return deps.tools
     if layout is None:
         # A test that injected its own store and no tools asked for a bare run.
         return ToolRegistry()
-    return wiki_tools(layout, rag=rag_backend(layout))
+    tools = list(wiki_tools(layout, rag=rag_backend(layout)).enabled())
+    tools.extend(task_tools(task_service_for(deps, layout)))
+    return ToolRegistry(tools)
 
 
 class UnavailableRag:

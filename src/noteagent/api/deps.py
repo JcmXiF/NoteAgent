@@ -28,6 +28,18 @@ from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
+from noteagent.task.model import FetchFn, SearchFn, StageFn
+from noteagent.task.service import (
+    ObservedRevFn,
+    TaskOpResumeFn,
+    TaskRegistry,
+    TaskService,
+)
+from noteagent.task.writing import (
+    ComposePageFn,
+    PageLocks,
+    SavePageFn,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +84,51 @@ class AppDeps:
     #: What an approved run calls to write its pages. ``None`` compiles through
     #: the existing write path; a test scripts it and inspects what it was given.
     pipeline_compile: CompileFn | None = None
+    #: The writing task's service, when a test hands one in; otherwise it is
+    #: built from the active project on each request.
+    tasks: TaskService | None = None
+    #: The pure search node behind ``web_search``. ``None`` uses the project's
+    #: configured web search; a test scripts the hits and never touches a network.
+    task_search: SearchFn | None = None
+    #: The pure fetch and stage nodes behind ``pick_card``. ``None`` uses the
+    #: project's fetch and staging area; a test scripts both and keeps the
+    #: network and the filesystem out of the pick.
+    task_fetch: FetchFn | None = None
+    task_stage: StageFn | None = None
+    #: The pure compose and save nodes behind an approved ``compose_page``.
+    #: ``None`` uses the production pair (``write_confirmed_page`` then
+    #: ``write_file_blocks`` + the index); a test scripts them and keeps the
+    #: model and network out of the write.
+    task_compose: ComposePageFn | None = None
+    task_save: SavePageFn | None = None
+    #: The page locks the task's save and the human editor share, so the later
+    #: writer is refused instead of interleaving with the other.
+    task_page_locks: PageLocks = field(default_factory=PageLocks)
+    #: The task's active revision per session, shared by every request in this
+    #: process, so the wrapper can name the revision the run observed.
+    task_registry: TaskRegistry = field(default_factory=TaskRegistry)
+    #: The revision a session's own transcript says it last saw, used after a
+    #: restart when the in-memory registry is empty. ``None`` reads the project's
+    #: session log; a test hands in a reader (or an injected session store).
+    task_observed: ObservedRevFn | None = None
+    #: What a finished op calls to resume its session at the executor boundary.
+    #: ``None`` builds the project's own resumer (session store + kernel runtime);
+    #: a test hands one in to observe or suppress the continuation.
+    task_resume: TaskOpResumeFn | None = None
+    #: How often a completion queued behind a running turn looks for the
+    #: session's free run slot.
+    task_resume_poll_s: float = 0.02
+    #: How the task executor is taken off the request thread. A test passes a
+    #: synchronous launcher so the op finishes before the handler waits.
+    task_spawn: Callable[[Callable[[], None]], None] | None = None
+    #: The bounded wait a search tool gives its executor, in seconds.
+    task_wait_s: float = 15.0
+    #: The bounded wait a pick tool gives its executor, in seconds.
+    task_pick_wait_s: float = 90.0
+    #: The bounded wait an approved compose gives its executor, in seconds. The
+    #: tool's registry timeout sits above it, so a slow write answers
+    #: requested/running instead of a registry timeout.
+    task_compose_wait_s: float = 180.0
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

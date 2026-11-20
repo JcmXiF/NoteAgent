@@ -79,11 +79,13 @@ from noteagent.agent.runtime import (
     RunRequest,
     RunResult,
     RunResume,
+    TaskOpResume,
     TraceSink,
     UserInput,
     busy_message,
 )
 from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
+from noteagent.agent.task_op import has_task_op_result, task_op_result_entry
 from noteagent.agent.tools import (
     Diagnostic,
     ToolContext,
@@ -220,7 +222,9 @@ class KernelRuntime:
             raise ValueError("no route opens a retry yet")
         session_id = request.session_id
         preclaimed = (
-            request.claim if isinstance(request, RunResume) else None
+            request.claim
+            if isinstance(request, (RunResume, TaskOpResume))
+            else None
         )
         cancel = (
             preclaimed
@@ -233,6 +237,10 @@ class KernelRuntime:
         try:
             if isinstance(request, RunResume):
                 return self._run_crash_resume(
+                    request, sink, run_id, cancel, pause
+                )
+            if isinstance(request, TaskOpResume):
+                return self._run_task_op(
                     request, sink, run_id, cancel, pause
                 )
             if isinstance(request, Resume):
@@ -419,6 +427,51 @@ class KernelRuntime:
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
+
+    def _run_task_op(
+        self,
+        request: TaskOpResume,
+        sink: EventSink,
+        run_id: str,
+        cancel: Event,
+        pause: Event | None = None,
+    ) -> RunResult:
+        """Continue a session from the bounded delta of a finished task op.
+
+        The op already ran; this run is the conversation catching up. The delta
+        is committed first, so a duplicate delivery sees it and ends without a
+        second model call. The model then reads it as a system observation and
+        answers on the same session, which is what a reconnect by session id
+        sees.
+        """
+        session_id = request.session_id
+        op_id = request.op_id.strip()
+        if not op_id:
+            raise ValueError("a task op resume names the op it continues")
+        try:
+            _check_cancel(cancel)
+            snapshot = self._sessions.load(session_id)
+            if has_task_op_result(snapshot.entries, op_id):
+                sink(
+                    DoneEvent(
+                        {"id": session_id},
+                        {"id": run_id, "status": "completed"},
+                    )
+                )
+                return RunResult(session_id, run_id, "completed")
+            self._sessions.append(
+                session_id,
+                task_op_result_entry(
+                    op_id=op_id,
+                    kind=request.kind,
+                    status=request.status,
+                    rev=request.rev,
+                    result=request.result,
+                ),
+            )
+        except RunCancelled:
+            return self._cancelled_result(session_id, run_id, sink, "")
+        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
 
     def _resume_check(
         self,

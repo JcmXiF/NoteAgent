@@ -224,6 +224,7 @@
     },
     "storedHint": "尚未保存。需先将这一页的正文存入资料库，才能据此写页面。",
     "fromRound": "来自深搜",
+    "task": "写作任务",
     "scope": {
       "label": "看哪些选中的内容",
       "mine": "本次深搜",
@@ -624,6 +625,9 @@
     "aborted": "这条回答没有写完就停止了。",
     "incomplete": "模型流中断，这只是中断前写出的部分。",
     "busy": "这个会话正在另一个标签页里作答；结束后刷新即可看到。",
+    "resumedOp": "已续跑 {{kind}} 操作 · {{status}} · 修订 {{rev}}",
+    "resumedOpHint": "执行器完成了这个长操作，对话从这里接着继续。",
+    "reviewTask": "在任务面板中审阅",
     "compacted": "较早的轮次已压缩成摘要，以便放进模型窗口；原始记录仍保留在日志里。",
     "remark": {
       "save": "存为备注",
@@ -653,7 +657,16 @@
       "truncated": "已截断",
       "timeout": "超时",
       "omitted": "部分命中未显示",
-      "hits": "{{count}} 个命中"
+      "hits": "{{count}} 个命中",
+      "searching": "仍在搜索",
+      "picking": "仍在抓取",
+      "blocks": "{{count}} 段",
+      "needsApproval": "等待你批准",
+      "approved": "已批准",
+      "written": "已写入",
+      "writeSkipped": "已跳过",
+      "writeFailed": "写入失败",
+      "writing": "仍在写入"
     },
     "wait": {
       "title": "等待你开始",
@@ -1478,6 +1491,15 @@
     "openFolder": "无法打开这个文件夹",
     "deleteProject": "删除项目失败",
     "code": {
+      "conflict": "写作任务在你读到它之后有变化，请重新读取后再试。",
+      "not_found": "这张卡片或这份材料已经不在写作任务里了。",
+      "bad_spec": "画框里有些段落不属于这份材料。",
+      "needs_approval": "写页请求已变化或已不存在，请重新读取后再决定。",
+      "op_failed": "材料抓取或暂存失败，请先读取任务再决定是否重试。",
+      "task": {
+        "recordFailed": "页面已保存，但写作任务未能记录这次编辑；任务上的批准可能已与页面不符。",
+        "unreadable": "写作任务文件存在但无法读取。它没有被替换；请先修复再继续。"
+      },
       "model_error": "助手没有作答，请重试。",
       "cancelled": "已停止。",
       "busy": "这个会话正在作答，请等它结束。",
@@ -1555,6 +1577,7 @@
         "missing": "这一页已不在项目中，可能已被删除。",
         "notAPage": "这不是这个项目里的一篇笔记。",
         "changed": "这一页在你打开后又被写入过，请重新打开后再修改。",
+        "busy": "这一页正在被写入，等这次写入结束后再试。",
         "exists": "已经有同名的页面了，换一个名字。",
         "nameEmpty": "页面必须有名称。",
         "nameNotAllowed": "这个页面名不可用，请更换。",
@@ -1652,6 +1675,89 @@
         "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
         "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
       }
+    }
+  },
+  "task": {
+    "title": "写作任务",
+    "rev": "修订 {{rev}}",
+    "loading": "正在读取任务",
+    "empty": "还没有资料卡片",
+    "search": "搜索",
+    "searching": "搜索中…",
+    "searchPlaceholder": "搜索公开网页，收集资料卡片",
+    "searchDone": "找到 {{count}} 张卡片。",
+    "searchRunning": "搜索仍在进行，稍后重新读取任务。",
+    "searchFailed": "搜索没能执行",
+    "cards": "{{count}} 张卡片",
+    "materials": "{{count}} 份材料",
+    "blocks": "{{count}} 段",
+    "moreBlocks": "还有 {{count}} 段",
+    "pick": "选为材料",
+    "picking": "选择中…",
+    "pickFailed": "无法选择这张卡片",
+    "pickRunning": "选择仍在进行，稍后重新读取任务。",
+    "loadFailed": "无法读取写作任务",
+    "retry": "重试",
+    "frames": "{{count}} 个画框",
+    "framesEmpty": "还没有画框",
+    "frameSource": "由{{source}}画",
+    "frameHint": "勾选这份材料要用于写作的段落。",
+    "frameSave": "保存画框",
+    "framing": "正在保存画框…",
+    "frameMore": "框内还有 {{count}} 段",
+    "frameSaved": "画框已保存。",
+    "frameFailed": "画框没能保存",
+    "approved": "{{by}}已在修订 {{rev}} 批准",
+    "noApproval": "还没有批准",
+    "approvalInvalidated": "画框变了，之前的批准不再有效。",
+    "ops": "操作",
+    "opInterrupted": "因重启中断；可以续跑或取消",
+    "opCancel": "取消",
+    "opResume": "续跑",
+    "opWorking": "处理中…",
+    "opCancelledNotice": "操作 {{id}} 已取消，不会再运行。",
+    "opAlreadyFinished": "操作已经结束，没有取消任何东西。",
+    "opResumedNotice": "操作 {{id}} 已重新开始。",
+    "opActionFailed": "操作没能更新",
+    "opResumeFailed": "续跑失败：{{error}}",
+    "opCancelledLine": "已取消；不会再重试或续跑",
+    "writeRequest": "写页请求",
+    "approve": "批准",
+    "reject": "拒绝",
+    "approving": "正在批准…",
+    "rejecting": "正在拒绝…",
+    "approvedNotice": "已批准。助手现在可以写入这一页。",
+    "rejectedNotice": "已拒绝。助手可以修改请求后再提。",
+    "decisionFailed": "写页请求没能处理",
+    "writeResult": "页面写入",
+    "writeDiff": "差异（+{{added}} / -{{removed}}）",
+    "writeStatus": {
+      "written": "已写入",
+      "skipped": "已跳过",
+      "failed": "失败"
+    },
+    "action": {
+      "create": "新建页面",
+      "update": "更新页面"
+    },
+    "source": {
+      "agent": "助手",
+      "human": "你",
+      "model": "模型"
+    },
+    "status": {
+      "idle": "空闲",
+      "running": "进行中",
+      "needs_approval": "待批准",
+      "done": "完成",
+      "failed": "失败"
+    },
+    "opStatus": {
+      "requested": "已请求",
+      "running": "进行中",
+      "done": "完成",
+      "failed": "失败",
+      "cancelled": "已取消"
     }
   }
 }

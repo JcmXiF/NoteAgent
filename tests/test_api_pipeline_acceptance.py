@@ -8,7 +8,6 @@ start, status, events, approve, cancel — all addressed by the run id.
 from __future__ import annotations
 
 import json
-import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -29,6 +28,7 @@ from noteagent.pipeline.confirm import (
 from noteagent.pipeline.framing import FrameStage
 from noteagent.pipeline.planning import PlanStage
 from noteagent.project.init import init_project
+from noteagent.util.tempdir import temporary_tree
 
 try:
     from fastapi.testclient import TestClient
@@ -227,7 +227,7 @@ def _frames(lines):
 
 class PipelineAcceptanceTests(unittest.TestCase):
     def test_one_run_writes_a_page_with_a_single_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             compile, compile_calls = _writing_compile()
             stage = AcquireStage(
                 search=lambda query: _cards(1),
@@ -299,7 +299,7 @@ class PipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn('"seq":', terminal.text)
 
     def test_events_arrive_while_the_run_is_moving(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             hold = _HoldStage()
             compile, _calls = _writing_compile()
             stage = AcquireStage(
@@ -342,7 +342,7 @@ class PipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("awaiting_confirmation", kinds)
 
     def test_a_revision_bump_while_waiting_announces_a_fresh_confirmation(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             compile, _calls = _writing_compile()
             stage = AcquireStage(
                 search=lambda query: _cards(1),
@@ -406,8 +406,19 @@ class PipelineAcceptanceTests(unittest.TestCase):
                     second[0]["pages"][0]["action"], "mention"
                 )
 
+                # The event stream is a server-side poller over the run file.
+                # A run left waiting keeps that orphaned poller reading after
+                # the test, and Windows refuses to remove a file a reader still
+                # holds. Cancel it and give the poller one interval to see the
+                # terminal state before the temp project goes away.
+                cancelled = client.post(
+                    f"/api/v1/pipeline/runs/{run_id}/cancel"
+                )
+                self.assertEqual(cancelled.status_code, 200, cancelled.text)
+                threading.Event().wait(0.4)
+
     def test_the_agent_contract_uses_run_ids_for_every_action(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             with patch.object(projects_mod, "REPO_ROOT", Path(tmp)):
                 client = _client(tmp, stages=[])
                 run_id, run = _start(
@@ -440,7 +451,7 @@ class PipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(cancelled.json()["status"], "succeeded")
 
     def test_a_run_with_no_material_fails_with_a_reason(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             stage = AcquireStage(
                 search=lambda query: [],
                 fetch=lambda url, query: _capture(url),
@@ -459,7 +470,7 @@ class PipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("no material could be collected", events.text)
 
     def test_a_login_wall_only_fails_the_run_and_queues_the_page(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             cards = _cards(1)
 
             def fetch(url: str, query: str) -> Capture:
@@ -493,7 +504,7 @@ class PipelineAcceptanceTests(unittest.TestCase):
                 )
 
     def test_a_planning_model_failure_fails_the_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_tree() as tmp:
             def plan(layout, store, cancel):
                 raise RuntimeError("model is down")
 

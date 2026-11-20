@@ -23,8 +23,12 @@ from noteagent.agent.model import ToolCall
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
-#: What a call is allowed to touch.
-SideEffect: TypeAlias = Literal["read", "network", "human"]
+#: What a call is allowed to touch. ``write`` is local state written by the
+#: core itself (the writing task), never the web and never a wiki page.
+SideEffect: TypeAlias = Literal["read", "network", "human", "write"]
+
+#: The side effects the contract knows; a spec outside this set is refused.
+SIDE_EFFECTS: tuple[SideEffect, ...] = ("read", "network", "human", "write")
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -54,6 +58,21 @@ OBSERVATION_FIELDS = (
     "http_status",
     "action",
     "wrote_wiki",
+    # A writing-task result: the cards it found, the revision they belong to,
+    # and whether a long op is still requested/running.
+    "cards",
+    "rev",
+    "status",
+    # A writing-task material (or several), with its identity and state; the
+    # block index is a reader's view, not a chat card's payload.
+    "materials",
+    # A writing-task frame (or several): which material, who drew it, and how
+    # many blocks it covers. The block previews stay in the bounded view.
+    "frames",
+    # The pending write request a compose_page recorded: the frame, the
+    # canonical page spec and the revision it is bound to. It is bounded by the
+    # spec's own section/block caps, and it is what the confirmation card shows.
+    "request",
 )
 
 
@@ -139,9 +158,27 @@ class ToolSpec:
     enabled: bool = True
     argument_hint: str = ""
 
+    def __post_init__(self) -> None:
+        if self.side_effect not in SIDE_EFFECTS:
+            raise ValueError(f"unknown tool side effect: {self.side_effect!r}")
+
 
 class UnknownToolError(LookupError):
     """A name the registry does not hold."""
+
+
+class ToolError(Exception):
+    """A handler refusing a call, with a situation the model can act on.
+
+    A plain exception is the handler's own fault; this one names a situation
+    the model is expected to recover from (``conflict``, ``op_failed``, ...).
+    The registry keeps the code in the error observation, so the loop's one
+    failure channel carries it too; no tool invents a second result shape.
+    """
+
+    def __init__(self, message: str, *, code: str = "handler_error") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ToolRegistry:
@@ -329,10 +366,12 @@ class _PendingCall:
                 raise failure
             if not isinstance(failure, Exception):
                 raise failure
+            named = getattr(failure, "code", "")
+            code = named if isinstance(named, str) and named else "handler_error"
             return _error(
                 self._spec.name,
-                f"tool error: {failure}",
-                code="handler_error",
+                f"tool {self._spec.name} failed ({code}): {failure}",
+                code=code,
             )
         if self._result is None:
             return _error(
