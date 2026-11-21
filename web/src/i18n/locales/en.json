@@ -37,7 +37,32 @@
       "label": "Browse",
       "hint": "Search the web and open pages in the built-in browser",
       "sidebar": "Search"
+    },
+    "writing": {
+      "label": "Writing",
+      "hint": "The agent's searches, selected pages, frames and draft",
+      "sidebar": "Writing state"
     }
+  },
+  "writing": {
+    "title": "Writing state",
+    "version": "State version {{version}}",
+    "writer": "Writer: {{writer}}",
+    "noWriter": "No writer",
+    "loading": "Reading the writing state…",
+    "error": "The writing state could not be read.",
+    "retry": "Retry",
+    "empty": "Nothing here yet.",
+    "noProject": "Choose a project first.",
+    "attention": "Attention",
+    "noAttention": "Nothing needs attention.",
+    "areas": {
+      "searches": "Search results",
+      "selectedPages": "Selected pages",
+      "frames": "Frames",
+      "draft": "Draft"
+    },
+    "draftCount": "{{pages}} pages, {{sections}} sections"
   },
   "nav": {
     "toggleLeft": "Show the sidebar",

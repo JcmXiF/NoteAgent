@@ -109,6 +109,7 @@ from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
+from noteagent.api.writing import writing_state_payload
 from noteagent.api.session_access import (
     active_layout,
     cancel_session,
@@ -1576,6 +1577,12 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def project_attention(name: str, check: bool = True) -> dict[str, object]:
         """Everything waiting on the reader, counted in one place."""
         return attention_payload(require_project_layout(name), check=check)
+
+    @app.get("/api/projects/{name}/writing/state")
+    @app.get("/api/v1/projects/{name}/writing/state")
+    def get_writing_state(name: str) -> dict[str, object]:
+        """The project's one writing state, or the empty state before a write."""
+        return writing_state_payload(require_project_layout(name))
 
     @app.post("/api/projects/{name}/capture-inbox/dismiss")
     def project_capture_dismiss(

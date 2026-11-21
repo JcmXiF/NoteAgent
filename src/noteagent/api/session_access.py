@@ -42,6 +42,7 @@ from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
+from noteagent.writing.tools import get_state_tool
 
 if TYPE_CHECKING:
     from noteagent.rag.settings import RagSettings
@@ -188,7 +189,9 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     if layout is None:
         # A test that injected its own store and no tools asked for a bare run.
         return ToolRegistry()
-    return wiki_tools(layout, rag=rag_backend(layout))
+    tools = wiki_tools(layout, rag=rag_backend(layout))
+    tools.register(get_state_tool(layout))
+    return tools
 
 
 class UnavailableRag:

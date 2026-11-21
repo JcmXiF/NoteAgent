@@ -32,6 +32,7 @@ const DEFAULT_LEFT_WIDTHS: Record<ModuleId, number> = {
   notes: 280,
   graph: 260,
   browse: 260,
+  writing: 260,
 };
 
 /**
@@ -76,6 +77,9 @@ const DEFAULT_OPEN: Record<ModuleId, RightSectionId[]> = {
   notes: [],
   graph: ["plan", "compile"],
   browse: ["selection"],
+  // The writing panel shows its own four sections; none of the workbench's
+  // right-panel sections has a claim on it.
+  writing: [],
 };
 
 /** A section's width, per module, as its starting point. */

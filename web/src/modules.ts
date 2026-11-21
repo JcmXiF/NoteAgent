@@ -5,6 +5,7 @@ import {
   Globe,
   MessageSquare,
   Network,
+  PenLine,
   StickyNote,
 } from "lucide-react";
 
@@ -13,7 +14,15 @@ import {
  * which view a pane shows. Labels live in the i18n catalogs, so this file only
  * carries the keys and the presentation facts.
  */
-export const MODULE_IDS = ["chat", "sources", "docs", "notes", "graph", "browse"] as const;
+export const MODULE_IDS = [
+  "chat",
+  "sources",
+  "docs",
+  "notes",
+  "graph",
+  "browse",
+  "writing",
+] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
 
@@ -38,6 +47,7 @@ export const MODULE_META: Record<ModuleId, ModuleMeta> = {
   notes: { id: "notes", i18nKey: "module.notes", icon: StickyNote },
   graph: { id: "graph", i18nKey: "module.graph", icon: Network },
   browse: { id: "browse", i18nKey: "module.browse", icon: Globe, single: true },
+  writing: { id: "writing", i18nKey: "module.writing", icon: PenLine },
 };
 
 export const MODULE_LIST: ModuleMeta[] = MODULE_IDS.map((id) => MODULE_META[id]);

@@ -112,6 +112,16 @@ class ProjectLayout:
         return self.meta / "deep-search.json"
 
     @property
+    def writing(self) -> Path:
+        """The writing state's own folder: the one truth the writing tools share."""
+        return self.meta / "writing"
+
+    @property
+    def writing_state(self) -> Path:
+        """The writing state's index; page content lands beside it as it grows."""
+        return self.writing / "state.json"
+
+    @property
     def pipeline(self) -> Path:
         """The pipeline's own state: runs and the staging area, per project."""
         return self.meta / "pipeline"

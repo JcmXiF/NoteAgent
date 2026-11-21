@@ -298,7 +298,8 @@ class DefaultToolTests(unittest.TestCase):
             tools = session_tools(AppDeps(sessions=None), layout)
 
         self.assertEqual(
-            [tool.name for tool in tools.enabled()], ["wiki_read", "search"]
+            [tool.name for tool in tools.enabled()],
+            ["wiki_read", "search", "get_state"],
         )
 
     def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:

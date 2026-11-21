@@ -37,7 +37,32 @@
       "label": "浏览",
       "hint": "搜网页，并在内置浏览器里打开",
       "sidebar": "搜索"
+    },
+    "writing": {
+      "label": "写作",
+      "hint": "agent 的搜索、选页、框与草稿",
+      "sidebar": "写作状态"
     }
+  },
+  "writing": {
+    "title": "写作状态",
+    "version": "状态版本 {{version}}",
+    "writer": "写入者：{{writer}}",
+    "noWriter": "无写入者",
+    "loading": "正在读取写作状态…",
+    "error": "写作状态读取失败。",
+    "retry": "重试",
+    "empty": "还没有内容。",
+    "noProject": "请先选择项目。",
+    "attention": "待处理",
+    "noAttention": "没有待处理项。",
+    "areas": {
+      "searches": "搜索结果",
+      "selectedPages": "选页",
+      "frames": "框",
+      "draft": "草稿"
+    },
+    "draftCount": "{{pages}} 页，{{sections}} 段"
   },
   "nav": {
     "toggleLeft": "显示侧栏",

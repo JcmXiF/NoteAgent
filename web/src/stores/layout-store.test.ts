@@ -23,7 +23,7 @@ beforeEach(() => {
     lastSide: "graph",
     focused: "main",
     paneReturn: {},
-    leftWidths: { chat: 240, sources: 260, docs: 320, notes: 280, graph: 260, browse: 260 },
+    leftWidths: { chat: 240, sources: 260, docs: 320, notes: 280, graph: 260, browse: 260, writing: 260 },
     leftSections: { order: ["module", "jobs"], folds: {}, heights: {} },
     rightFolds: {},
     settingsOpen: false,
