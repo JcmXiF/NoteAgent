@@ -11,9 +11,12 @@ vi.mock("@/lib/api/writing", () => ({
   archiveWritingState: vi.fn(),
   activateWritingArchive: vi.fn(),
   streamWritingState: vi.fn(() => new Promise<void>(() => {})),
+  startAutoFrame: vi.fn(),
 }));
 
 import { WritingStateView } from "@/components/writing/WritingStateView";
+import { startAutoFrame } from "@/lib/api/writing";
+import { useActivityStore } from "@/stores/activity-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useWritingStore } from "@/stores/writing-store";
 
@@ -21,8 +24,10 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   await i18n.changeLanguage("en");
   useWorkspaceStore.setState({ current: "p" });
+  useActivityStore.setState({ items: [] });
   useWritingStore.setState({
     project: "p",
     state: {
@@ -378,6 +383,134 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain(
       "The frame changed after “定义” was written.",
     );
+  });
+
+  it("starts the auto-frame node and reloads the state", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 15,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+          },
+        ],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+    vi.mocked(startAutoFrame).mockResolvedValue({
+      status: "completed",
+    });
+    await draw();
+    const button = [...host.querySelectorAll("button")].find(
+      (item) => item.textContent?.includes("Auto-select frames"),
+    );
+
+    await act(async () => {
+      button?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(startAutoFrame).toHaveBeenCalledWith(
+      "p",
+      "page-1",
+      expect.stringMatching(/^node-/),
+      expect.anything(),
+    );
+    expect(useWritingStore.getState().load).toHaveBeenCalled();
+  });
+
+  it("shows why the auto-frame node failed", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 16,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+          },
+        ],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+    vi.mocked(startAutoFrame).mockResolvedValue({
+      status: "failed",
+      error: "the model refused",
+    });
+    await draw();
+    const button = [...host.querySelectorAll("button")].find(
+      (item) => item.textContent?.includes("Auto-select frames"),
+    );
+
+    await act(async () => {
+      button?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(host.textContent).toContain(
+      "Auto-select frames failed.",
+    );
+    expect(host.textContent).not.toContain("the model refused");
+  });
+
+  it("asks before starting the node on unsaved edits", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 17,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+          },
+        ],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+      dirty: true,
+    });
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    await draw();
+    const button = [...host.querySelectorAll("button")].find(
+      (item) => item.textContent?.includes("Auto-select frames"),
+    );
+
+    await act(async () => {
+      button?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(confirm).toHaveBeenCalled();
+    expect(startAutoFrame).not.toHaveBeenCalled();
   });
 
   it("edits a frame's blocks and can remove it", async () => {

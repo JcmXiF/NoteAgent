@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Query, Response
@@ -109,6 +109,14 @@ from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
+from noteagent.api.nodes import (
+    NodeResult,
+    is_node_session,
+    node_tools,
+    resume_auto_frame,
+    run_auto_frame,
+    valid_node_id,
+)
 from noteagent.api.writing import writing_state_payload
 from noteagent.api.writing_events import iter_writing_events
 from noteagent.writing.state import (
@@ -122,6 +130,7 @@ from noteagent.api.session_access import (
     cancel_session,
     cancel_wait,
     claim_job,
+    default_session_store,
     enter_wait_for_job,
     job_wait_for_body,
     migrate_active_project_chats,
@@ -134,7 +143,7 @@ from noteagent.api.session_access import (
     session_runtime,
     session_waits,
 )
-from noteagent.agent.store import summary_dict
+from noteagent.agent.store import SessionStore, summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
@@ -453,6 +462,12 @@ class WritingChangesBody(BaseModel):
 class WritingSaveBody(BaseModel):
     baseVersion: int = Field(..., ge=0)
     changes: WritingChangesBody
+
+
+class NodeRunBody(BaseModel):
+    pageId: str = Field(..., min_length=1, max_length=200)
+    #: A caller may name the run so it can cancel it before the answer.
+    nodeId: str | None = Field(default=None, max_length=100)
 
 
 class RevisionInboxIgnoreBody(BaseModel):
@@ -944,7 +959,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         store = project_sessions(deps)
         report = migrate_sessions(store)
         body: dict[str, object] = {
-            "sessions": [summary_dict(item) for item in store.list()]
+            "sessions": [
+                summary_dict(item)
+                for item in store.list()
+                if not is_node_session(item.id)
+            ]
         }
         if report is not None and (report.migrated or report.failed):
             body["migration"] = report.payload()
@@ -1605,6 +1624,31 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def _state_busy(err: Exception) -> CodedHTTPException:
         return CodedHTTPException(409, str(err), code="state.busy")
 
+    def _node_session_store(layout: ProjectLayout) -> SessionStore:
+        if deps.sessions is not None:
+            return deps.sessions
+        return default_session_store(deps, layout)
+
+    @contextmanager
+    def _node_errors():
+        try:
+            yield
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except LlmConfigError as err:
+            raise http_error(err, 503) from err
+
+    def _node_payload(result: NodeResult) -> dict[str, object]:
+        return {
+            "nodeRunId": result.node_run_id,
+            "sessionId": result.session_id,
+            "status": result.status,
+            "error": result.error,
+            "frames": [dict(frame) for frame in result.frames],
+        }
+
     @app.get("/api/projects/{name}/writing/state")
     @app.get("/api/v1/projects/{name}/writing/state")
     def get_writing_state(name: str) -> dict[str, object]:
@@ -1703,6 +1747,103 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 "Connection": "keep-alive",
             },
         )
+
+    @app.post("/api/projects/{name}/nodes/auto-frame")
+    @app.post("/api/v1/projects/{name}/nodes/auto-frame")
+    def start_node_run(
+        name: str, body: NodeRunBody
+    ) -> dict[str, object]:
+        """Run the auto-frame node; the frames in the state are its result."""
+        layout = require_project_layout(name)
+        if body.nodeId and not valid_node_id(body.nodeId):
+            raise CodedHTTPException(
+                400,
+                f"not a node id: {body.nodeId}",
+                code="node.invalid",
+            )
+        try:
+            with _node_errors():
+                result = run_auto_frame(
+                    deps,
+                    _node_session_store(layout),
+                    layout,
+                    body.pageId,
+                    body.nodeId or "",
+                )
+        except ValueError as err:
+            raise CodedHTTPException(
+                400, str(err), code="node.invalid"
+            ) from err
+        return _node_payload(result)
+
+    @app.post("/api/projects/{name}/nodes/{node_id}/resume")
+    @app.post("/api/v1/projects/{name}/nodes/{node_id}/resume")
+    def resume_node_run(
+        name: str, node_id: str, body: RunIdBody
+    ) -> dict[str, object]:
+        """Continue the node run a crash left interrupted."""
+        if not valid_node_id(node_id):
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            )
+        layout = require_project_layout(name)
+        store = _node_session_store(layout)
+        try:
+            store.load(node_id)
+        except (FileNotFoundError, ValueError) as err:
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            ) from err
+        if interrupted_run(store, node_id, body.runId) is None:
+            raise CodedHTTPException(
+                409,
+                f"node {node_id} is not interrupted on run {body.runId}",
+                code="session.notInterrupted",
+                params={"id": node_id, "run": body.runId},
+            )
+        tools = node_tools(deps, layout)
+        refusal = resume_refusal(
+            deps,
+            store,
+            layout,
+            node_id,
+            body.runId,
+            tools=tools,
+        )
+        if refusal:
+            raise CodedHTTPException(
+                409,
+                refusal,
+                code="session.notResumable",
+                params={"id": node_id, "run": body.runId},
+            )
+        with _node_errors():
+            result = resume_auto_frame(
+                deps, store, layout, node_id, body.runId
+            )
+        return _node_payload(result)
+
+    @app.post("/api/projects/{name}/nodes/{node_id}/cancel")
+    @app.post("/api/v1/projects/{name}/nodes/{node_id}/cancel")
+    def cancel_node_run(
+        name: str, node_id: str
+    ) -> dict[str, object]:
+        """Stop the node run before its next model call."""
+        if not valid_node_id(node_id):
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            )
+        require_project_layout(name)
+        busy = deps.runs.is_busy(node_id)
+        if busy:
+            deps.runs.cancel(node_id)
+        return {"cancelled": busy}
 
     @app.post("/api/projects/{name}/capture-inbox/dismiss")
     def project_capture_dismiss(

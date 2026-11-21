@@ -102,6 +102,16 @@
     "archiveSummary": "v{{version}} · {{searches}} searches · {{pages}} pages · {{frames}} frames · {{draft}} draft pages",
     "activate": "Activate",
     "edited": "Edited",
+    "node": {
+      "autoFrame": "Auto-select frames",
+      "framing": "Selecting frames…",
+      "done": "Frames selected",
+      "failed": "Auto-select frames failed.",
+      "activity": "Auto-select frames · {{page}}",
+      "step": "Select frames",
+      "unsaved": "Auto-select frames works on the saved state. You have unsaved writing-state edits. Start anyway?",
+      "blocked": "Auto-select frames did not finish."
+    },
     "stale": {
       "badge": "May be out of date",
       "missingBadge": "Citation lost",
@@ -1582,6 +1592,10 @@
         "conflict": "The writing state changed since you read it. Read it again.",
         "invalid": "That writing-state change is not valid.",
         "archiveNotFound": "That archived writing state does not exist."
+      },
+      "node": {
+        "invalid": "The auto-frame request is not valid.",
+        "notFound": "That auto-frame run does not exist."
       },
       "pipeline": {
         "busy": "Another pipeline run is already active. Wait for it to finish.",

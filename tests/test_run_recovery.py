@@ -374,7 +374,7 @@ class RunRecoveryTests(unittest.TestCase):
                 return_value=self.layout,
             ),
             patch(
-                "noteagent.api.session_access._default_store",
+                "noteagent.api.session_access.default_session_store",
                 return_value=Broken(),
             ),
             self.assertLogs(

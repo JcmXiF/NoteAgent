@@ -129,6 +129,41 @@ export function saveWritingState(
   );
 }
 
+export type WritingNodeResult = {
+  nodeRunId?: string;
+  sessionId?: string;
+  status?: string;
+  error?: string;
+  frames?: WritingFrame[];
+};
+
+/** Start the auto-frame node for one selected page; the state is its result. */
+export function startAutoFrame(
+  project: string,
+  pageId: string,
+  nodeId: string,
+  signal?: AbortSignal,
+): Promise<WritingNodeResult> {
+  return postJson<WritingNodeResult>(
+    projectPath(project, "nodes/auto-frame"),
+    { pageId, nodeId },
+    { signal },
+  );
+}
+
+/** Stop a running auto-frame node before its next model call. */
+export function cancelAutoFrame(
+  project: string,
+  nodeId: string,
+): Promise<{ cancelled?: boolean }> {
+  return postJson<{ cancelled?: boolean }>(
+    projectPath(
+      project,
+      `nodes/${encodeURIComponent(nodeId)}/cancel`,
+    ),
+  );
+}
+
 export function fetchWritingArchives(
   project: string,
 ): Promise<WritingArchiveList> {

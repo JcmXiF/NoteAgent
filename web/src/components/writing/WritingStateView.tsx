@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Archive,
@@ -9,6 +9,13 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { isSseAborted } from "@/lib/api/client";
+import {
+  cancelAutoFrame,
+  startAutoFrame,
+} from "@/lib/api/writing";
+import { runAsActivity } from "@/lib/run";
+import { useActivityStore } from "@/stores/activity-store";
 import { Draft } from "@/components/writing/WritingDraftArea";
 import {
   Frames,
@@ -30,6 +37,14 @@ import {
 } from "@/lib/writing-edits";
 import type { PaneSlot } from "@/stores/layout-store";
 import { editableFrom } from "@/stores/writing-store";
+
+function newNodeId(): string {
+  const raw =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  return `node-${raw}`;
+}
 
 /**
  * The project's writing state, editable in the four areas the agent works on.
@@ -58,6 +73,14 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
     archive,
     activate,
   } = useWritingState();
+  const [nodeError, setNodeError] = useState("");
+  const activities = useActivityStore((state) => state.items);
+  const runningPageId =
+    activities.find(
+      (item) =>
+        item.meta?.node === "auto-frame" &&
+        item.phase === "running",
+    )?.meta?.pageId ?? null;
 
   if (!project) {
     return <Notice title={t("writing.noProject")} />;
@@ -143,6 +166,67 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
       return;
     }
     act();
+  };
+
+  const autoFrame = async (pageId: string) => {
+    if (!project || runningPageId !== null || !pageId) return;
+    if (dirty && !window.confirm(t("writing.node.unsaved"))) {
+      return;
+    }
+    setNodeError("");
+    const page = editable.selectedPages.find(
+      (item) => item.id === pageId,
+    );
+    try {
+      await runAsActivity({
+        kind: "misc",
+        title: t("writing.node.activity", {
+          page: page?.title || pageId,
+        }),
+        module: "writing",
+        message: t("writing.node.framing"),
+        steps: [
+          {
+            id: "frame",
+            label: t("writing.node.step"),
+            state: "pending",
+          },
+        ],
+        meta: { node: "auto-frame", pageId },
+        run: async (ctx) => {
+          const nodeId = newNodeId();
+          const stop = () => {
+            void cancelAutoFrame(project, nodeId);
+          };
+          ctx.signal.addEventListener("abort", stop, {
+            once: true,
+          });
+          ctx.status(t("writing.node.framing"), "frame");
+          try {
+            const result = await startAutoFrame(
+              project,
+              pageId,
+              nodeId,
+              ctx.signal,
+            );
+            if (result.status === "failed" || result.error) {
+              throw new Error(result.error || "");
+            }
+            return result;
+          } finally {
+            ctx.signal.removeEventListener("abort", stop);
+          }
+        },
+        doneMessage: () => t("writing.node.done"),
+        retry: () => void autoFrame(pageId),
+      });
+      await load(project, true);
+    } catch (err) {
+      if (!isSseAborted(err)) {
+        setNodeError(t("writing.node.failed"));
+      }
+      await load(project, true);
+    }
   };
 
   return (
@@ -251,6 +335,9 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
           empty={t("writing.empty")}
           onTitle={handlePageTitle}
           onRemove={handleRemovePage}
+          onAutoFrame={(pageId) => void autoFrame(pageId)}
+          runningPageId={runningPageId}
+          nodeError={nodeError}
         />
         <Frames
           frames={editable.frames}
@@ -278,7 +365,9 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
               {attention.map((item, index) => (
                 <li key={index}>
-                  {String(item.message ?? item.kind ?? "")}
+                  {String(item.kind ?? "") === "blocked"
+                    ? t("writing.node.blocked")
+                    : String(item.message ?? item.kind ?? "")}
                 </li>
               ))}
             </ul>

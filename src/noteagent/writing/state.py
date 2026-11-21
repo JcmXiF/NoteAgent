@@ -399,6 +399,17 @@ class WritingStateStore:
             ),
         )
 
+    def append_attention(
+        self, row: Mapping[str, object]
+    ) -> WritingState:
+        """Append one attention row, retrying once on a version conflict."""
+        return self._append(
+            row,
+            lambda state, item: replace(
+                state, attention=state.attention + (item,)
+            ),
+        )
+
     def append_selected_page(
         self, row: Mapping[str, object]
     ) -> WritingState:

@@ -113,10 +113,11 @@ def _take_lease(
     layout: ProjectLayout,
     context: ToolContext,
     moment: Clock,
+    kind: str = "agent",
 ) -> None:
     """A run's first state write takes the lease; its runtime releases it."""
     WritingStateStore(layout, clock=moment).ensure_writer(
-        "agent", context.session_id
+        kind, context.session_id
     )
 
 
@@ -691,6 +692,7 @@ def select_frame_tool(
     *,
     clock: Clock | None = None,
     ids: Ids | None = None,
+    writer_kind: str = "agent",
 ) -> ToolSpec:
     """The agent's frame selection: a frame id and its blocks in the state."""
     moment = clock or SystemClock()
@@ -698,7 +700,7 @@ def select_frame_tool(
     store = WritingStateStore(layout, clock=moment)
 
     def select_frame(arguments, context) -> ToolResult:
-        _take_lease(layout, context, moment)
+        _take_lease(layout, context, moment, writer_kind)
         page_id = str(arguments["pageId"]).strip()
         block_ids = [
             str(item).strip()

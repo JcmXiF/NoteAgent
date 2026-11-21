@@ -42,6 +42,8 @@ export type ActivityItem = {
   currentStepId?: string;
   /** Appended log lines, shown on demand. Truncation is reported, never hidden. */
   detail: string[];
+  /** Small, view-facing facts about what the job is for (a page id, say). */
+  meta?: Record<string, string>;
   error?: string;
   filesWritten: string[];
   createdAt: number;
@@ -57,6 +59,7 @@ export type StartActivity = {
   module?: ModuleId;
   message?: string;
   steps?: ActivityStep[];
+  meta?: Record<string, string>;
   cancel?: () => void;
   retry?: () => void;
 };
@@ -114,6 +117,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
       message: input.message,
       steps: input.steps,
       currentStepId: input.steps?.[0]?.id,
+      meta: input.meta,
       detail: [],
       filesWritten: [],
       createdAt: Date.now(),

@@ -102,6 +102,16 @@
     "archiveSummary": "v{{version}} · 搜索 {{searches}} · 选页 {{pages}} · 框 {{frames}} · 草稿 {{draft}}",
     "activate": "切换",
     "edited": "已人工修改",
+    "node": {
+      "autoFrame": "自动框选",
+      "framing": "正在框选…",
+      "done": "框选完成",
+      "failed": "自动框选失败。",
+      "activity": "自动框选 · {{page}}",
+      "step": "框选",
+      "unsaved": "自动框选只用已保存的写作状态；你有未保存的修改，仍要开始吗？",
+      "blocked": "自动框选没有完成。"
+    },
     "stale": {
       "badge": "可能已过期",
       "missingBadge": "引用已失效",
@@ -1582,6 +1592,10 @@
         "conflict": "写作状态在你读取后有变化，请重新读取。",
         "invalid": "这项写作状态修改不合法。",
         "archiveNotFound": "找不到这个已归档的写作状态。"
+      },
+      "node": {
+        "invalid": "这次自动框选的请求不合法。",
+        "notFound": "找不到这次自动框选。"
       },
       "pipeline": {
         "busy": "另一个流水线正在运行，请等它结束。",

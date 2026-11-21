@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { X } from "lucide-react";
+import { Loader2, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -132,11 +132,17 @@ export function SelectedPages({
   empty,
   onTitle,
   onRemove,
+  onAutoFrame,
+  runningPageId,
+  nodeError,
 }: {
   pages: WritingSelectedPage[];
   empty: string;
   onTitle: (index: number, value: string) => void;
   onRemove: (index: number) => void;
+  onAutoFrame: (pageId: string) => void;
+  runningPageId: string | null;
+  nodeError: string;
 }) {
   const { t } = useTranslation();
 
@@ -182,10 +188,31 @@ export function SelectedPages({
                   {page.error}
                 </p>
               ) : null}
+              {page.status === "ready" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-1"
+                  disabled={runningPageId !== null}
+                  onClick={() => onAutoFrame(page.id ?? "")}
+                >
+                  {runningPageId === page.id ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Wand2 />
+                  )}
+                  {runningPageId === page.id
+                    ? t("writing.node.framing")
+                    : t("writing.node.autoFrame")}
+                </Button>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
+      {nodeError ? (
+        <p className="mt-2 text-[11px] text-destructive">{nodeError}</p>
+      ) : null}
     </Card>
   );
 }

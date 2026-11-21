@@ -199,11 +199,15 @@ class KernelRuntime:
         #: Non-secret project/config digests a run marker records. The kernel
         #: stays generic: the composition root decides what the project is.
         fingerprint: Mapping[str, str] | None = None,
+        #: Whether the model may take the control action. A scoped node run
+        #: offers only its own tools, so it turns this off.
+        allow_propose: bool = True,
     ) -> None:
         self._model = model
         self._trace = trace
         self._sessions = sessions
         self._tools = tools or ToolRegistry()
+        self._allow_propose = allow_propose
         # A wait is read from the same log as the turns, so the default keeps
         # the runtime and the session view looking at one record.
         self._waits = waits if waits is not None else SessionWaitStore(sessions)
@@ -593,7 +597,11 @@ class KernelRuntime:
                 if assistant.tool_calls:
                     calls = assistant.tool_calls
                     refusal: ToolResult | None = None
-                    if len(calls) == 1 and calls[0].name == PROPOSE_NAME:
+                    if (
+                        self._allow_propose
+                        and len(calls) == 1
+                        and calls[0].name == PROPOSE_NAME
+                    ):
                         proposal, refusal = self._read_proposal(session_id, calls[0])
                         if proposal is not None:
                             return self._wait_for_proposal(
@@ -668,6 +676,8 @@ class KernelRuntime:
 
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
         """The tools the model may call, with the control action beside them."""
+        if not self._allow_propose:
+            return self._tools.model_tools()
         return (PROPOSE_TOOL,) + self._tools.model_tools()
 
     def _mark(
@@ -793,7 +803,9 @@ class KernelRuntime:
         control action is only meaningful alone, and running the rest would
         leave the model believing half of it happened.
         """
-        if any(call.name == PROPOSE_NAME for call in calls):
+        if self._allow_propose and any(
+            call.name == PROPOSE_NAME for call in calls
+        ):
             message = (
                 "propose must be alone in its batch; nothing in this batch was run"
             )

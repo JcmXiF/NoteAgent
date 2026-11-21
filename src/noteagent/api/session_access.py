@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.model import ModelClient
 from noteagent.agent.projection import project
 from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import (
@@ -79,7 +80,7 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
         ) from err
 
 
-def _default_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
+def default_session_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
     """The project's own store, with the clock and ids the app was built with."""
     return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
 
@@ -97,7 +98,7 @@ def _active_project_store(deps: AppDeps) -> SessionStore | None:
     except (OSError, ValueError) as err:
         logger.warning("the active project cannot be read at startup: %s", err)
         return None
-    return _default_store(deps, layout)
+    return default_session_store(deps, layout)
 
 
 def project_sessions(deps: AppDeps) -> SessionStore:
@@ -106,7 +107,7 @@ def project_sessions(deps: AppDeps) -> SessionStore:
         return deps.sessions
     layout = active_layout(deps)
     assert layout is not None
-    return _default_store(deps, layout)
+    return default_session_store(deps, layout)
 
 
 def migrate_sessions(store: SessionStore) -> MigrationReport | None:
@@ -172,7 +173,7 @@ def open_session_store(
     if store is None:
         resolved = layout or active_layout(deps)
         assert resolved is not None
-        store = _default_store(deps, resolved)
+        store = default_session_store(deps, resolved)
     if isinstance(store, JsonlSessionStore):
         # A conversation opened by its old id may not have been through a list
         # first; the marker makes this a file-existence check on later calls.
@@ -332,6 +333,53 @@ class WritingLeaseRuntime:
         return self._inner.compact(session_id, instructions)
 
 
+def kernel_model(deps: AppDeps) -> tuple[ModelClient, str]:
+    """The model a kernel run uses, and the name its marker records."""
+    model_name = str((deps.settings or {}).get("model") or "")
+    model = deps.model
+    if model is None:
+        config = load_llm_config()
+        model = RetryingModel(OpenAIModelClient(config))
+        model_name = model_name or config.model
+    return model, model_name
+
+
+def kernel_runtime(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+    tools: ToolRegistry,
+    *,
+    allow_propose: bool = True,
+) -> KernelRuntime:
+    """A kernel with the model, log, registry and trace every run shares."""
+    model, model_name = kernel_model(deps)
+    fingerprint = (
+        project_fingerprint(layout, config=deps.settings or {})
+        if layout is not None
+        else {}
+    )
+    return KernelRuntime(
+        model=model,
+        sessions=store,
+        tools=tools,
+        waits=session_waits(deps, store),
+        clock=deps.clock,
+        ids=deps.ids,
+        registry=deps.runs,
+        model_name=model_name,
+        max_turns=deps.max_turns,
+        # A run against a real project writes a content-free trace beside its
+        # session; a test store with no project has nowhere to put one.
+        trace=SessionTrace(layout, clock=deps.clock)
+        if layout is not None
+        else None,
+        # Non-secret digests a resume can compare; the kernel only records them.
+        fingerprint=fingerprint,
+        allow_propose=allow_propose,
+    )
+
+
 def session_runtime(
     deps: AppDeps,
     store: SessionStore,
@@ -345,32 +393,8 @@ def session_runtime(
     """
     if deps.runtime is not None:
         return deps.runtime
-    model_name = str((deps.settings or {}).get("model") or "")
-    model = deps.model
-    if model is None:
-        config = load_llm_config()
-        model = RetryingModel(OpenAIModelClient(config))
-        model_name = model_name or config.model
-    fingerprint = (
-        project_fingerprint(layout, config=deps.settings or {})
-        if layout is not None
-        else {}
-    )
-    runtime: AgentRuntime = KernelRuntime(
-        model=model,
-        sessions=store,
-        tools=session_tools(deps, layout),
-        waits=session_waits(deps, store),
-        clock=deps.clock,
-        ids=deps.ids,
-        registry=deps.runs,
-        model_name=model_name,
-        max_turns=deps.max_turns,
-        # A run against a real project writes a content-free trace beside its
-        # session; a test store with no project has nowhere to put one.
-        trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
-        # Non-secret digests a resume can compare; the kernel only records them.
-        fingerprint=fingerprint,
+    runtime: AgentRuntime = kernel_runtime(
+        deps, store, layout, session_tools(deps, layout)
     )
     if layout is not None:
         runtime = WritingLeaseRuntime(
@@ -381,10 +405,7 @@ def session_runtime(
 
 def _session_model_name(deps: AppDeps) -> str:
     """The model name a kernel run records, resolved as ``session_runtime`` does."""
-    name = str((deps.settings or {}).get("model") or "")
-    if deps.model is not None:
-        return name
-    return name or load_llm_config().model
+    return kernel_model(deps)[1]
 
 
 def resume_refusal(
@@ -393,6 +414,8 @@ def resume_refusal(
     layout: ProjectLayout | None,
     session_id: str,
     run_id: str,
+    *,
+    tools: ToolRegistry | None = None,
 ) -> str:
     """Why this interrupted run cannot continue here, or an empty string.
 
@@ -412,7 +435,9 @@ def resume_refusal(
     current = RunFingerprint.from_mapping(
         fingerprint,
         model=_session_model_name(deps),
-        toolset=toolset_name(session_tools(deps, layout)),
+        toolset=toolset_name(
+            tools if tools is not None else session_tools(deps, layout)
+        ),
         config_hash=config_digest(
             fingerprint.get("configHash", ""), projection.sections
         ),
