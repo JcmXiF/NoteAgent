@@ -17,7 +17,13 @@ from noteagent.agent.jobs import JobBusyError
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
 from noteagent.agent.projection import project
 from noteagent.agent.retry import RetryingModel
-from noteagent.agent.runtime import AgentRuntime
+from noteagent.agent.runtime import (
+    AgentRuntime,
+    EventSink,
+    RunRequest,
+    RunResult,
+    WaitState,
+)
 from noteagent.agent.run_marker import (
     RunFingerprint,
     config_digest,
@@ -34,6 +40,7 @@ from noteagent.llm.config import load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.pipeline.lock import ProjectBusy
 from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
@@ -42,6 +49,7 @@ from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
+from noteagent.writing.state import WritingStateStore
 from noteagent.writing.tools import (
     compose_wiki_tool,
     get_state_tool,
@@ -283,6 +291,47 @@ def rag_backend(
     return backend
 
 
+class WritingLeaseRuntime:
+    """A kernel run releases the writing state's lease when it ends.
+
+    The lease is the state's ``writer`` field, not the project lock: the run's
+    own tools take and release that lock for every state write, so the run
+    cannot hold it for its whole length. The first writing tool takes the lease
+    (a run that never writes the state creates nothing); this wrapper releases
+    it at the end. A person's save sees the lease and refuses; a crashed run's
+    lease goes stale after ``WRITER_TTL_S``.
+    """
+
+    def __init__(
+        self, inner: AgentRuntime, store: WritingStateStore
+    ) -> None:
+        self._inner = inner
+        self._store = store
+
+    def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
+        session_id = str(getattr(request, "session_id", "") or "")
+        try:
+            return self._inner.execute(request, sink)
+        finally:
+            try:
+                self._store.release_writer(session_id)
+            except ProjectBusy:
+                # A holder we cannot reach leaves only the stale lease behind.
+                pass
+
+    def cancel(self, session_id: str) -> None:
+        self._inner.cancel(session_id)
+
+    def wait_state(self, session_id: str) -> WaitState | None:
+        return self._inner.wait_state(session_id)
+
+    def is_busy(self, session_id: str) -> bool:
+        return self._inner.is_busy(session_id)
+
+    def compact(self, session_id: str, instructions: str = "") -> bool:
+        return self._inner.compact(session_id, instructions)
+
+
 def session_runtime(
     deps: AppDeps,
     store: SessionStore,
@@ -307,7 +356,7 @@ def session_runtime(
         if layout is not None
         else {}
     )
-    return KernelRuntime(
+    runtime: AgentRuntime = KernelRuntime(
         model=model,
         sessions=store,
         tools=session_tools(deps, layout),
@@ -323,6 +372,11 @@ def session_runtime(
         # Non-secret digests a resume can compare; the kernel only records them.
         fingerprint=fingerprint,
     )
+    if layout is not None:
+        runtime = WritingLeaseRuntime(
+            runtime, WritingStateStore(layout, clock=deps.clock)
+        )
+    return runtime
 
 
 def _session_model_name(deps: AppDeps) -> str:

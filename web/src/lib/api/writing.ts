@@ -1,4 +1,9 @@
-import { getJson, projectPath } from "@/lib/api/client";
+import {
+  getJson,
+  postJson,
+  postSse,
+  projectPath,
+} from "@/lib/api/client";
 
 export type WritingWriter = {
   kind?: string;
@@ -90,4 +95,82 @@ export function fetchWritingState(
   project: string,
 ): Promise<WritingStatePayload> {
   return getJson<WritingStatePayload>(projectPath(project, "writing/state"));
+}
+
+/** The four areas a person may edit, as the save sends them. */
+export type WritingChanges = {
+  searches?: WritingSearch[];
+  selectedPages?: WritingSelectedPage[];
+  frames?: WritingFrame[];
+  draft?: { pages?: WritingDraftPage[] };
+};
+
+export type WritingArchive = {
+  id?: string;
+  stateVersion?: number;
+  archivedAt?: string;
+  searches?: number;
+  selectedPages?: number;
+  frames?: number;
+  draftPages?: number;
+};
+
+export type WritingArchiveList = { items?: WritingArchive[] };
+
+export function saveWritingState(
+  project: string,
+  baseVersion: number,
+  changes: WritingChanges,
+): Promise<WritingStatePayload> {
+  return postJson<WritingStatePayload>(
+    projectPath(project, "writing/state"),
+    { baseVersion, changes },
+  );
+}
+
+export function fetchWritingArchives(
+  project: string,
+): Promise<WritingArchiveList> {
+  return getJson<WritingArchiveList>(
+    projectPath(project, "writing/archives"),
+  );
+}
+
+export function archiveWritingState(
+  project: string,
+): Promise<WritingArchiveList> {
+  return postJson<WritingArchiveList>(
+    projectPath(project, "writing/archive"),
+  );
+}
+
+export function activateWritingArchive(
+  project: string,
+  archiveId: string,
+): Promise<WritingStatePayload> {
+  return postJson<WritingStatePayload>(
+    projectPath(
+      project,
+      `writing/archives/${encodeURIComponent(archiveId)}/activate`,
+    ),
+  );
+}
+
+/**
+ * The state's live read: every version change calls ``onState``.
+ *
+ * It is the same SSE reader as every other stream (one stall/abort policy),
+ * over a POST so the request carries the project path. The stream has no
+ * `done`; aborting the signal closes it.
+ */
+export function streamWritingState(
+  project: string,
+  onState: (stateVersion: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return postSse<void>(
+    projectPath(project, "writing/events"),
+    {},
+    { signal, onState },
+  );
 }

@@ -83,7 +83,37 @@
       "frames": "Frames",
       "draft": "Draft"
     },
-    "draftCount": "{{pages}} pages, {{sections}} sections"
+    "draftCount": "{{pages}} pages, {{sections}} sections",
+    "save": "Save",
+    "saving": "Saving…",
+    "dirty": "Unsaved edits",
+    "saveError": "The writing state could not be saved.",
+    "discardUnsaved": "You have unsaved edits. Discard them?",
+    "reload": "Reload",
+    "notice": {
+      "busy": "A run is holding the writing state. Save when it ends.",
+      "conflict": "The writing state changed after you loaded it. Reload to compare; your edits are kept.",
+      "remote": "The writing state changed on the server while you edited."
+    },
+    "archive": "Archive current",
+    "archives": "Archived states",
+    "archivesEmpty": "No archived states. Archive the current one to start a new topic.",
+    "archiveError": "The writing state's archives could not be changed.",
+    "archiveSummary": "v{{version}} · {{searches}} searches · {{pages}} pages · {{frames}} frames · {{draft}} draft pages",
+    "activate": "Activate",
+    "edited": "Edited",
+    "unsaved": "You have unsaved writing-state edits. Save them first if the agent should see them. Send anyway?",
+    "unsavedBusy": "The agent is running and cannot see your unsaved writing-state edits.",
+    "edit": {
+      "hitTitle": "Hit title",
+      "hitUrl": "Hit URL",
+      "hitSnippet": "Hit snippet",
+      "pageTitle": "Page title",
+      "frameBlocks": "Block ids, comma separated",
+      "sectionHeading": "Section heading",
+      "sectionBody": "Section body",
+      "remove": "Remove"
+    }
   },
   "nav": {
     "toggleLeft": "Show the sidebar",
@@ -1537,6 +1567,12 @@
       },
       "job": {
         "busy": "Another job is already running. Wait for it to finish."
+      },
+      "state": {
+        "busy": "A run is holding the writing state. Try again when it ends.",
+        "conflict": "The writing state changed since you read it. Read it again.",
+        "invalid": "That writing-state change is not valid.",
+        "archiveNotFound": "That archived writing state does not exist."
       },
       "pipeline": {
         "busy": "Another pipeline run is already active. Wait for it to finish.",

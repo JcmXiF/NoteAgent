@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
-from noteagent.agent.clock import Clock, SystemClock
+from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.io.atomic import write_bytes_atomic, write_text_atomic
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
@@ -32,6 +34,12 @@ STATE_WRITER = "writing-state"
 #: turn a successful search into a lost one. A long holder still gets a refusal.
 _LOCK_ATTEMPTS = 3
 _LOCK_WAIT_S = 0.05
+
+#: A run's writer lease is presumed dead after this long without a release.
+WRITER_TTL_S = 15 * 60
+
+#: The archived state file names this build writes: the archived stateVersion.
+_ARCHIVE_ID = re.compile(r"\A[0-9]{6,}\Z")
 
 #: The statuses and failure kinds a selected page may carry. The wire is JSON,
 #: so a hand-edited state is checked here rather than trusted.
@@ -51,6 +59,16 @@ class WritingStateError(RuntimeError):
 
 class WritingStateConflict(RuntimeError):
     """The caller worked from an older state than the one on disk."""
+
+    def __init__(
+        self, message: str, *, current_version: int = 0
+    ) -> None:
+        super().__init__(message)
+        self.current_version = current_version
+
+
+class WritingStateBusy(RuntimeError):
+    """An agent or node run holds the state, so a person cannot save."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +167,163 @@ class WritingStateStore:
         disk; a save built on an older state is refused with
         ``WritingStateConflict`` instead of silently overwriting it.
         """
+        with self._locked(owner):
+            current = self.load()
+            if state.state_version != current.state_version:
+                raise WritingStateConflict(
+                    f"the writing state is at version "
+                    f"{current.state_version}; the caller read version "
+                    f"{state.state_version}",
+                    current_version=current.state_version,
+                )
+            return self._write_locked(current, state)
+
+    def save_human(
+        self, base_version: int, changes: Mapping[str, object]
+    ) -> WritingState:
+        """Apply a person's edits; refuse while a run holds the state."""
+        with self._locked(STATE_WRITER):
+            current = self.load()
+            self._refuse_busy(current)
+            if current.state_version != base_version:
+                raise WritingStateConflict(
+                    f"the writing state is at version "
+                    f"{current.state_version}; the caller read version "
+                    f"{base_version}",
+                    current_version=current.state_version,
+                )
+            return self._write_locked(
+                current,
+                _human_edit(current, changes, self._clock),
+            )
+
+    def ensure_writer(self, kind: str, ident: str) -> WritingState:
+        """Take the lease for a run's write, renewing it while the run lives.
+
+        The renewal is a heartbeat: a long run that keeps writing keeps its
+        ``since`` fresh, so only a run that stopped writing for the whole TTL
+        can be taken over.
+        """
+        with self._locked(STATE_WRITER):
+            current = self.load()
+            writer = current.writer or {}
+            if (
+                _writer_active(current.writer, self._now())
+                and str(writer.get("kind")) == kind
+                and str(writer.get("id")) == ident
+            ):
+                return self._write_locked(
+                    current,
+                    replace(
+                        current,
+                        writer={
+                            **writer,
+                            "since": iso_timestamp(self._clock),
+                        },
+                    ),
+                )
+            if _writer_active(current.writer, self._now()):
+                raise WritingStateBusy(
+                    _busy_message(current.writer)
+                )
+            next_state = replace(
+                current,
+                writer={
+                    "kind": kind,
+                    "id": ident,
+                    "since": iso_timestamp(self._clock),
+                },
+            )
+            return self._write_locked(current, next_state)
+
+    def release_writer(self, ident: str) -> WritingState:
+        """Release the lease when this run still holds it."""
+        current = self.load()
+        writer = current.writer
+        if not isinstance(writer, Mapping):
+            return current
+        if str(writer.get("id")) != ident:
+            return current
+        with self._locked(STATE_WRITER):
+            current = self.load()
+            writer = current.writer
+            if not isinstance(writer, Mapping):
+                return current
+            if str(writer.get("id")) != ident:
+                return current
+            return self._write_locked(
+                current, replace(current, writer=None)
+            )
+
+    def archives(self) -> list[dict[str, object]]:
+        """The archived states, by name, with a small summary."""
+        folder = self._archive_dir
+        if not folder.is_dir():
+            return []
+        items: list[dict[str, object]] = []
+        for path in sorted(folder.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, Mapping):
+                continue
+            try:
+                state = WritingState.from_dict(raw)
+            except WritingStateError:
+                continue
+            items.append(
+                {
+                    "id": path.stem,
+                    "stateVersion": state.state_version,
+                    "archivedAt": str(raw.get("archivedAt") or ""),
+                    "searches": len(state.searches),
+                    "selectedPages": len(state.selected_pages),
+                    "frames": len(state.frames),
+                    "draftPages": len(draft_pages(state.draft)),
+                }
+            )
+        return items
+
+    def archive(self) -> list[dict[str, object]]:
+        """Put the current state away and continue from an empty one."""
+        with self._locked(STATE_WRITER):
+            current = self.load()
+            self._refuse_busy(current)
+            if not _is_empty(current):
+                self._archive_current(current)
+            self._write_locked(current, WritingState())
+        return self.archives()
+
+    def activate(self, archive_id: str) -> WritingState:
+        """Make an archived state current again, putting the current one away."""
+        if _ARCHIVE_ID.fullmatch(archive_id or "") is None:
+            raise ValueError(f"no archived state: {archive_id}")
+        path = self._archive_dir / f"{archive_id}.json"
+        if not path.is_file():
+            raise ValueError(f"no archived state: {archive_id}")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            raise WritingStateError(
+                f"the archived state cannot be read: {err}"
+            ) from err
+        restored = WritingState.from_dict(raw)
+        with self._locked(STATE_WRITER):
+            current = self.load()
+            self._refuse_busy(current)
+            if not _is_empty(current):
+                self._archive_current(current)
+            return self._write_locked(
+                current, replace(restored, writer=None)
+            )
+
+    @property
+    def _archive_dir(self) -> Path:
+        return self._layout.writing / "archive"
+
+    @contextmanager
+    def _locked(self, owner: str) -> Iterator[None]:
         lock = ProjectLock(self._layout.project_lock, clock=self._clock)
         for attempt in range(_LOCK_ATTEMPTS):
             try:
@@ -159,28 +334,52 @@ class WritingStateStore:
                     raise
                 time.sleep(_LOCK_WAIT_S)
         try:
-            current = self.load()
-            if state.state_version != current.state_version:
-                raise WritingStateConflict(
-                    f"the writing state is at version "
-                    f"{current.state_version}; the caller read version "
-                    f"{state.state_version}"
-                )
-            next_state = replace(
-                state, state_version=current.state_version + 1
-            )
-            path = self._layout.writing_state
-            path.parent.mkdir(parents=True, exist_ok=True)
-            write_text_atomic(
-                path,
-                json.dumps(
-                    next_state.to_dict(), ensure_ascii=False, indent=2
-                )
-                + "\n",
-            )
-            return next_state
+            yield
         finally:
             lock.release(owner)
+
+    def _write_locked(
+        self, current: WritingState, state: WritingState
+    ) -> WritingState:
+        next_state = replace(
+            state, state_version=current.state_version + 1
+        )
+        path = self._layout.writing_state
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(
+            path,
+            json.dumps(
+                next_state.to_dict(), ensure_ascii=False, indent=2
+            )
+            + "\n",
+        )
+        return next_state
+
+    def _refuse_busy(self, state: WritingState) -> None:
+        if not _writer_active(state.writer, self._now()):
+            return
+        raise WritingStateBusy(_busy_message(state.writer))
+
+    def _now(self) -> datetime:
+        moment = self._clock.now()
+        return (
+            moment
+            if moment.tzinfo is not None
+            else moment.replace(tzinfo=timezone.utc)
+        )
+
+    def _archive_current(self, state: WritingState) -> None:
+        folder = self._archive_dir
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{state.state_version:06d}.json"
+        payload = {
+            **state.to_dict(),
+            "archivedAt": iso_timestamp(self._clock),
+        }
+        write_text_atomic(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
 
     def append_search(self, row: Mapping[str, object]) -> WritingState:
         """Append one search row, retrying once if another writer moved first."""
@@ -250,6 +449,8 @@ class WritingStateStore:
         wiki_file: str,
         sections: Sequence[Mapping[str, object]],
         base_version: int,
+        *,
+        overwrite: bool = False,
     ) -> tuple[
         WritingState, Mapping[str, object], tuple[Mapping[str, object], ...]
     ]:
@@ -257,9 +458,11 @@ class WritingStateStore:
 
         An existing section id is replaced where it stands (its ``baseVersion``
         must match); a new id is inserted after its ``after`` anchor or
-        appended. Frame ids are resolved here, so the citation pins the frame
-        version and block ids the page was written from. The page's version
-        moves on by one, and a caller built on an older page is refused.
+        appended. A section a person edited is refused unless the caller passes
+        ``overwrite`` after re-reading it. Frame ids are resolved here, so the
+        citation pins the frame version and block ids the page was written
+        from. The page's version moves on by one, and a caller built on an
+        older page is refused.
         """
         key = wiki_file.strip()
         if not key:
@@ -344,6 +547,11 @@ class WritingStateStore:
                             f"{old_version}; the caller read "
                             f"{base_section}"
                         )
+                    if old.get("humanEdited") and not overwrite:
+                        raise ValueError(
+                            f"section {section_id} was edited by a "
+                            "person; pass overwrite to replace it"
+                        )
                     new = {
                         **old,
                         "heading": heading,
@@ -351,6 +559,7 @@ class WritingStateStore:
                         "citations": citations,
                         "version": old_version + 1,
                         "stale": False,
+                        "humanEdited": False,
                     }
                     current_sections[existing] = new
                 else:
@@ -770,6 +979,250 @@ def _material_suffix(material: str) -> str:
     return suffix if _SOURCE_SUFFIX.fullmatch(suffix) else ".bin"
 
 
+def _busy_message(writer: Mapping[str, object] | None) -> str:
+    record = writer or {}
+    return (
+        "the writing state is held by "
+        f"{record.get('kind') or 'a run'} "
+        f"{record.get('id') or ''}".rstrip()
+    )
+
+
+def _writer_active(
+    writer: Mapping[str, object] | None, now: datetime
+) -> bool:
+    """Whether a claimed writer still holds the state, or its lease went stale."""
+    if not isinstance(writer, Mapping):
+        return False
+    since = str(writer.get("since") or "")
+    if not since:
+        return True
+    try:
+        moment = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds() < WRITER_TTL_S
+
+
+def _is_empty(state: WritingState) -> bool:
+    return not (
+        state.searches
+        or state.selected_pages
+        or state.frames
+        or draft_pages(state.draft)
+    )
+
+
+def _citations_key(section: Mapping[str, object]) -> tuple[object, ...]:
+    raw = section.get("citations")
+    items = raw if isinstance(raw, list) else []
+    keys: list[tuple[object, ...]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        version = item.get("frameVersion")
+        keys.append(
+            (
+                str(item.get("frameId") or ""),
+                version if isinstance(version, int) else 0,
+                tuple(
+                    str(block) for block in item.get("blockIds") or []
+                ),
+            )
+        )
+    return tuple(keys)
+
+
+def _section_changed(
+    old: Mapping[str, object], new: Mapping[str, object]
+) -> bool:
+    return (
+        str(old.get("heading") or "") != str(new.get("heading") or "")
+        or str(old.get("body") or "") != str(new.get("body") or "")
+        or _citations_key(old) != _citations_key(new)
+    )
+
+
+def _row_changed(
+    old: Mapping[str, object],
+    new: Mapping[str, object],
+    fields: Sequence[str],
+) -> bool:
+    return any(old.get(field) != new.get(field) for field in fields)
+
+
+def _bump_changed(
+    old_rows: Sequence[Mapping[str, object]],
+    new_rows: Sequence[Mapping[str, object]],
+    fields: Sequence[str],
+) -> tuple[Mapping[str, object], ...]:
+    previous = {str(row.get("id")): row for row in old_rows}
+    out: list[Mapping[str, object]] = []
+    for row in new_rows:
+        old = previous.get(str(row.get("id")))
+        if old is None:
+            out.append(
+                {**row, "version": max(1, row_version(row))}
+            )
+        elif _row_changed(old, row, fields):
+            out.append(
+                {**row, "version": row_version(old) + 1}
+            )
+        else:
+            out.append({**row, "version": row_version(old)})
+    return tuple(out)
+
+
+def _bump_frames(
+    old_rows: Sequence[Mapping[str, object]],
+    new_rows: Sequence[Mapping[str, object]],
+    clock: Clock,
+) -> tuple[Mapping[str, object], ...]:
+    """Frames a person touched become theirs, with a fresh version and stamp."""
+    previous = {str(row.get("id")): row for row in old_rows}
+    stamp = iso_timestamp(clock)
+    out: list[Mapping[str, object]] = []
+    for row in new_rows:
+        old = previous.get(str(row.get("id")))
+        if old is None:
+            out.append(
+                {
+                    **row,
+                    "version": max(1, row_version(row)),
+                    "source": "human",
+                    "updatedAt": stamp,
+                }
+            )
+        elif _row_changed(old, row, ("pageId", "blockIds")):
+            out.append(
+                {
+                    **row,
+                    "version": row_version(old) + 1,
+                    "source": "human",
+                    "updatedAt": stamp,
+                }
+            )
+        else:
+            out.append(
+                {
+                    **row,
+                    "version": row_version(old),
+                    "source": str(old.get("source") or "agent"),
+                    "updatedAt": str(old.get("updatedAt") or ""),
+                }
+            )
+    return tuple(out)
+
+
+def _human_edit(
+    state: WritingState,
+    changes: Mapping[str, object],
+    clock: Clock,
+) -> WritingState:
+    """Apply one person's change set, marking what they touched."""
+    raw = dict(changes)
+    searches = (
+        _items(raw["searches"], "searches")
+        if "searches" in raw
+        else state.searches
+    )
+    selected = (
+        _selected_pages(raw["selectedPages"])
+        if "selectedPages" in raw
+        else state.selected_pages
+    )
+    frames = (
+        _frames(raw["frames"])
+        if "frames" in raw
+        else state.frames
+    )
+    draft = (
+        _draft(raw["draft"]) if "draft" in raw else state.draft
+    )
+    pages: list[Mapping[str, object]] = []
+    for page in draft_pages(draft):
+        wiki_file = str(page.get("wikiFile") or "")
+        old_page = draft_page_for(state.draft, wiki_file)
+        old_sections = (
+            {
+                str(section.get("id")): section
+                for section in draft_sections(old_page)
+            }
+            if old_page is not None
+            else {}
+        )
+        sections: list[Mapping[str, object]] = []
+        seen: set[str] = set()
+        page_changed = old_page is None
+        for section in draft_sections(page):
+            item = dict(section)
+            ident = str(item.get("id") or "")
+            if ident in seen:
+                raise ValueError(f"duplicate section id: {ident}")
+            seen.add(ident)
+            old = old_sections.get(ident)
+            if old is None or _section_changed(old, item):
+                item["version"] = (
+                    max(1, row_version(old) + 1)
+                    if old is not None
+                    else max(1, row_version(item))
+                )
+                item["humanEdited"] = True
+                page_changed = True
+            else:
+                item["version"] = row_version(old)
+                item["humanEdited"] = bool(
+                    old.get("humanEdited", False)
+                )
+            sections.append(item)
+        old_order = (
+            [str(item.get("id")) for item in draft_sections(old_page)]
+            if old_page is not None
+            else []
+        )
+        new_order = [str(item.get("id")) for item in sections]
+        if old_order != new_order:
+            page_changed = True
+        updated = {**page, "sections": sections}
+        if old_page is not None:
+            if not str(updated.get("title") or "").strip():
+                updated["title"] = old_page.get("title", "")
+            # Publication bookkeeping belongs to write_wiki, not to a save.
+            updated["writtenAt"] = old_page.get("writtenAt", "")
+            updated["effectIds"] = list(
+                old_page.get("effectIds") or []
+            )
+        else:
+            updated["writtenAt"] = ""
+            updated["effectIds"] = []
+        if old_page is None:
+            updated["version"] = max(1, row_version(page))
+            updated["status"] = "draft"
+        elif page_changed:
+            updated["version"] = row_version(old_page) + 1
+            updated["status"] = "draft"
+        else:
+            updated["version"] = row_version(old_page)
+            updated["status"] = str(
+                old_page.get("status") or "draft"
+            )
+        pages.append(updated)
+    return replace(
+        state,
+        writer=None,
+        searches=searches,
+        selected_pages=_bump_changed(
+            state.selected_pages,
+            selected,
+            ("title", "url", "status"),
+        ),
+        frames=_bump_frames(state.frames, frames, clock),
+        draft={"pages": pages},
+    )
+
+
 def row_version(row: Mapping[str, object]) -> int:
     """A mapping's version, or 0 when it has none; an invalid value reads as 0."""
     value = row.get("version")
@@ -879,8 +1332,10 @@ __all__ = [
     "PAGE_STATUSES",
     "STATE_SCHEMA_VERSION",
     "STATE_WRITER",
+    "WRITER_TTL_S",
     "WRITING_ID",
     "WritingState",
+    "WritingStateBusy",
     "WritingStateConflict",
     "WritingStateError",
     "WritingStateStore",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -95,18 +96,90 @@ class WritingComposeTests(unittest.TestCase):
         )
         return str(json.loads(result.content)["frameId"])
 
-    def compose(self, tools, sections, *, base: int = 0, wiki: str = WIKI_FILE):
+    def compose(
+        self,
+        tools,
+        sections,
+        *,
+        base: int = 0,
+        wiki: str = WIKI_FILE,
+        overwrite: bool = False,
+    ):
+        body = {
+            "wikiFile": wiki,
+            "baseDraftVersion": base,
+            "sections": sections,
+        }
+        if overwrite:
+            body["overwrite"] = True
         return tools.dispatch(
             "compose_wiki",
-            json.dumps(
-                {
-                    "wikiFile": wiki,
-                    "baseDraftVersion": base,
-                    "sections": sections,
-                }
-            ),
+            json.dumps(body),
             ToolContext("s1"),
         )
+
+    def test_a_person_edited_section_is_refused_until_overwrite(self) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "旧正文",
+                    "citations": [frame_id],
+                }
+            ],
+        )
+        store = WritingStateStore(self.layout)
+        state = store.load()
+        page = dict(draft_pages(state.draft)[0])
+        sections = [dict(section) for section in page["sections"]]
+        sections[0] = {
+            **sections[0],
+            "body": "人工改过",
+            "version": 2,
+            "humanEdited": True,
+        }
+        page["sections"] = sections
+        page["version"] = 2
+        store.save(replace(state, draft={"pages": [page]}))
+
+        refused = self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "新正文",
+                    "citations": [frame_id],
+                }
+            ],
+            base=2,
+        )
+
+        self.assertTrue(refused.meta.get("error"))
+        self.assertIn("edited by a person", refused.content)
+        applied = self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "新正文",
+                    "citations": [frame_id],
+                }
+            ],
+            base=2,
+            overwrite=True,
+        )
+        self.assertFalse(applied.meta.get("error"), applied.content)
+        saved = draft_sections(
+            draft_pages(WritingStateStore(self.layout).load().draft)[0]
+        )[0]
+        self.assertEqual(saved["body"], "新正文")
+        self.assertFalse(saved["humanEdited"])
 
     def test_a_section_is_composed_into_a_new_draft(self) -> None:
         tools = self.tools()

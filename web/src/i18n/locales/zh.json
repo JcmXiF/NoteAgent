@@ -83,7 +83,37 @@
       "frames": "框",
       "draft": "草稿"
     },
-    "draftCount": "{{pages}} 页，{{sections}} 段"
+    "draftCount": "{{pages}} 页，{{sections}} 段",
+    "save": "保存",
+    "saving": "保存中…",
+    "dirty": "未保存",
+    "saveError": "写作状态保存失败。",
+    "discardUnsaved": "有未保存的修改，要丢弃吗？",
+    "reload": "重新加载",
+    "notice": {
+      "busy": "有运行正在占用写作状态，结束后再保存。",
+      "conflict": "写作状态在你加载后有变化。重新加载以对比；你的修改还在。",
+      "remote": "编辑期间服务端的写作状态有变化。"
+    },
+    "archive": "归档当前",
+    "archives": "已归档状态",
+    "archivesEmpty": "还没有归档。归档当前状态后可以开始新主题。",
+    "archiveError": "写作状态的归档操作失败。",
+    "archiveSummary": "v{{version}} · 搜索 {{searches}} · 选页 {{pages}} · 框 {{frames}} · 草稿 {{draft}}",
+    "activate": "切换",
+    "edited": "已人工修改",
+    "unsaved": "写作状态有未保存的修改。要 agent 看到的话请先保存；仍要发送吗？",
+    "unsavedBusy": "agent 正在运行，看不到你未保存的写作状态修改。",
+    "edit": {
+      "hitTitle": "命中标题",
+      "hitUrl": "命中链接",
+      "hitSnippet": "命中摘要",
+      "pageTitle": "页面标题",
+      "frameBlocks": "段 id，用逗号分隔",
+      "sectionHeading": "段落标题",
+      "sectionBody": "段落正文",
+      "remove": "删除"
+    }
   },
   "nav": {
     "toggleLeft": "显示侧栏",
@@ -1537,6 +1567,12 @@
       },
       "job": {
         "busy": "另一个作业正在运行，请等它结束。"
+      },
+      "state": {
+        "busy": "有运行正在占用写作状态，结束后再试。",
+        "conflict": "写作状态在你读取后有变化，请重新读取。",
+        "invalid": "这项写作状态修改不合法。",
+        "archiveNotFound": "找不到这个已归档的写作状态。"
       },
       "pipeline": {
         "busy": "另一个流水线正在运行，请等它结束。",

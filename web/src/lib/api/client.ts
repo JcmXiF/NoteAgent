@@ -321,6 +321,8 @@ export type SseHandlers = {
    * finishes it. The job starts in that interface, never here.
    */
   onWait?: (wait: WaitPayload) => void;
+  /** `state`: the writing state's version moved; the panel reads it again. */
+  onState?: (stateVersion: number) => void;
   /** Aborting this stops the reader; the backend cancels before its next model call. */
   signal?: AbortSignal;
   /** Message used when the stream ends without a `done` or `error` event. */
@@ -406,6 +408,7 @@ export async function postSse<T>(
     onTokenReset,
     onObservation,
     onWait,
+    onState,
     signal,
     emptyError = fallbackError,
   } = handlers;
@@ -454,6 +457,10 @@ export async function postSse<T>(
           } else if (parsed.event === "wait") {
             if (typeof payload.waitId === "string" && payload.waitId) {
               onWait?.(payload as unknown as WaitPayload);
+            }
+          } else if (parsed.event === "state") {
+            if (typeof payload.stateVersion === "number") {
+              onState?.(payload.stateVersion);
             }
           } else if (parsed.event === "token") {
             // A retraction carries no text of its own: it says the text already sent

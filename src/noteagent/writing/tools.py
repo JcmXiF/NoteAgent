@@ -17,7 +17,13 @@ from noteagent.acquire.write_raw import (
 )
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.runtime import RunCancelled
-from noteagent.agent.tools import Diagnostic, OutputLimits, ToolResult, ToolSpec
+from noteagent.agent.tools import (
+    Diagnostic,
+    OutputLimits,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+)
 from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.layout import ProjectLayout
@@ -85,10 +91,12 @@ _SELECT_FRAME_DESCRIPTION = (
 _COMPOSE_WIKI_DESCRIPTION = (
     "Compose structured sections into the wiki draft. Each section has a stable "
     "id, heading, Markdown body and frame ids as citations; an existing id is "
-    "replaced in place, a new id is inserted after `after` or appended. Pass the "
-    "draft page's current version as baseDraftVersion (0 for a new page). The "
-    "draft is state only; publishing is a later step. Read the page list with "
-    "get_state({section: 'draft'}) and one section with section: 'section'."
+    "replaced in place, a new id is inserted after `after` or appended. A "
+    "section a person edited is refused unless `overwrite` is true after you "
+    "read it again. Pass the draft page's current version as baseDraftVersion "
+    "(0 for a new page). The draft is state only; publishing is a later step. "
+    "Read the page list with get_state({section: 'draft'}) and one section "
+    "with section: 'section'."
 )
 
 _WRITE_WIKI_DESCRIPTION = (
@@ -97,6 +105,17 @@ _WRITE_WIKI_DESCRIPTION = (
     "returns the committed effect ids. The same draftVersion is published once; "
     "a newer draft has a higher version."
 )
+
+
+def _take_lease(
+    layout: ProjectLayout,
+    context: ToolContext,
+    moment: Clock,
+) -> None:
+    """A run's first state write takes the lease; its runtime releases it."""
+    WritingStateStore(layout, clock=moment).ensure_writer(
+        "agent", context.session_id
+    )
 
 
 def get_state_tool(layout: ProjectLayout) -> ToolSpec:
@@ -358,7 +377,8 @@ def web_search_tool(
     minted = ids or UuidIds()
     store = WritingStateStore(layout, clock=moment)
 
-    def web_search(arguments, _context) -> ToolResult:
+    def web_search(arguments, context) -> ToolResult:
+        _take_lease(layout, context, moment)
         query = " ".join(str(arguments["query"]).split())
         search_id = minted.new_id("search")
         created_at = iso_timestamp(moment)
@@ -447,7 +467,8 @@ def select_page_tool(
     minted = ids or UuidIds()
     store = WritingStateStore(layout, clock=moment)
 
-    def select_page(arguments, _context) -> ToolResult:
+    def select_page(arguments, context) -> ToolResult:
+        _take_lease(layout, context, moment)
         hit_id = str(arguments["hitId"]).strip()
         state = store.load()
         hit = _find_hit(state, hit_id)
@@ -654,7 +675,8 @@ def select_frame_tool(
     minted = ids or UuidIds()
     store = WritingStateStore(layout, clock=moment)
 
-    def select_frame(arguments, _context) -> ToolResult:
+    def select_frame(arguments, context) -> ToolResult:
+        _take_lease(layout, context, moment)
         page_id = str(arguments["pageId"]).strip()
         block_ids = [
             str(item).strip()
@@ -747,7 +769,8 @@ def compose_wiki_tool(
     moment = clock or SystemClock()
     store = WritingStateStore(layout, clock=moment)
 
-    def compose_wiki(arguments, _context) -> ToolResult:
+    def compose_wiki(arguments, context) -> ToolResult:
+        _take_lease(layout, context, moment)
         wiki_file = str(arguments["wikiFile"]).strip()
         base_version = arguments.get("baseDraftVersion", 0)
         if (
@@ -784,7 +807,10 @@ def compose_wiki_tool(
                 }
             )
         _saved, page, changed = store.compose_draft(
-            wiki_file, sections, base_version
+            wiki_file,
+            sections,
+            base_version,
+            overwrite=bool(arguments.get("overwrite", False)),
         )
         return ToolResult(
             content=json.dumps(
@@ -822,6 +848,13 @@ def compose_wiki_tool(
                     "type": "integer",
                     "minimum": 0,
                     "description": "The draft version the caller read; 0 for a new page",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": (
+                        "Replace a section a person edited; read it again "
+                        "before setting this"
+                    ),
                 },
                 "sections": {
                     "type": "array",
@@ -889,6 +922,7 @@ def write_wiki_tool(
     moment = clock or SystemClock()
 
     def write_wiki(arguments, context) -> ToolResult:
+        _take_lease(layout, context, moment)
         wiki_file = str(arguments["wikiFile"]).strip()
         draft_version = arguments["draftVersion"]
         if (

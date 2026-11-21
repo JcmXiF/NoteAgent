@@ -110,6 +110,13 @@ from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
 from noteagent.api.writing import writing_state_payload
+from noteagent.api.writing_events import iter_writing_events
+from noteagent.writing.state import (
+    WritingStateBusy,
+    WritingStateConflict,
+    WritingStateError,
+    WritingStateStore,
+)
 from noteagent.api.session_access import (
     active_layout,
     cancel_session,
@@ -434,6 +441,18 @@ class AcquireSaveBody(BaseModel):
 
 class ProjectFileDeleteBody(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
+
+
+class WritingChangesBody(BaseModel):
+    searches: list[dict[str, object]] | None = None
+    selectedPages: list[dict[str, object]] | None = None
+    frames: list[dict[str, object]] | None = None
+    draft: dict[str, object] | None = None
+
+
+class WritingSaveBody(BaseModel):
+    baseVersion: int = Field(..., ge=0)
+    changes: WritingChangesBody
 
 
 class RevisionInboxIgnoreBody(BaseModel):
@@ -1578,11 +1597,112 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Everything waiting on the reader, counted in one place."""
         return attention_payload(require_project_layout(name), check=check)
 
+    def _writing_store(name: str) -> WritingStateStore:
+        return WritingStateStore(
+            require_project_layout(name), clock=deps.clock
+        )
+
+    def _state_busy(err: Exception) -> CodedHTTPException:
+        return CodedHTTPException(409, str(err), code="state.busy")
+
     @app.get("/api/projects/{name}/writing/state")
     @app.get("/api/v1/projects/{name}/writing/state")
     def get_writing_state(name: str) -> dict[str, object]:
         """The project's one writing state, or the empty state before a write."""
         return writing_state_payload(require_project_layout(name))
+
+    @app.post("/api/projects/{name}/writing/state")
+    @app.post("/api/v1/projects/{name}/writing/state")
+    def save_writing_state(
+        name: str, body: WritingSaveBody
+    ) -> dict[str, object]:
+        """Apply a person's edits to the project's writing state."""
+        store = _writing_store(name)
+        try:
+            state = store.save_human(
+                body.baseVersion,
+                body.changes.model_dump(exclude_none=True),
+            )
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except WritingStateConflict as err:
+            raise CodedHTTPException(
+                409,
+                str(err),
+                code="state.conflict",
+                params={
+                    "stateVersion": str(
+                        getattr(err, "current_version", 0)
+                    )
+                },
+            ) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except (ValueError, WritingStateError) as err:
+            raise CodedHTTPException(
+                400, str(err), code="state.invalid"
+            ) from err
+        return state.to_dict()
+
+    @app.get("/api/projects/{name}/writing/archives")
+    @app.get("/api/v1/projects/{name}/writing/archives")
+    def list_writing_archives(name: str) -> dict[str, object]:
+        """The archived states, with enough to tell them apart."""
+        return {"items": _writing_store(name).archives()}
+
+    @app.post("/api/projects/{name}/writing/archive")
+    @app.post("/api/v1/projects/{name}/writing/archive")
+    def archive_writing_state(name: str) -> dict[str, object]:
+        """Put the current state away and continue from an empty one."""
+        try:
+            items = _writing_store(name).archive()
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        return {"items": items}
+
+    @app.post(
+        "/api/projects/{name}/writing/archives/{archive_id}/activate"
+    )
+    @app.post(
+        "/api/v1/projects/{name}/writing/archives/{archive_id}/activate"
+    )
+    def activate_writing_archive(
+        name: str, archive_id: str
+    ) -> dict[str, object]:
+        """Make an archived state current again."""
+        try:
+            state = _writing_store(name).activate(archive_id)
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                404, str(err), code="state.archiveNotFound"
+            ) from err
+        except WritingStateError as err:
+            raise CodedHTTPException(
+                422, str(err), code="state.invalid"
+            ) from err
+        return state.to_dict()
+
+    @app.get("/api/projects/{name}/writing/events")
+    @app.get("/api/v1/projects/{name}/writing/events")
+    @app.post("/api/projects/{name}/writing/events")
+    @app.post("/api/v1/projects/{name}/writing/events")
+    def writing_state_events(name: str) -> StreamingResponse:
+        """A ``state`` event whenever the state's version changes."""
+        layout = require_project_layout(name)
+        return StreamingResponse(
+            iter_writing_events(layout),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.post("/api/projects/{name}/capture-inbox/dismiss")
     def project_capture_dismiss(

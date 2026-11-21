@@ -21,6 +21,7 @@ import {
 import type { SessionPayload } from "@/lib/api/types";
 import { questionBefore } from "@/lib/chat";
 import type { PaneSlot } from "@/stores/layout-store";
+import { useWritingStore } from "@/stores/writing-store";
 import { cn } from "@/lib/utils";
 
 type Activity = "think" | "tool" | "answer";
@@ -72,6 +73,8 @@ export function SessionView({
    * may only wait. The core decides, so this is only what the last read said.
    */
   const [runningElsewhere, setRunningElsewhere] = useState(false);
+  /** Local writing-state edits the agent cannot see unless they are saved. */
+  const writingDirty = useWritingStore((state) => state.dirty);
 
   /**
    * Whether a send is in flight, and which session it belongs to.
@@ -129,7 +132,17 @@ export function SessionView({
 
   const send = async () => {
     const question = draft.trim();
-    if (!question || sendingRef.current || runningElsewhere) return;
+    if (!question || sendingRef.current) return;
+    if (writingDirty) {
+      // A run that is already going cannot see local edits; the person has
+      // to save first. A fresh send can still carry them after they choose.
+      const busy = runningElsewhere || Boolean(session?.state.busy);
+      const message = busy
+        ? t("writing.unsavedBusy")
+        : t("writing.unsaved");
+      if (!window.confirm(message)) return;
+    }
+    if (runningElsewhere) return;
     const mine = sessionId;
     const live = () => mounted.current && currentSession.current === mine;
     sendingRef.current = true;
