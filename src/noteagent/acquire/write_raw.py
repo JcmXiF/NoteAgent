@@ -179,6 +179,29 @@ def resolve_raw_write_path(layout: ProjectLayout, relative_path: str) -> Path:
     return candidate
 
 
+def capture_material_bytes(
+    capture: Capture, kind: str, captured_at: str = ""
+) -> bytes:
+    """The bytes an original is kept as, before it is written into raw/."""
+    if kind == "pdf":
+        if not capture.pdf_bytes:
+            raise ValueError("a pdf capture has no original bytes")
+        return capture.pdf_bytes
+    if kind == "office":
+        if not capture.office_bytes:
+            raise ValueError("an office capture has no original bytes")
+        return capture.office_bytes
+    if kind == "image":
+        if not capture.image_bytes:
+            raise ValueError("an image capture has no original bytes")
+        return capture.image_bytes
+    if not (capture.html or "").strip():
+        raise ValueError("a page capture has no html original")
+    return render_capture_source(
+        capture, captured_at=captured_at or None
+    ).encode("utf-8")
+
+
 def render_capture_source(capture: Capture, *, captured_at: str | None = None) -> str:
     """Self-contained reader HTML. *captured_at* is recorded as a meta tag."""
     stamp = captured_at or date.today().isoformat()

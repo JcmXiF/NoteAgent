@@ -10,12 +10,18 @@ from noteagent.acquire.derive import blocks_for_capture
 from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.tools.web_fetch import LOGIN_WALL_STATUSES
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.acquire.write_raw import (
+    capture_kind,
+    capture_material_bytes,
+    raw_relative_for_capture,
+)
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import Diagnostic, OutputLimits, ToolResult, ToolSpec
 from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.layout import ProjectLayout
+from noteagent.writing.publish import publish_page
 from noteagent.writing.state import (
     WRITING_ID,
     WritingState,
@@ -33,6 +39,7 @@ WEB_SEARCH = "web_search"
 SELECT_PAGE = "select_page"
 SELECT_FRAME = "select_frame"
 COMPOSE_WIKI = "compose_wiki"
+WRITE_WIKI = "write_wiki"
 
 WebSearchFn = Callable[[str], Sequence[CandidateCard]]
 WebFetchFn = Callable[[str], Capture]
@@ -82,6 +89,13 @@ _COMPOSE_WIKI_DESCRIPTION = (
     "draft page's current version as baseDraftVersion (0 for a new page). The "
     "draft is state only; publishing is a later step. Read the page list with "
     "get_state({section: 'draft'}) and one section with section: 'section'."
+)
+
+_WRITE_WIKI_DESCRIPTION = (
+    "Publish one draft page to the wiki. The page is assembled from the state "
+    "draft; no content is accepted. It writes through the page-write seam and "
+    "returns the committed effect ids. The same draftVersion is published once; "
+    "a newer draft has a higher version."
 )
 
 
@@ -163,6 +177,11 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                     "title": str(page.get("title") or ""),
                     "version": row_version(page),
                     "status": str(page.get("status") or "draft"),
+                    "writtenAt": str(page.get("writtenAt") or ""),
+                    "effectIds": [
+                        str(item)
+                        for item in page.get("effectIds") or []
+                    ],
                     "sections": [
                         {
                             "id": str(item.get("id") or ""),
@@ -558,7 +577,20 @@ def select_page_tool(
             )
 
         page_title = capture.title or title
-        store.save_page_blocks(page_id, blocks)
+        material = raw_relative_for_capture(capture)
+        try:
+            store.save_page_material(
+                page_id,
+                capture_material_bytes(
+                    capture,
+                    capture_kind(capture),
+                    iso_timestamp(moment),
+                ),
+                material,
+            )
+            store.save_page_blocks(page_id, blocks)
+        except (OSError, ValueError) as err:
+            fail(str(err)[:300], "fetch_failed", err, page_title=page_title)
         ready = _page_row(
             page_id=page_id,
             hit_id=hit_id,
@@ -567,6 +599,7 @@ def select_page_tool(
             status="ready",
             block_count=len(blocks),
             version=base_version + 2,
+            material=material,
             fetched_at=iso_timestamp(moment),
         )
         store.update_selected_page(page_id, ready)
@@ -847,6 +880,83 @@ def compose_wiki_tool(
     )
 
 
+def write_wiki_tool(
+    layout: ProjectLayout,
+    *,
+    clock: Clock | None = None,
+) -> ToolSpec:
+    """The agent's publisher: state draft in, a wiki page on disk."""
+    moment = clock or SystemClock()
+
+    def write_wiki(arguments, context) -> ToolResult:
+        wiki_file = str(arguments["wikiFile"]).strip()
+        draft_version = arguments["draftVersion"]
+        if (
+            isinstance(draft_version, bool)
+            or not isinstance(draft_version, int)
+            or draft_version < 0
+        ):
+            raise ValueError(
+                "draftVersion must be a non-negative integer"
+            )
+        result = publish_page(
+            layout,
+            wiki_file,
+            draft_version,
+            run_id=context.run_id,
+            session_id=context.session_id,
+            clock=moment,
+        )
+        return ToolResult(
+            content=json.dumps(
+                {
+                    "status": "ok",
+                    "wikiFile": wiki_file,
+                    "effectIds": list(result.effect_ids),
+                    "writtenAt": result.written_at,
+                },
+                ensure_ascii=False,
+            ),
+            meta={
+                "title": wiki_file,
+                "path": wiki_file,
+                "wrote_wiki": True,
+            },
+        )
+
+    return ToolSpec(
+        name=WRITE_WIKI,
+        description=_WRITE_WIKI_DESCRIPTION,
+        parameters={
+            "type": "object",
+            "properties": {
+                "wikiFile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
+                    "description": "The draft page to publish",
+                },
+                "draftVersion": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The draft version to publish",
+                },
+            },
+            "required": ["wikiFile", "draftVersion"],
+            "additionalProperties": False,
+        },
+        side_effect="disk",
+        timeout_s=30.0,
+        output_limits=OutputLimits(
+            max_items=1,
+            max_chars_per_item=4_000,
+            max_chars_total=4_000,
+        ),
+        handler=write_wiki,
+        argument_hint="wikiFile",
+    )
+
+
 def _search_row(
     *,
     search_id: str,
@@ -888,6 +998,7 @@ def _page_row(
     status: str,
     block_count: int,
     version: int,
+    material: str = "",
     error: str = "",
     error_kind: str = "",
     fetched_at: str = "",
@@ -900,6 +1011,7 @@ def _page_row(
         "status": status,
         "blockCount": block_count,
         "version": version,
+        "material": material,
         "error": error,
         "errorKind": error_kind,
         "fetchedAt": fetched_at,
@@ -976,6 +1088,7 @@ __all__ = [
     "SELECT_FRAME",
     "SELECT_PAGE",
     "WEB_SEARCH",
+    "WRITE_WIKI",
     "WebFetchFn",
     "WebSearchFn",
     "compose_wiki_tool",
@@ -985,4 +1098,5 @@ __all__ = [
     "select_frame_tool",
     "select_page_tool",
     "web_search_tool",
+    "write_wiki_tool",
 ]

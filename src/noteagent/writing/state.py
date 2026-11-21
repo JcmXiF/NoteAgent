@@ -13,9 +13,10 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from noteagent.agent.clock import Clock, SystemClock
-from noteagent.io.atomic import write_text_atomic
+from noteagent.io.atomic import write_bytes_atomic, write_text_atomic
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
 
@@ -41,6 +42,7 @@ DRAFT_STATUSES = frozenset({"draft", "written"})
 
 #: The id shape a selected page, a frame and a draft section share.
 WRITING_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
+_SOURCE_SUFFIX = re.compile(r"\A\.[A-Za-z0-9]{1,10}\Z")
 
 
 class WritingStateError(RuntimeError):
@@ -436,11 +438,97 @@ class WritingStateStore:
             )
         return [dict(block) for block in blocks if isinstance(block, Mapping)]
 
+    def save_page_material(
+        self, page_id: str, data: bytes, material: str
+    ) -> None:
+        """Keep the selected page's original beside its state."""
+        path = self._page_material_file(
+            page_id, _material_suffix(material)
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_bytes_atomic(path, data)
+
+    def page_material(
+        self, page_id: str, material: str
+    ) -> Path | None:
+        """The original a selected page was captured as, when still kept."""
+        path = self._page_material_file(
+            page_id, _material_suffix(material)
+        )
+        return path if path.is_file() else None
+
+    def remove_page_material(self, page_id: str, material: str) -> None:
+        """Drop the state's copy once the original is durable under raw/."""
+        path = self._page_material_file(
+            page_id, _material_suffix(material)
+        )
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _page_material_file(self, page_id: str, suffix: str) -> Path:
+        key = (page_id or "").strip()
+        if WRITING_ID.fullmatch(key) is None:
+            raise ValueError(f"not a page id: {page_id!r}")
+        if _SOURCE_SUFFIX.fullmatch(suffix) is None:
+            raise ValueError(f"not an original suffix: {suffix!r}")
+        return self._layout.writing_pages / f"{key}.material{suffix}"
+
     def _page_file(self, page_id: str) -> Path:
         key = (page_id or "").strip()
         if WRITING_ID.fullmatch(key) is None:
             raise ValueError(f"not a page id: {page_id!r}")
         return self._layout.writing_pages / f"{key}.json"
+
+    def checked_draft_page(
+        self, wiki_file: str, draft_version: int
+    ) -> tuple[WritingState, Mapping[str, object]]:
+        """Load the state and one draft page at *draft_version*, or raise."""
+        state = self.load()
+        return state, _checked_draft_page(
+            state, wiki_file, draft_version
+        )
+
+    def mark_draft_written(
+        self,
+        wiki_file: str,
+        draft_version: int,
+        effect_ids: Sequence[str],
+        written_at: str,
+    ) -> WritingState:
+        """Record a published page; its bytes are already on disk."""
+
+        def build(state: WritingState) -> WritingState:
+            page = _checked_draft_page(
+                state, wiki_file, draft_version
+            )
+            pages = [dict(item) for item in draft_pages(state.draft)]
+            index = _page_index(pages, wiki_file)
+            if index is None:
+                raise ValueError(f"no draft page: {wiki_file}")
+            pages[index] = {
+                **page,
+                "status": "written",
+                "writtenAt": written_at,
+                "effectIds": list(effect_ids),
+            }
+            return replace(state, draft={"pages": pages})
+
+        return self._mutate(build)
+
+    def _mutate(
+        self, build: Callable[[WritingState], WritingState]
+    ) -> WritingState:
+        for attempt in range(2):
+            state = self.load()
+            next_state = build(state)
+            try:
+                return self.save(next_state)
+            except WritingStateConflict:
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
 
     def _append(
         self,
@@ -449,15 +537,7 @@ class WritingStateStore:
             [WritingState, Mapping[str, object]], WritingState
         ],
     ) -> WritingState:
-        for attempt in range(2):
-            state = self.load()
-            next_state = build(state, row)
-            try:
-                return self.save(next_state)
-            except WritingStateConflict:
-                if attempt:
-                    raise
-        raise AssertionError("unreachable")
+        return self._mutate(lambda state: build(state, row))
 
 
 def state_summary(state: WritingState) -> dict[str, object]:
@@ -685,6 +765,11 @@ def _draft(value: object) -> Mapping[str, object]:
     return {"pages": pages}
 
 
+def _material_suffix(material: str) -> str:
+    suffix = Path(material).suffix
+    return suffix if _SOURCE_SUFFIX.fullmatch(suffix) else ".bin"
+
+
 def row_version(row: Mapping[str, object]) -> int:
     """A mapping's version, or 0 when it has none; an invalid value reads as 0."""
     value = row.get("version")
@@ -706,6 +791,21 @@ def draft_page_for(
         ),
         None,
     )
+
+
+def _checked_draft_page(
+    state: WritingState, wiki_file: str, draft_version: int
+) -> Mapping[str, object]:
+    page = draft_page_for(state.draft, wiki_file)
+    if page is None:
+        raise ValueError(f"no draft page: {wiki_file}")
+    current = row_version(page)
+    if current != draft_version:
+        raise ValueError(
+            f"draft {wiki_file} is at version "
+            f"{current}; the caller read {draft_version}"
+        )
+    return page
 
 
 def draft_section_for(

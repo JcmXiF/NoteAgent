@@ -50,6 +50,7 @@ from noteagent.writing.tools import (
     select_frame_tool,
     select_page_tool,
     web_search_tool,
+    write_wiki_tool,
 )
 
 if TYPE_CHECKING:
@@ -219,6 +220,7 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
         select_frame_tool(layout, clock=deps.clock, ids=deps.ids)
     )
     tools.register(compose_wiki_tool(layout, clock=deps.clock))
+    tools.register(write_wiki_tool(layout, clock=deps.clock))
     return tools
 
 

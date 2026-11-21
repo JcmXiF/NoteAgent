@@ -88,7 +88,13 @@ class PageBlueprint:
         )
 
 
-def clip_marker(collection_id: str) -> str:
+def clip_marker(
+    collection_id: str, block_ids: Sequence[str] = ()
+) -> str:
+    """The ``na-clip`` marker for one collection, with its block ids when known."""
+    ids = ",".join(item for item in block_ids if item)
+    if ids:
+        return f"<!-- na-clip:{collection_id} {ids} -->"
     return f"<!-- na-clip:{collection_id} -->"
 
 

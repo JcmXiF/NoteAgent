@@ -58,6 +58,7 @@ export type WritingSelectedPage = {
   status?: "fetching" | "ready" | "failed";
   blockCount?: number;
   version?: number;
+  material?: string;
   error?: string;
   errorKind?: string;
   fetchedAt?: string;

@@ -32,8 +32,8 @@ from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.types import Capture
 from noteagent.acquire.write_raw import (
     capture_kind,
+    capture_material_bytes,
     raw_relative_for_capture,
-    render_capture_source,
     resolve_raw_write_path,
 )
 from noteagent.agent.clock import Clock, iso_timestamp
@@ -326,7 +326,7 @@ class StagingArea:
         kind = capture_kind(capture)
         material = raw_relative_for_capture(capture)
         blocks = blocks_for_capture(capture, kind)
-        data = _source_bytes(capture, kind, captured_at)
+        data = capture_material_bytes(capture, kind, captured_at)
 
         directory = self._material_directory(material, run_id=run_id)
         suffix = Path(material).suffix or ".bin"
@@ -637,24 +637,6 @@ class Materials:
                 )
             self._staging.remove(path)
         return len(doomed)
-
-
-def _source_bytes(capture: Capture, kind: str, captured_at: str) -> bytes:
-    if kind == "pdf":
-        if not capture.pdf_bytes:
-            raise ValueError("a pdf capture has no original bytes")
-        return capture.pdf_bytes
-    if kind == "office":
-        if not capture.office_bytes:
-            raise ValueError("an office capture has no original bytes")
-        return capture.office_bytes
-    if kind == "image":
-        if not capture.image_bytes:
-            raise ValueError("an image capture has no original bytes")
-        return capture.image_bytes
-    if not (capture.html or "").strip():
-        raise ValueError("a page capture has no html original")
-    return render_capture_source(capture, captured_at=captured_at).encode("utf-8")
 
 
 def _row(transition: MaterialTransition) -> dict[str, object]:

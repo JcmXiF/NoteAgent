@@ -305,6 +305,13 @@ function Draft({
                   ),
                 })}
               </p>
+              {(page.effectIds ?? []).length > 0 ? (
+                <p className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                  {page.effectIds?.map((id) => (
+                    <code key={id}>{id}</code>
+                  ))}
+                </p>
+              ) : null}
               <ul className="mt-2 space-y-2">
                 {(page.sections ?? []).map((section, sectionIndex) => (
                   <li key={section.id ?? sectionIndex}>

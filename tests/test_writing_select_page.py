@@ -118,6 +118,14 @@ class WritingSelectPageTests(unittest.TestCase):
         self.assertTrue(
             (self.layout.writing_pages / f"{page_id}.json").is_file()
         )
+        self.assertTrue(str(page["material"]).startswith("raw/"))
+        suffix = str(page["material"]).rsplit(".", 1)[-1]
+        self.assertTrue(
+            (
+                self.layout.writing_pages
+                / f"{page_id}.material.{suffix}"
+            ).is_file()
+        )
 
         detail = tools.dispatch(
             "get_state",

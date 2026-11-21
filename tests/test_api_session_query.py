@@ -307,6 +307,7 @@ class DefaultToolTests(unittest.TestCase):
                 "select_page",
                 "select_frame",
                 "compose_wiki",
+                "write_wiki",
             ],
         )
 

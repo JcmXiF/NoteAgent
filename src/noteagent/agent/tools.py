@@ -23,9 +23,11 @@ from noteagent.agent.model import ToolCall
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
-#: What a call is allowed to touch. ``state`` is the project's writing state:
-#: a write the store serializes, not a network or human action.
-SideEffect: TypeAlias = Literal["read", "network", "human", "state"]
+#: What a call is allowed to touch. ``state`` is the project's writing state and
+#: ``disk`` is a wiki page write; both are serialized, not network or human acts.
+SideEffect: TypeAlias = Literal[
+    "read", "network", "human", "state", "disk"
+]
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -225,7 +227,7 @@ class ToolRegistry:
         prepared = [self._prepare(call.name, call.arguments) for call in calls]
         if any(
             isinstance(item, tuple)
-            and item[0].side_effect in {"state", "human"}
+            and item[0].side_effect in {"state", "disk", "human"}
             for item in prepared
         ):
             results: list[ToolResult] = []
