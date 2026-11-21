@@ -70,6 +70,13 @@
     "frames": {
       "blockCount": "{{count}} 段"
     },
+    "draft": {
+      "pageMeta": "v{{version}} · {{status}}",
+      "status": {
+        "draft": "草稿",
+        "written": "已发布"
+      }
+    },
     "areas": {
       "searches": "搜索结果",
       "selectedPages": "选页",

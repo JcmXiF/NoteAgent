@@ -207,4 +207,47 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain("frame-1");
     expect(host.textContent).toContain("2 blocks");
   });
+
+  it("lists the draft pages, sections and bodies", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 9,
+        writer: null,
+        searches: [],
+        selectedPages: [],
+        frames: [],
+        draft: {
+          pages: [
+            {
+              wikiFile: "wiki/concepts/信息熵.md",
+              title: "信息熵",
+              version: 2,
+              status: "draft",
+              sections: [
+                {
+                  id: "definition",
+                  heading: "定义",
+                  body: "熵是信息的平均量。",
+                  citations: [],
+                  version: 1,
+                  stale: false,
+                  humanEdited: false,
+                },
+              ],
+            },
+          ],
+        },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("信息熵");
+    expect(host.textContent).toContain("v2");
+    expect(host.textContent).toContain("Draft");
+    expect(host.textContent).toContain("定义");
+    expect(host.textContent).toContain("熵是信息的平均量。");
+  });
 });

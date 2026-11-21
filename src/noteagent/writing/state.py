@@ -37,8 +37,10 @@ _LOCK_WAIT_S = 0.05
 PAGE_STATUSES = frozenset({"fetching", "ready", "failed"})
 PAGE_ERROR_KINDS = frozenset({"fetch_failed", "login_wall"})
 FRAME_SOURCES = frozenset({"agent", "human"})
+DRAFT_STATUSES = frozenset({"draft", "written"})
 
-_PAGE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
+#: The id shape a selected page, a frame and a draft section share.
+WRITING_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
 
 
 class WritingStateError(RuntimeError):
@@ -91,13 +93,7 @@ class WritingState:
             raise WritingStateError(
                 "the writing state's writer must be an object"
             )
-        draft = raw.get("draft")
-        if draft is None:
-            draft = {"pages": []}
-        if not isinstance(draft, Mapping):
-            raise WritingStateError(
-                "the writing state's draft must be an object"
-            )
+        draft = _draft(raw.get("draft"))
         state_version = raw.get("stateVersion")
         if (
             isinstance(state_version, bool)
@@ -113,7 +109,7 @@ class WritingState:
             searches=_items(raw.get("searches"), "searches"),
             selected_pages=_selected_pages(raw.get("selectedPages")),
             frames=_frames(raw.get("frames")),
-            draft=dict(draft),
+            draft=draft,
             attention=_items(raw.get("attention"), "attention"),
         )
 
@@ -247,6 +243,160 @@ class WritingStateStore:
             ),
         )
 
+    def compose_draft(
+        self,
+        wiki_file: str,
+        sections: Sequence[Mapping[str, object]],
+        base_version: int,
+    ) -> tuple[
+        WritingState, Mapping[str, object], tuple[Mapping[str, object], ...]
+    ]:
+        """Merge sections into one draft page, checking its base version.
+
+        An existing section id is replaced where it stands (its ``baseVersion``
+        must match); a new id is inserted after its ``after`` anchor or
+        appended. Frame ids are resolved here, so the citation pins the frame
+        version and block ids the page was written from. The page's version
+        moves on by one, and a caller built on an older page is refused.
+        """
+        key = wiki_file.strip()
+        if not key:
+            raise ValueError("a draft page needs a wiki file")
+        if base_version < 0:
+            raise ValueError("baseDraftVersion must be non-negative")
+        for attempt in range(2):
+            state = self.load()
+            frames = {
+                str(frame.get("id")): frame for frame in state.frames
+            }
+            pages = [dict(page) for page in draft_pages(state.draft)]
+            index = _page_index(pages, key)
+            if index is None:
+                if base_version != 0:
+                    raise ValueError(
+                        f"no draft page {key} at version {base_version}"
+                    )
+                pages.append(
+                    {
+                        "wikiFile": key,
+                        "title": _wiki_title(key),
+                        "version": 0,
+                        "status": "draft",
+                        "sections": [],
+                        "writtenAt": "",
+                        "effectIds": [],
+                    }
+                )
+                index = len(pages) - 1
+            page = pages[index]
+            current_version = row_version(page)
+            if current_version != base_version:
+                raise ValueError(
+                    f"draft {key} is at version {current_version}; "
+                    f"the caller read {base_version}"
+                )
+            current_sections = [
+                dict(section) for section in draft_sections(page)
+            ]
+            changed: list[Mapping[str, object]] = []
+            for raw in sections:
+                section_id = str(raw["id"])
+                heading = str(raw["heading"])
+                body = str(raw.get("body") or "")
+                citations: list[dict[str, object]] = []
+                for frame_id in raw.get("citations", []):
+                    frame_key = str(frame_id).strip()
+                    frame = frames.get(frame_key)
+                    if frame is None:
+                        raise ValueError(f"no such frame: {frame_key}")
+                    citations.append(
+                        {
+                            "frameId": frame_key,
+                            "frameVersion": row_version(frame),
+                            "blockIds": list(
+                                frame.get("blockIds") or []
+                            ),
+                        }
+                    )
+                base_section = raw.get("baseVersion")
+                if base_section is not None and (
+                    isinstance(base_section, bool)
+                    or not isinstance(base_section, int)
+                    or base_section < 0
+                ):
+                    raise ValueError(
+                        "baseVersion must be a non-negative integer"
+                    )
+                existing = _section_index(
+                    current_sections, section_id
+                )
+                if existing is not None:
+                    old = current_sections[existing]
+                    old_version = row_version(old)
+                    if (
+                        base_section is not None
+                        and old_version != base_section
+                    ):
+                        raise ValueError(
+                            f"section {section_id} is at version "
+                            f"{old_version}; the caller read "
+                            f"{base_section}"
+                        )
+                    new = {
+                        **old,
+                        "heading": heading,
+                        "body": body,
+                        "citations": citations,
+                        "version": old_version + 1,
+                        "stale": False,
+                    }
+                    current_sections[existing] = new
+                else:
+                    if base_section not in (None, 0):
+                        raise ValueError(
+                            f"new section {section_id} cannot have "
+                            f"baseVersion {base_section}"
+                        )
+                    after = str(raw.get("after") or "").strip()
+                    new = {
+                        "id": section_id,
+                        "heading": heading,
+                        "body": body,
+                        "citations": citations,
+                        "version": 1,
+                        "stale": False,
+                        "humanEdited": False,
+                    }
+                    if after:
+                        anchor = _section_index(
+                            current_sections, after
+                        )
+                        if anchor is None:
+                            raise ValueError(
+                                f"no section to insert after: {after}"
+                            )
+                        current_sections.insert(anchor + 1, new)
+                    else:
+                        current_sections.append(new)
+                changed.append(new)
+            page = {
+                **page,
+                "title": str(
+                    page.get("title") or _wiki_title(key)
+                ),
+                "version": current_version + 1,
+                "status": "draft",
+                "sections": current_sections,
+            }
+            pages[index] = page
+            next_state = replace(state, draft={"pages": pages})
+            try:
+                return self.save(next_state), page, tuple(changed)
+            except WritingStateConflict:
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
+
     def save_page_blocks(
         self, page_id: str, blocks: Sequence[Mapping[str, object]]
     ) -> None:
@@ -288,7 +438,7 @@ class WritingStateStore:
 
     def _page_file(self, page_id: str) -> Path:
         key = (page_id or "").strip()
-        if _PAGE_ID.fullmatch(key) is None:
+        if WRITING_ID.fullmatch(key) is None:
             raise ValueError(f"not a page id: {page_id!r}")
         return self._layout.writing_pages / f"{key}.json"
 
@@ -312,8 +462,8 @@ class WritingStateStore:
 
 def state_summary(state: WritingState) -> dict[str, object]:
     """The bounded answer ``get_state()`` gives: counts, writer, attention."""
-    pages = _draft_pages(state.draft)
-    sections = sum(len(_draft_sections(page)) for page in pages)
+    pages = draft_pages(state.draft)
+    sections = sum(len(draft_sections(page)) for page in pages)
     latest = state.searches[-1] if state.searches else None
     attention = [dict(item) for item in state.attention]
     attention.extend(
@@ -440,27 +590,204 @@ def _frames(value: object) -> tuple[Mapping[str, object], ...]:
     return rows
 
 
-def _draft_pages(draft: Mapping[str, object]) -> list[Mapping[str, object]]:
+def _draft(value: object) -> Mapping[str, object]:
+    if value is None:
+        return {"pages": []}
+    if not isinstance(value, Mapping):
+        raise WritingStateError(
+            "the writing state's draft must be an object"
+        )
+    raw_pages = value.get("pages")
+    if not isinstance(raw_pages, list):
+        raise WritingStateError(
+            "the writing state's draft pages must be a list"
+        )
+    pages: list[Mapping[str, object]] = []
+    for page in raw_pages:
+        if not isinstance(page, Mapping):
+            raise WritingStateError("a draft page must be an object")
+        wiki_file = page.get("wikiFile")
+        if not isinstance(wiki_file, str) or not wiki_file.strip():
+            raise WritingStateError("a draft page needs a wikiFile")
+        status = str(page.get("status") or "draft")
+        if status not in DRAFT_STATUSES:
+            raise WritingStateError(
+                f"unknown draft page status: {status!r}"
+            )
+        version = page.get("version", 0)
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < 0
+        ):
+            raise WritingStateError(
+                "a draft page's version must be a non-negative integer"
+            )
+        raw_sections = page.get("sections")
+        if not isinstance(raw_sections, list):
+            raise WritingStateError(
+                "a draft page's sections must be a list"
+            )
+        for section in raw_sections:
+            if not isinstance(section, Mapping):
+                raise WritingStateError("a draft section must be an object")
+            section_id = section.get("id")
+            if not isinstance(section_id, str) or not section_id.strip():
+                raise WritingStateError("a draft section needs an id")
+            heading = section.get("heading")
+            body = section.get("body")
+            if not isinstance(heading, str) or not heading.strip():
+                raise WritingStateError("a draft section needs a heading")
+            if not isinstance(body, str):
+                raise WritingStateError("a draft section needs a body")
+            citations = section.get("citations", [])
+            if not isinstance(citations, list):
+                raise WritingStateError(
+                    "a draft section's citations must be a list"
+                )
+            for citation in citations:
+                if not isinstance(citation, Mapping):
+                    raise WritingStateError("a citation must be an object")
+                frame_id = citation.get("frameId")
+                if not isinstance(frame_id, str) or not frame_id.strip():
+                    raise WritingStateError("a citation needs a frameId")
+                frame_version = citation.get("frameVersion")
+                if (
+                    isinstance(frame_version, bool)
+                    or not isinstance(frame_version, int)
+                    or frame_version < 1
+                ):
+                    raise WritingStateError(
+                        "a citation's frameVersion must be a positive integer"
+                    )
+                block_ids = citation.get("blockIds")
+                if not isinstance(block_ids, list) or any(
+                    not isinstance(block, str) for block in block_ids
+                ):
+                    raise WritingStateError(
+                        "a citation's blockIds must be a list of strings"
+                    )
+            section_version = section.get("version")
+            if (
+                isinstance(section_version, bool)
+                or not isinstance(section_version, int)
+                or section_version < 1
+            ):
+                raise WritingStateError(
+                    "a draft section's version must be a positive integer"
+                )
+            for flag in ("stale", "humanEdited"):
+                if not isinstance(section.get(flag, False), bool):
+                    raise WritingStateError(
+                        f"a draft section's {flag} must be a boolean"
+                    )
+        pages.append(dict(page))
+    return {"pages": pages}
+
+
+def row_version(row: Mapping[str, object]) -> int:
+    """A mapping's version, or 0 when it has none; an invalid value reads as 0."""
+    value = row.get("version")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def draft_page_for(
+    draft: Mapping[str, object], wiki_file: str
+) -> Mapping[str, object] | None:
+    """One draft page by its wiki file, if it has been composed."""
+    key = wiki_file.strip()
+    return next(
+        (
+            page
+            for page in draft_pages(draft)
+            if str(page.get("wikiFile")) == key
+        ),
+        None,
+    )
+
+
+def draft_section_for(
+    page: Mapping[str, object], section_id: str
+) -> Mapping[str, object] | None:
+    """One section by its stable id, if the page has it."""
+    key = section_id.strip()
+    return next(
+        (
+            section
+            for section in draft_sections(page)
+            if str(section.get("id")) == key
+        ),
+        None,
+    )
+
+
+def _page_index(
+    pages: Sequence[Mapping[str, object]], wiki_file: str
+) -> int | None:
+    key = wiki_file.strip()
+    return next(
+        (
+            index
+            for index, page in enumerate(pages)
+            if str(page.get("wikiFile")) == key
+        ),
+        None,
+    )
+
+
+def _section_index(
+    sections: Sequence[Mapping[str, object]], section_id: str
+) -> int | None:
+    key = section_id.strip()
+    return next(
+        (
+            index
+            for index, section in enumerate(sections)
+            if str(section.get("id")) == key
+        ),
+        None,
+    )
+
+
+def _wiki_title(wiki_file: str) -> str:
+    name = wiki_file.replace("\\", "/").rsplit("/", 1)[-1]
+    return name[:-3] if name.endswith(".md") else name
+
+
+def draft_pages(draft: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """The draft's pages, in the order they were composed."""
     raw = draft.get("pages")
     if not isinstance(raw, list):
         return []
     return [page for page in raw if isinstance(page, Mapping)]
 
 
-def _draft_sections(page: Mapping[str, object]) -> list[object]:
+def draft_sections(page: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """One draft page's sections, in page order."""
     raw = page.get("sections")
-    return list(raw) if isinstance(raw, list) else []
+    if not isinstance(raw, list):
+        return []
+    return [section for section in raw if isinstance(section, Mapping)]
 
 
 __all__ = [
+    "DRAFT_STATUSES",
     "FRAME_SOURCES",
     "PAGE_ERROR_KINDS",
     "PAGE_STATUSES",
     "STATE_SCHEMA_VERSION",
     "STATE_WRITER",
+    "WRITING_ID",
     "WritingState",
     "WritingStateConflict",
     "WritingStateError",
     "WritingStateStore",
+    "draft_page_for",
+    "draft_pages",
+    "draft_section_for",
+    "draft_sections",
+    "row_version",
     "state_summary",
 ]

@@ -6,9 +6,30 @@ export type WritingWriter = {
   since?: string;
 };
 
+export type WritingDraftCitation = {
+  frameId?: string;
+  frameVersion?: number;
+  blockIds?: string[];
+};
+
+export type WritingDraftSection = {
+  id?: string;
+  heading?: string;
+  body?: string;
+  citations?: WritingDraftCitation[];
+  version?: number;
+  stale?: boolean;
+  humanEdited?: boolean;
+};
+
 export type WritingDraftPage = {
   wikiFile?: string;
-  sections?: unknown[];
+  title?: string;
+  version?: number;
+  status?: "draft" | "written";
+  sections?: WritingDraftSection[];
+  writtenAt?: string;
+  effectIds?: string[];
   [key: string]: unknown;
 };
 

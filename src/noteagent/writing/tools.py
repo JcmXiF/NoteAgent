@@ -17,8 +17,14 @@ from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.layout import ProjectLayout
 from noteagent.writing.state import (
+    WRITING_ID,
     WritingState,
     WritingStateStore,
+    draft_page_for,
+    draft_pages,
+    draft_section_for,
+    draft_sections,
+    row_version,
     state_summary,
 )
 
@@ -26,6 +32,7 @@ GET_STATE = "get_state"
 WEB_SEARCH = "web_search"
 SELECT_PAGE = "select_page"
 SELECT_FRAME = "select_frame"
+COMPOSE_WIKI = "compose_wiki"
 
 WebSearchFn = Callable[[str], Sequence[CandidateCard]]
 WebFetchFn = Callable[[str], Capture]
@@ -40,9 +47,11 @@ _GET_STATE_DESCRIPTION = (
     "frames and the draft, the latest search, and attention. With searchId it "
     "returns that search's hits; with pageId it returns that page's blocks; with "
     "framesFor it returns that page's frames; with section:'frames' it returns "
-    "every frame. Each detail is truncated with a diagnostic when it is too "
-    "large. The state is the only source of truth for those areas; read it "
-    "before acting on them."
+    "every frame; with section:'draft' it returns the draft page and section "
+    "list; with section:'section' plus wikiFile/sectionId it returns that "
+    "section's body and citations. Each detail is truncated with a diagnostic "
+    "when it is too large. The state is the only source of truth for those "
+    "areas; read it before acting on them."
 )
 
 _WEB_SEARCH_DESCRIPTION = (
@@ -64,6 +73,15 @@ _SELECT_FRAME_DESCRIPTION = (
     "id, version and block count; the frames are in the writing state. Read them "
     "with get_state({framesFor: pageId}). Empty, unknown or too many blocks are "
     "errors."
+)
+
+_COMPOSE_WIKI_DESCRIPTION = (
+    "Compose structured sections into the wiki draft. Each section has a stable "
+    "id, heading, Markdown body and frame ids as citations; an existing id is "
+    "replaced in place, a new id is inserted after `after` or appended. Pass the "
+    "draft page's current version as baseDraftVersion (0 for a new page). The "
+    "draft is state only; publishing is a later step. Read the page list with "
+    "get_state({section: 'draft'}) and one section with section: 'section'."
 )
 
 
@@ -138,6 +156,83 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                 meta={"title": "frames", "target": "frames"},
                 diagnostics=diagnostics,
             )
+        if section == "draft":
+            pages = [
+                {
+                    "wikiFile": str(page.get("wikiFile") or ""),
+                    "title": str(page.get("title") or ""),
+                    "version": row_version(page),
+                    "status": str(page.get("status") or "draft"),
+                    "sections": [
+                        {
+                            "id": str(item.get("id") or ""),
+                            "heading": str(item.get("heading") or ""),
+                            "version": row_version(item),
+                            "stale": bool(item.get("stale")),
+                            "humanEdited": bool(
+                                item.get("humanEdited")
+                            ),
+                        }
+                        for item in draft_sections(page)
+                    ],
+                }
+                for page in draft_pages(state.draft)
+            ]
+            content, diagnostics = _bounded(pages)
+            return ToolResult(
+                content=content,
+                meta={"title": "draft", "target": "draft"},
+                diagnostics=diagnostics,
+            )
+        if section == "section":
+            wiki_file = str(arguments.get("wikiFile") or "").strip()
+            section_id = str(arguments.get("sectionId") or "").strip()
+            page = draft_page_for(state.draft, wiki_file)
+            if page is None:
+                raise ValueError(f"no such draft page: {wiki_file}")
+            item = draft_section_for(page, section_id)
+            if item is None:
+                raise ValueError(f"no such section: {section_id}")
+            body = str(item.get("body") or "")
+            truncated = False
+            payload = {
+                "wikiFile": wiki_file,
+                "id": str(item.get("id") or ""),
+                "heading": str(item.get("heading") or ""),
+                "body": body,
+                "citations": [
+                    dict(citation)
+                    for citation in item.get("citations") or []
+                ],
+                "version": row_version(item),
+                "stale": bool(item.get("stale")),
+                "humanEdited": bool(item.get("humanEdited")),
+            }
+            content = json.dumps(payload, ensure_ascii=False)
+            while body and len(content) > _DETAIL_LIMIT:
+                truncated = True
+                body = body[: len(body) // 2]
+                payload["body"] = body
+                content = json.dumps(payload, ensure_ascii=False)
+            diagnostics = (
+                (
+                    Diagnostic(
+                        "warning",
+                        "truncated",
+                        "the section body was truncated",
+                    ),
+                )
+                if truncated
+                else ()
+            )
+            return ToolResult(
+                content=content,
+                meta={
+                    "title": f"{wiki_file}#{section_id}",
+                    "target": section_id,
+                },
+                diagnostics=diagnostics,
+            )
         summary = state_summary(state)
         return ToolResult(
             content=json.dumps(summary, ensure_ascii=False),
@@ -169,8 +264,21 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                 },
                 "section": {
                     "type": "string",
-                    "enum": ["frames"],
-                    "description": "Read every frame; the other selectors read one search or page.",
+                    "enum": ["frames", "draft", "section"],
+                    "description": (
+                        "Read every frame, the draft page list, or one "
+                        "draft section."
+                    ),
+                },
+                "wikiFile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The draft page, for section: 'section'.",
+                },
+                "sectionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The section id, for section: 'section'.",
                 },
             },
             "additionalProperties": False,
@@ -370,7 +478,7 @@ def select_page_tool(
             if failed is not None
             else minted.new_id("page")
         )
-        base_version = _version(failed) if failed is not None else 0
+        base_version = row_version(failed) if failed is not None else 0
         fetching = _page_row(
             page_id=page_id,
             hit_id=hit_id,
@@ -539,7 +647,7 @@ def select_frame_tool(
             _frame_row(
                 frame_id=frame_id,
                 page_id=page_id,
-                page_version=_version(page),
+                page_version=row_version(page),
                 block_ids=ordered,
                 version=1,
                 source="agent",
@@ -594,6 +702,148 @@ def select_frame_tool(
         ),
         handler=select_frame,
         argument_hint="pageId",
+    )
+
+
+def compose_wiki_tool(
+    layout: ProjectLayout,
+    *,
+    clock: Clock | None = None,
+) -> ToolSpec:
+    """The agent's draft composer: structured sections, state only."""
+    moment = clock or SystemClock()
+    store = WritingStateStore(layout, clock=moment)
+
+    def compose_wiki(arguments, _context) -> ToolResult:
+        wiki_file = str(arguments["wikiFile"]).strip()
+        base_version = arguments.get("baseDraftVersion", 0)
+        if (
+            isinstance(base_version, bool)
+            or not isinstance(base_version, int)
+            or base_version < 0
+        ):
+            raise ValueError(
+                "baseDraftVersion must be a non-negative integer"
+            )
+        sections: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for raw in arguments["sections"]:
+            section_id = str(raw["id"]).strip()
+            if WRITING_ID.fullmatch(section_id) is None:
+                raise ValueError(f"not a section id: {section_id!r}")
+            if section_id in seen:
+                raise ValueError(f"duplicate section id: {section_id}")
+            seen.add(section_id)
+            heading = str(raw["heading"]).strip()
+            if not heading:
+                raise ValueError("a section needs a heading")
+            sections.append(
+                {
+                    "id": section_id,
+                    "heading": heading,
+                    "body": str(raw.get("body") or ""),
+                    "citations": [
+                        str(frame_id).strip()
+                        for frame_id in raw.get("citations", [])
+                    ],
+                    "after": str(raw.get("after") or "").strip(),
+                    "baseVersion": raw.get("baseVersion"),
+                }
+            )
+        _saved, page, changed = store.compose_draft(
+            wiki_file, sections, base_version
+        )
+        return ToolResult(
+            content=json.dumps(
+                {
+                    "status": "ok",
+                    "wikiFile": wiki_file,
+                    "draftVersion": row_version(page),
+                    "sections": [
+                        {
+                            "id": str(item.get("id") or ""),
+                            "version": row_version(item),
+                            "stale": bool(item.get("stale")),
+                        }
+                        for item in changed
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            meta={"title": wiki_file, "path": wiki_file},
+        )
+
+    return ToolSpec(
+        name=COMPOSE_WIKI,
+        description=_COMPOSE_WIKI_DESCRIPTION,
+        parameters={
+            "type": "object",
+            "properties": {
+                "wikiFile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
+                    "description": "The wiki page the draft becomes",
+                },
+                "baseDraftVersion": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The draft version the caller read; 0 for a new page",
+                },
+                "sections": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "pattern": r"\S",
+                                "description": "A stable section id",
+                            },
+                            "heading": {
+                                "type": "string",
+                                "minLength": 1,
+                            },
+                            "body": {"type": "string"},
+                            "citations": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                },
+                            },
+                            "after": {
+                                "type": "string",
+                                "minLength": 1,
+                            },
+                            "baseVersion": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": (
+                                    "The section version the caller read; "
+                                    "omit for a new section"
+                                ),
+                            },
+                        },
+                        "required": ["id", "heading"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["wikiFile", "sections"],
+            "additionalProperties": False,
+        },
+        side_effect="state",
+        timeout_s=5.0,
+        output_limits=OutputLimits(
+            max_items=1,
+            max_chars_per_item=4_000,
+            max_chars_total=4_000,
+        ),
+        handler=compose_wiki,
+        argument_hint="wikiFile",
     )
 
 
@@ -690,18 +940,13 @@ def _failed_page(
         **({"title": title} if title else {}),
         "status": "failed",
         "blockCount": 0,
-        "version": _version(row) + 1,
+        "version": row_version(row) + 1,
         "error": message,
         "errorKind": kind,
         "fetchedAt": fetched_at,
     }
 
 
-def _version(row: Mapping[str, object]) -> int:
-    value = row.get("version")
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return max(0, value)
 
 
 def _bounded(items: list[object]) -> tuple[str, tuple[Diagnostic, ...]]:
@@ -726,12 +971,14 @@ def _bounded(items: list[object]) -> tuple[str, tuple[Diagnostic, ...]]:
 
 
 __all__ = [
+    "COMPOSE_WIKI",
     "GET_STATE",
     "SELECT_FRAME",
     "SELECT_PAGE",
     "WEB_SEARCH",
     "WebFetchFn",
     "WebSearchFn",
+    "compose_wiki_tool",
     "get_state_tool",
     "project_fetch",
     "project_web_search",

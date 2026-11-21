@@ -4,6 +4,7 @@ import { Loader2, PenLine, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWritingState } from "@/components/writing/use-writing-state";
 import type {
+  WritingDraftPage,
   WritingFrame,
   WritingSearch,
   WritingSelectedPage,
@@ -57,12 +58,7 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
     );
   }
 
-  const pages = state.draft.pages ?? [];
-  const sections = pages.reduce(
-    (total, page) =>
-      total + (Array.isArray(page.sections) ? page.sections.length : 0),
-    0,
-  );
+  const draftPages = state.draft.pages ?? [];
   const writer = state.writer
     ? state.writer.id || state.writer.kind || t("writing.noWriter")
     : t("writing.noWriter");
@@ -101,15 +97,7 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
           pages={state.selectedPages}
           empty={t("writing.empty")}
         />
-        <Section
-          title={t("writing.areas.draft")}
-          count={sections}
-          detail={t("writing.draftCount", {
-            pages: pages.length,
-            sections,
-          })}
-          empty={t("writing.empty")}
-        />
+        <Draft pages={draftPages} empty={t("writing.empty")} />
         <Card
           title={t("writing.attention")}
           count={attention.length}
@@ -281,25 +269,59 @@ function Frames({
   );
 }
 
-function Section({
-  title,
-  count,
-  detail,
+function Draft({
+  pages,
   empty,
 }: {
-  title: string;
-  count: number;
-  detail?: string;
+  pages: WritingDraftPage[];
   empty: string;
 }) {
+  const { t } = useTranslation();
+  const total = pages.reduce(
+    (sum, page) => sum + (page.sections?.length ?? 0),
+    0,
+  );
+
   return (
-    <Card title={title} count={count}>
-      {count ? (
-        detail ? (
-          <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
-        ) : null
-      ) : (
+    <Card
+      title={t("writing.areas.draft")}
+      count={total}
+      className="md:col-span-2"
+    >
+      {pages.length === 0 ? (
         <EmptyLine>{empty}</EmptyLine>
+      ) : (
+        <div className="mt-2 space-y-4">
+          {pages.map((page, pageIndex) => (
+            <div key={page.wikiFile ?? pageIndex}>
+              <p className="text-xs font-medium">
+                {page.title ?? page.wikiFile ?? ""}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {t("writing.draft.pageMeta", {
+                  version: page.version ?? 0,
+                  status: t(
+                    `writing.draft.status.${page.status ?? "draft"}`,
+                  ),
+                })}
+              </p>
+              <ul className="mt-2 space-y-2">
+                {(page.sections ?? []).map((section, sectionIndex) => (
+                  <li key={section.id ?? sectionIndex}>
+                    <p className="text-xs font-medium">
+                      {section.heading ?? section.id ?? ""}
+                    </p>
+                    {section.body ? (
+                      <p className="whitespace-pre-wrap text-[11px] text-muted-foreground">
+                        {section.body}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       )}
     </Card>
   );

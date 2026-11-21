@@ -70,6 +70,13 @@
     "frames": {
       "blockCount": "{{count}} blocks"
     },
+    "draft": {
+      "pageMeta": "v{{version}} · {{status}}",
+      "status": {
+        "draft": "Draft",
+        "written": "Written"
+      }
+    },
     "areas": {
       "searches": "Search results",
       "selectedPages": "Selected pages",

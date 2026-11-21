@@ -43,6 +43,7 @@ from noteagent.sessions.trace import SessionTrace
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
 from noteagent.writing.tools import (
+    compose_wiki_tool,
     get_state_tool,
     project_fetch,
     project_web_search,
@@ -217,6 +218,7 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     tools.register(
         select_frame_tool(layout, clock=deps.clock, ids=deps.ids)
     )
+    tools.register(compose_wiki_tool(layout, clock=deps.clock))
     return tools
 
 
