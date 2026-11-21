@@ -252,6 +252,7 @@ class CaseRun:
         max_turns: int = 50,
         web_search: WebSearchFn | None = None,
         web_fetch: WebFetchFn | None = None,
+        writing_skill: bool | None = None,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -265,6 +266,7 @@ class CaseRun:
             max_turns=max_turns,
             web_search=web_search,
             web_fetch=web_fetch,
+            writing_skill=writing_skill,
         )
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
