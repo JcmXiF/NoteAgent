@@ -33,6 +33,7 @@ from evals.support import FixedClock, SequentialIds
 
 from noteagent.agent.model import ModelClient
 from noteagent.agent.tools import ToolRegistry
+from noteagent.writing.tools import WebFetchFn, WebSearchFn
 from noteagent.api import projects as projects_api
 from noteagent.api.app import create_app
 from noteagent.api.deps import AppDeps
@@ -201,6 +202,7 @@ class CaseRun:
         self.repo.mkdir(parents=True)
         self.layout = init_project(self.repo / "projects" / "demo")
         self.checks: list[Check] = []
+        self.metrics: list[tuple[str, object]] = []
         self.log: list[str] = []
         self.clock = FixedClock()
         self.ids = SequentialIds()
@@ -248,6 +250,8 @@ class CaseRun:
         tools: ToolRegistry | None = None,
         seed_system_sections: bool = False,
         max_turns: int = 50,
+        web_search: WebSearchFn | None = None,
+        web_fetch: WebFetchFn | None = None,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -259,6 +263,8 @@ class CaseRun:
             settings={"model": "faux"},
             seed_system_sections=seed_system_sections,
             max_turns=max_turns,
+            web_search=web_search,
+            web_fetch=web_fetch,
         )
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
@@ -284,10 +290,19 @@ class CaseRun:
             name, actual == expected, f"expected {expected!r}, got {actual!r}"
         )
 
+    def metric(self, name: str, value: object) -> None:
+        """One reported number for the run's report; never a pass/fail check."""
+        self.metrics.append((name, value))
+
     def note(self, text: str) -> None:
         self.log.append(text)
 
     def close(self) -> None:
+        if self.api is not None:
+            try:
+                self.api.client.close()
+            except Exception:  # noqa: BLE001 - closing is best effort
+                pass
         for patcher in reversed(self._patchers):
             patcher.stop()
         self._patchers.clear()
@@ -296,13 +311,14 @@ class CaseRun:
 def run_case(case: Case, artifacts_root: Path) -> CaseResult:
     """Run one case in its own temporary project, keeping a failure's evidence."""
     started = time.monotonic()
+    tmp = Path(
+        tempfile.mkdtemp(prefix=f"noteagent-eval-{case.name}-")
+    )
     run: CaseRun | None = None
     error = ""
-    with tempfile.TemporaryDirectory(
-        prefix=f"noteagent-eval-{case.name}-"
-    ) as tmp:
+    try:
         try:
-            run = CaseRun(Path(tmp))
+            run = CaseRun(tmp)
             case.run(run)
         except Exception:
             error = traceback.format_exc()
@@ -314,6 +330,7 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
             time.monotonic() - started,
             tuple(run.api.exchanges) if run is not None and run.api else (),
             tuple(run.log) if run is not None else (),
+            tuple(run.metrics) if run is not None else (),
         )
         if not result.passed:
             try:
@@ -326,9 +343,29 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
                         + f"\nthe failure artifacts could not be kept: {err}"
                     ).strip(),
                 )
+        return result
+    finally:
         if run is not None:
             run.close()
-    return result
+        _remove_tree(tmp)
+
+
+def _remove_tree(path: Path) -> None:
+    """Remove a case's project: a Windows handle may need a moment to close.
+
+    The documented policy is retry, then raise — never a blanket ignore, so a
+    cleanup that really failed names the case it failed in.
+    """
+    for attempt in range(6):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 5:
+                raise
+            time.sleep(0.1)
 
 
 def _preserve(

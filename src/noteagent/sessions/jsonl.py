@@ -52,6 +52,7 @@ _KNOWN_TYPES = frozenset(
         "context_edit",
         "message",
         "model_change",
+        "node",
         "reset",
         "resume_started",
         MARKER_TYPE,

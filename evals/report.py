@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from evals.harness import Exchange
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,8 @@ class CaseResult:
     duration_s: float
     exchanges: tuple["Exchange", ...]
     log: tuple[str, ...]
+    #: Numbers a case reports for the reader and the baseline; not verdicts.
+    metrics: tuple[tuple[str, object], ...] = ()
 
     @property
     def passed(self) -> bool:
@@ -103,6 +105,9 @@ class EvalReport:
                         for item in result.checks
                     ],
                     "error": result.error_line,
+                    "metrics": {
+                        name: value for name, value in result.metrics
+                    },
                 }
                 for result in self.results
             ],
@@ -128,6 +133,17 @@ class EvalReport:
                 f"| `{result.name}` | {verdict} | {count} | "
                 f"{result.duration_s:.1f}s |"
             )
+        measured = [
+            result for result in self.results if result.metrics
+        ]
+        if measured:
+            lines.extend(["", "## Metrics"])
+            for result in measured:
+                pairs = ", ".join(
+                    f"{name}={value}"
+                    for name, value in result.metrics
+                )
+                lines.append(f"- `{result.name}`: {pairs}")
         failures = [result for result in self.results if not result.passed]
         if failures:
             lines.extend(["", "## Failures"])
