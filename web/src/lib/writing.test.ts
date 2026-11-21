@@ -56,4 +56,32 @@ describe("writing attention", () => {
 
     expect(attention).toEqual([{ kind: "blocked", message: "waiting" }]);
   });
+
+  it("derives stale sections with their reason", () => {
+    const attention = writingAttention(
+      state({
+        draft: {
+          pages: [
+            {
+              wikiFile: "wiki/a.md",
+              sections: [
+                {
+                  id: "definition",
+                  heading: "定义",
+                  stale: true,
+                  staleReason: "frame_changed",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(attention).toHaveLength(1);
+    expect(attention[0].kind).toBe("stale_section");
+    expect(attention[0].reason).toBe("frame_changed");
+    expect(attention[0].target).toBe("wiki/a.md#definition");
+    expect(String(attention[0].message)).toContain("定义");
+  });
 });

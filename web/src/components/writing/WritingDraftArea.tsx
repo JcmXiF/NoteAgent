@@ -7,6 +7,10 @@ import {
   EmptyLine,
 } from "@/components/writing/WritingParts";
 import type { WritingDraftPage } from "@/lib/api/writing";
+import {
+  isMissingReason,
+  staleMessage,
+} from "@/lib/writing";
 
 export function Draft({
   pages,
@@ -86,6 +90,21 @@ export function Draft({
                           {t("writing.edited")}
                         </Badge>
                       ) : null}
+                      {section.stale ? (
+                        <Badge
+                          tone={
+                            isMissingReason(section.staleReason)
+                              ? "destructive"
+                              : "warning"
+                          }
+                        >
+                          {t(
+                            isMissingReason(section.staleReason)
+                              ? "writing.stale.missingBadge"
+                              : "writing.stale.badge",
+                          )}
+                        </Badge>
+                      ) : null}
                       <Button
                         variant="ghost"
                         size="icon-xs"
@@ -112,6 +131,20 @@ export function Draft({
                         )
                       }
                     />
+                    {section.stale ? (
+                      <p
+                        className={`mt-1 text-[10px] ${
+                          isMissingReason(section.staleReason)
+                            ? "text-destructive"
+                            : "text-warning"
+                        }`}
+                      >
+                        {staleMessage(
+                          section.staleReason,
+                          section.heading,
+                        )}
+                      </p>
+                    ) : null}
                     {(section.citations ?? []).length > 0 ? (
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         {(section.citations ?? [])

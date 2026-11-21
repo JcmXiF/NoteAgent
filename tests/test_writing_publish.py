@@ -22,7 +22,11 @@ from noteagent.ingest.source_citations import (
 )
 from noteagent.project.init import init_project
 from noteagent.writing.state import WritingStateStore, draft_pages
-from writing_fixtures import writing_tools
+from writing_fixtures import (
+    prepare_draft,
+    write_draft,
+    writing_tools,
+)
 
 WIKI_FILE = "wiki/concepts/信息熵.md"
 
@@ -34,58 +38,18 @@ class WritingPublishTests(unittest.TestCase):
         self.layout = init_project(Path(self._tmp.name) / "demo")
 
     def prepared(self, tools, *, body: str = "熵是信息的平均量。"):
-        tools.dispatch(
-            "web_search",
-            json.dumps({"query": "信息熵"}),
-            ToolContext("s1"),
+        return prepare_draft(
+            tools,
+            self.layout,
+            wiki_file=WIKI_FILE,
+            body=body,
         )
-        state = WritingStateStore(self.layout).load()
-        hit_id = str(state.searches[0]["hits"][0]["id"])
-        selected = tools.dispatch(
-            "select_page",
-            json.dumps({"hitId": hit_id}),
-            ToolContext("s1"),
-        )
-        page_id = str(json.loads(selected.content)["pageId"])
-        framed = tools.dispatch(
-            "select_frame",
-            json.dumps({"pageId": page_id, "blockIds": ["b2", "b3"]}),
-            ToolContext("s1"),
-        )
-        frame_id = str(json.loads(framed.content)["frameId"])
-        composed = tools.dispatch(
-            "compose_wiki",
-            json.dumps(
-                {
-                    "wikiFile": WIKI_FILE,
-                    "baseDraftVersion": 0,
-                    "sections": [
-                        {
-                            "id": "definition",
-                            "heading": "定义",
-                            "body": body,
-                            "citations": [frame_id],
-                        }
-                    ],
-                }
-            ),
-            ToolContext("s1"),
-        )
-        draft_version = int(
-            json.loads(composed.content)["draftVersion"]
-        )
-        return page_id, frame_id, draft_version
 
     def write(self, tools, draft_version: int):
-        return tools.dispatch(
-            "write_wiki",
-            json.dumps(
-                {
-                    "wikiFile": WIKI_FILE,
-                    "draftVersion": draft_version,
-                }
-            ),
-            ToolContext("s1"),
+        return write_draft(
+            tools,
+            wiki_file=WIKI_FILE,
+            draft_version=draft_version,
         )
 
     def wiki_path(self) -> Path:

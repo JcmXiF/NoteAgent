@@ -24,6 +24,7 @@ export type WritingDraftSection = {
   citations?: WritingDraftCitation[];
   version?: number;
   stale?: boolean;
+  staleReason?: string;
   humanEdited?: boolean;
 };
 

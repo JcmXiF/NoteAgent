@@ -48,6 +48,15 @@ PAGE_ERROR_KINDS = frozenset({"fetch_failed", "login_wall"})
 FRAME_SOURCES = frozenset({"agent", "human"})
 DRAFT_STATUSES = frozenset({"draft", "written"})
 
+#: Why a section's pinned source drifted: stale sections still publish (with a
+#: warning), while missing sources must refuse the write.
+SECTION_STALE_REASONS = frozenset(
+    {"frame_changed", "page_changed"}
+)
+SECTION_MISSING_REASONS = frozenset(
+    {"frame_missing", "page_missing", "blocks_missing"}
+)
+
 #: The id shape a selected page, a frame and a draft section share.
 WRITING_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
 _SOURCE_SUFFIX = re.compile(r"\A\.[A-Za-z0-9]{1,10}\Z")
@@ -192,10 +201,10 @@ class WritingStateStore:
                     f"{base_version}",
                     current_version=current.state_version,
                 )
-            return self._write_locked(
-                current,
-                _human_edit(current, changes, self._clock),
+            next_state = self.refresh_provenance(
+                _human_edit(current, changes, self._clock)
             )
+            return self._write_locked(current, next_state)
 
     def ensure_writer(self, kind: str, ident: str) -> WritingState:
         """Take the lease for a run's write, renewing it while the run lives.
@@ -404,17 +413,74 @@ class WritingStateStore:
     def update_selected_page(
         self, page_id: str, row: Mapping[str, object]
     ) -> WritingState:
-        """Replace one selected page by id, retrying once on a version conflict."""
+        """Replace one selected page, re-deriving what cites it.
+
+        A page's status or version moving is exactly what makes a section's
+        pinned frame drift, so the same write refreshes the provenance flags.
+        """
         return self._append(
             row,
-            lambda state, item: replace(
-                state,
-                selected_pages=tuple(
-                    item if str(page.get("id")) == page_id else page
-                    for page in state.selected_pages
-                ),
+            lambda state, item: self.refresh_provenance(
+                replace(
+                    state,
+                    selected_pages=tuple(
+                        item
+                        if str(page.get("id")) == page_id
+                        else page
+                        for page in state.selected_pages
+                    ),
+                )
             ),
         )
+
+    def refresh_provenance(self, state: WritingState) -> WritingState:
+        """Re-derive every section's stale flag and reason from its sources."""
+        frames, pages, blocks_for = self._provenance_lookup(state)
+        pages_out: list[Mapping[str, object]] = []
+        for page in draft_pages(state.draft):
+            sections: list[Mapping[str, object]] = []
+            for section in draft_sections(page):
+                reason = section_reason(
+                    section, frames, pages, blocks_for
+                )
+                sections.append(
+                    {
+                        **section,
+                        "stale": bool(reason),
+                        "staleReason": reason,
+                    }
+                )
+            pages_out.append({**page, "sections": sections})
+        return replace(state, draft={"pages": pages_out})
+
+    def _provenance_lookup(
+        self, state: WritingState
+    ) -> tuple[
+        dict[str, Mapping[str, object]],
+        dict[str, Mapping[str, object]],
+        Callable[[str], set[str] | None],
+    ]:
+        frames = {
+            str(frame.get("id")): frame for frame in state.frames
+        }
+        pages = {
+            str(page.get("id")): page
+            for page in state.selected_pages
+        }
+        cache: dict[str, set[str] | None] = {}
+
+        def blocks_for(page_id: str) -> set[str] | None:
+            if page_id not in cache:
+                try:
+                    cache[page_id] = {
+                        str(block.get("id"))
+                        for block in self.load_page_blocks(page_id)
+                    }
+                except (OSError, WritingStateError):
+                    cache[page_id] = None
+            return cache[page_id]
+
+        return frames, pages, blocks_for
 
     def page_for_frame(
         self, page_id: str
@@ -600,9 +666,25 @@ class WritingStateStore:
                 "sections": current_sections,
             }
             pages[index] = page
-            next_state = replace(state, draft={"pages": pages})
+            next_state = self.refresh_provenance(
+                replace(state, draft={"pages": pages})
+            )
+            refreshed = draft_pages(next_state.draft)[index]
+            refreshed_by_id = {
+                str(item.get("id")): item
+                for page_item in draft_pages(next_state.draft)
+                for item in draft_sections(page_item)
+            }
+            changed_rows = tuple(
+                refreshed_by_id.get(str(item.get("id")), item)
+                for item in changed
+            )
             try:
-                return self.save(next_state), page, tuple(changed)
+                return (
+                    self.save(next_state),
+                    refreshed,
+                    changed_rows,
+                )
             except WritingStateConflict:
                 if attempt:
                     raise
@@ -772,6 +854,25 @@ def state_summary(state: WritingState) -> dict[str, object]:
         }
         for row in state.selected_pages
         if _is_failed(row)
+    )
+    attention.extend(
+        {
+            "kind": (
+                "stale_section"
+                if reason in SECTION_STALE_REASONS
+                else "missing_target"
+            ),
+            "reason": reason,
+            "target": f"{page.get('wikiFile')}#{section.get('id')}",
+            "message": (
+                f"section {section.get('id')} in "
+                f"{page.get('wikiFile')} is "
+                f"{reason.replace('_', ' ')}"
+            ),
+        }
+        for page in pages
+        for section in draft_sections(page)
+        if (reason := str(section.get("staleReason") or ""))
     )
     return {
         "stateVersion": state.state_version,
@@ -970,6 +1071,17 @@ def _draft(value: object) -> Mapping[str, object]:
                     raise WritingStateError(
                         f"a draft section's {flag} must be a boolean"
                     )
+            reason = section.get("staleReason", "")
+            if not isinstance(reason, str):
+                raise WritingStateError(
+                    "a draft section's staleReason must be a string"
+                )
+            if reason and reason not in (
+                SECTION_STALE_REASONS | SECTION_MISSING_REASONS
+            ):
+                raise WritingStateError(
+                    f"unknown draft section stale reason: {reason!r}"
+                )
         pages.append(dict(page))
     return {"pages": pages}
 
@@ -1015,6 +1127,50 @@ def _is_empty(state: WritingState) -> bool:
     )
 
 
+def section_reason(
+    section: Mapping[str, object],
+    frames: Mapping[str, Mapping[str, object]],
+    pages: Mapping[str, Mapping[str, object]],
+    blocks_for: Callable[[str], set[str] | None],
+) -> str:
+    """Why a section's citations no longer match, or "" while they do.
+
+    A missing source wins over a version drift: the write refuses the first,
+    while the second only marks the section stale for the human or the agent.
+    """
+    raw = section.get("citations")
+    citations = raw if isinstance(raw, list) else []
+    drift = ""
+    for citation in citations:
+        if not isinstance(citation, Mapping):
+            continue
+        frame = frames.get(str(citation.get("frameId") or "").strip())
+        if frame is None:
+            return "frame_missing"
+        page = pages.get(str(frame.get("pageId") or ""))
+        if page is None or str(page.get("status") or "") != "ready":
+            return "page_missing"
+        blocks = blocks_for(str(page.get("id") or ""))
+        if blocks is None:
+            return "blocks_missing"
+        pinned = [str(item) for item in citation.get("blockIds") or []]
+        if any(item not in blocks for item in pinned):
+            return "blocks_missing"
+        if not drift:
+            version = citation.get("frameVersion")
+            current = version if isinstance(version, int) else 0
+            if current != row_version(frame):
+                drift = "frame_changed"
+        if not drift:
+            page_version = frame.get("pageVersion")
+            pinned_page = (
+                page_version if isinstance(page_version, int) else 0
+            )
+            if pinned_page != row_version(page):
+                drift = "page_changed"
+    return drift
+
+
 def _citations_key(section: Mapping[str, object]) -> tuple[object, ...]:
     raw = section.get("citations")
     items = raw if isinstance(raw, list) else []
@@ -1053,25 +1209,25 @@ def _row_changed(
     return any(old.get(field) != new.get(field) for field in fields)
 
 
-def _bump_changed(
+def _merge_pages(
     old_rows: Sequence[Mapping[str, object]],
     new_rows: Sequence[Mapping[str, object]],
-    fields: Sequence[str],
 ) -> tuple[Mapping[str, object], ...]:
+    """A page's version is its capture's; a person's title edit is not a new one."""
     previous = {str(row.get("id")): row for row in old_rows}
     out: list[Mapping[str, object]] = []
     for row in new_rows:
         old = previous.get(str(row.get("id")))
-        if old is None:
-            out.append(
-                {**row, "version": max(1, row_version(row))}
-            )
-        elif _row_changed(old, row, fields):
-            out.append(
-                {**row, "version": row_version(old) + 1}
-            )
-        else:
-            out.append({**row, "version": row_version(old)})
+        out.append(
+            {
+                **row,
+                "version": (
+                    row_version(old)
+                    if old is not None
+                    else row_version(row)
+                ),
+            }
+        )
     return tuple(out)
 
 
@@ -1213,11 +1369,7 @@ def _human_edit(
         state,
         writer=None,
         searches=searches,
-        selected_pages=_bump_changed(
-            state.selected_pages,
-            selected,
-            ("title", "url", "status"),
-        ),
+        selected_pages=_merge_pages(state.selected_pages, selected),
         frames=_bump_frames(state.frames, frames, clock),
         draft={"pages": pages},
     )
@@ -1330,6 +1482,8 @@ __all__ = [
     "FRAME_SOURCES",
     "PAGE_ERROR_KINDS",
     "PAGE_STATUSES",
+    "SECTION_MISSING_REASONS",
+    "SECTION_STALE_REASONS",
     "STATE_SCHEMA_VERSION",
     "STATE_WRITER",
     "WRITER_TTL_S",
@@ -1344,5 +1498,6 @@ __all__ = [
     "draft_section_for",
     "draft_sections",
     "row_version",
+    "section_reason",
     "state_summary",
 ]

@@ -102,6 +102,15 @@
     "archiveSummary": "v{{version}} · {{searches}} searches · {{pages}} pages · {{frames}} frames · {{draft}} draft pages",
     "activate": "Activate",
     "edited": "Edited",
+    "stale": {
+      "badge": "May be out of date",
+      "missingBadge": "Citation lost",
+      "frame_changed": "The frame changed after “{{heading}}” was written. Ask the agent to rewrite this section, then publish again.",
+      "page_changed": "The page changed after “{{heading}}” was written. Ask the agent to rewrite this section, then publish again.",
+      "frame_missing": "The frame “{{heading}}” cites is gone. Pick new material and rewrite this section.",
+      "page_missing": "The page “{{heading}}” cites is gone or not ready. Pick new material and rewrite this section.",
+      "blocks_missing": "The pinned blocks of “{{heading}}” are gone from the page. Pick new material and rewrite this section."
+    },
     "unsaved": "You have unsaved writing-state edits. Save them first if the agent should see them. Send anyway?",
     "unsavedBusy": "The agent is running and cannot see your unsaved writing-state edits.",
     "edit": {

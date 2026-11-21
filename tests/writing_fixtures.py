@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.agent.tools import ToolContext
 from noteagent.api.deps import AppDeps
 from noteagent.api.session_access import session_tools
 from noteagent.project.layout import ProjectLayout
+from noteagent.writing.state import WritingStateStore
 
 
 def page_html(count: int = 4) -> str:
@@ -47,6 +50,77 @@ def capture(html: str = "") -> Capture:
         reasons=(),
         http_status=200,
         char_count=100,
+    )
+
+
+def prepare_draft(
+    tools,
+    layout: ProjectLayout,
+    *,
+    wiki_file: str = "wiki/concepts/信息熵.md",
+    body: str = "熵是信息的平均量。",
+    blocks: tuple[str, ...] = ("b2", "b3"),
+):
+    """Search, select, frame and compose one draft page; return its ids."""
+    tools.dispatch(
+        "web_search",
+        json.dumps({"query": "信息熵"}),
+        ToolContext("s1"),
+    )
+    state = WritingStateStore(layout).load()
+    hit_id = str(state.searches[0]["hits"][0]["id"])
+    selected = tools.dispatch(
+        "select_page",
+        json.dumps({"hitId": hit_id}),
+        ToolContext("s1"),
+    )
+    page_id = str(json.loads(selected.content)["pageId"])
+    framed = tools.dispatch(
+        "select_frame",
+        json.dumps({"pageId": page_id, "blockIds": list(blocks)}),
+        ToolContext("s1"),
+    )
+    frame_id = str(json.loads(framed.content)["frameId"])
+    composed = tools.dispatch(
+        "compose_wiki",
+        json.dumps(
+            {
+                "wikiFile": wiki_file,
+                "baseDraftVersion": 0,
+                "sections": [
+                    {
+                        "id": "definition",
+                        "heading": "定义",
+                        "body": body,
+                        "citations": [frame_id],
+                    }
+                ],
+            }
+        ),
+        ToolContext("s1"),
+    )
+    draft_version = int(
+        json.loads(composed.content)["draftVersion"]
+    )
+    return page_id, frame_id, draft_version
+
+
+def write_draft(
+    tools,
+    *,
+    wiki_file: str = "wiki/concepts/信息熵.md",
+    draft_version: int = 1,
+):
+    """Publish the composed draft page through the tool."""
+    return tools.dispatch(
+        "write_wiki",
+        json.dumps(
+            {
+                "wikiFile": wiki_file,
+                "draftVersion": draft_version,
+            }
+        ),
+        ToolContext("s1"),
     )
 
 

@@ -337,6 +337,111 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain("eff-1");
   });
 
+  it("shows a stale section and its reason", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 13,
+        writer: null,
+        searches: [],
+        selectedPages: [],
+        frames: [],
+        draft: {
+          pages: [
+            {
+              wikiFile: "wiki/concepts/信息熵.md",
+              title: "信息熵",
+              version: 2,
+              status: "draft",
+              sections: [
+                {
+                  id: "definition",
+                  heading: "定义",
+                  body: "熵是信息的平均量。",
+                  citations: [],
+                  version: 2,
+                  stale: true,
+                  staleReason: "frame_changed",
+                  humanEdited: false,
+                },
+              ],
+            },
+          ],
+        },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("May be out of date");
+    expect(host.textContent).toContain(
+      "The frame changed after “定义” was written.",
+    );
+  });
+
+  it("edits a frame's blocks and can remove it", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 14,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+          },
+        ],
+        frames: [
+          {
+            id: "frame-1",
+            pageId: "page-1",
+            blockIds: ["b1", "b2"],
+            version: 1,
+            source: "agent",
+          },
+        ],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+    await draw();
+    const input = [...host.querySelectorAll("input")].find(
+      (item) =>
+        item.getAttribute("aria-label") ===
+        "Block ids, comma separated",
+    ) as HTMLInputElement;
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "b1, b3");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(
+      useWritingStore.getState().draft?.frames[0].blockIds,
+    ).toEqual(["b1", "b3"]);
+
+    const row = input.closest("li");
+    const remove = row?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove"]',
+    );
+    await act(async () => {
+      remove?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(useWritingStore.getState().draft?.frames).toEqual([]);
+  });
+
   it("edits a section locally and saves it", async () => {
     useWritingStore.setState({
       state: {

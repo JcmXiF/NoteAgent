@@ -33,8 +33,10 @@ from noteagent.io.atomic import write_bytes_atomic
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.run_log import RunLogger
 from noteagent.writing.state import (
+    SECTION_STALE_REASONS,
     WritingStateStore,
     draft_sections,
+    section_reason,
 )
 
 
@@ -44,6 +46,8 @@ class PublishResult:
 
     written_at: str
     effect_ids: tuple[str, ...]
+    #: Sections whose pinned source drifted but still had their blocks.
+    warnings: tuple[dict[str, str], ...] = ()
 
 
 def publish_page(
@@ -80,7 +84,9 @@ def publish_page(
     rendered: list[str] = []
     materials: dict[str, str] = {}
     blocks_by_page: dict[str, set[str]] = {}
+    warnings: list[dict[str, str]] = []
     for section in sections:
+        section_id = str(section.get("id") or "")
         body = str(section.get("body") or "").strip()
         if not body:
             raise ValueError(
@@ -135,6 +141,16 @@ def publish_page(
                     sources.append(locator)
             markers.append(clip_marker(frame_id, citation_blocks))
         marker = "\n".join(markers) + "\n" if markers else ""
+        reason = section_reason(
+            section,
+            frames,
+            selected,
+            lambda page_key: blocks_by_page.get(page_key),
+        )
+        if reason in SECTION_STALE_REASONS:
+            warnings.append(
+                {"section": section_id, "reason": reason}
+            )
         rendered.append(f"{marker}## {heading}\n\n{body}\n")
 
     title = str(page.get("title") or Path(wiki_file).stem)
@@ -195,6 +211,7 @@ def publish_page(
     return PublishResult(
         written_at=written_at,
         effect_ids=effect_ids,
+        warnings=tuple(warnings),
     )
 
 

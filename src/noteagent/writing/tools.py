@@ -78,7 +78,9 @@ _SELECT_PAGE_DESCRIPTION = (
     "Fetch the page behind one search hit and put its blocks in the writing state. "
     "Returns a status, a pageId and the block count; read the blocks with "
     "get_state({pageId}). A failed fetch is recorded in the state and returned as "
-    "an error observation. The same URL is not fetched twice."
+    "an error observation. The same URL is not fetched twice unless `refresh` is "
+    "true: a ready page is fetched again, its version moves, and sections citing "
+    "it become stale."
 )
 
 _SELECT_FRAME_DESCRIPTION = (
@@ -207,6 +209,9 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                             "heading": str(item.get("heading") or ""),
                             "version": row_version(item),
                             "stale": bool(item.get("stale")),
+                            "staleReason": str(
+                                item.get("staleReason") or ""
+                            ),
                             "humanEdited": bool(
                                 item.get("humanEdited")
                             ),
@@ -244,6 +249,9 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                 ],
                 "version": row_version(item),
                 "stale": bool(item.get("stale")),
+                "staleReason": str(
+                    item.get("staleReason") or ""
+                ),
                 "humanEdited": bool(item.get("humanEdited")),
             }
             content = json.dumps(payload, ensure_ascii=False)
@@ -470,6 +478,7 @@ def select_page_tool(
     def select_page(arguments, context) -> ToolResult:
         _take_lease(layout, context, moment)
         hit_id = str(arguments["hitId"]).strip()
+        refresh = bool(arguments.get("refresh", False))
         state = store.load()
         hit = _find_hit(state, hit_id)
         if hit is None:
@@ -489,7 +498,10 @@ def select_page_tool(
             ),
             None,
         )
-        if existing is not None:
+        if existing is not None and (
+            not refresh
+            or str(existing.get("status") or "") == "fetching"
+        ):
             return ToolResult(
                 content=json.dumps(
                     {
@@ -513,12 +525,15 @@ def select_page_tool(
             ),
             None,
         )
+        previous = failed if failed is not None else existing
         page_id = (
-            str(failed.get("id") or "")
-            if failed is not None
+            str(previous.get("id") or "")
+            if previous is not None
             else minted.new_id("page")
         )
-        base_version = row_version(failed) if failed is not None else 0
+        base_version = (
+            row_version(previous) if previous is not None else 0
+        )
         fetching = _page_row(
             page_id=page_id,
             hit_id=hit_id,
@@ -528,7 +543,7 @@ def select_page_tool(
             block_count=0,
             version=base_version + 1,
         )
-        if failed is not None:
+        if previous is not None:
             store.update_selected_page(page_id, fetching)
         else:
             store.append_selected_page(fetching)
@@ -647,7 +662,14 @@ def select_page_tool(
                     "minLength": 1,
                     "pattern": r"\S",
                     "description": "The hit id from a web_search",
-                }
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": (
+                        "Fetch a ready page again; its version moves and "
+                        "sections citing it go stale"
+                    ),
+                },
             },
             "required": ["hitId"],
             "additionalProperties": False,
@@ -948,6 +970,9 @@ def write_wiki_tool(
                     "wikiFile": wiki_file,
                     "effectIds": list(result.effect_ids),
                     "writtenAt": result.written_at,
+                    "warnings": [
+                        dict(item) for item in result.warnings
+                    ],
                 },
                 ensure_ascii=False,
             ),

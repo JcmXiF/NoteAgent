@@ -102,6 +102,15 @@
     "archiveSummary": "v{{version}} · 搜索 {{searches}} · 选页 {{pages}} · 框 {{frames}} · 草稿 {{draft}}",
     "activate": "切换",
     "edited": "已人工修改",
+    "stale": {
+      "badge": "可能已过期",
+      "missingBadge": "引用已失效",
+      "frame_changed": "「{{heading}}」写完后框改过。让 agent 重写这一段后重新发布。",
+      "page_changed": "「{{heading}}」写完后页面改过。让 agent 重写这一段后重新发布。",
+      "frame_missing": "「{{heading}}」引用的框已不存在。重新选材料并重写这一段。",
+      "page_missing": "「{{heading}}」引用的页面已不存在或未就绪。重新选材料并重写这一段。",
+      "blocks_missing": "「{{heading}}」钉住的段已不在页面里。重新选材料并重写这一段。"
+    },
     "unsaved": "写作状态有未保存的修改。要 agent 看到的话请先保存；仍要发送吗？",
     "unsavedBusy": "agent 正在运行，看不到你未保存的写作状态修改。",
     "edit": {
