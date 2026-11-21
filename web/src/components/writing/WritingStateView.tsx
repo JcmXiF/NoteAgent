@@ -4,6 +4,7 @@ import { Loader2, PenLine, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWritingState } from "@/components/writing/use-writing-state";
 import type {
+  WritingFrame,
   WritingSearch,
   WritingSelectedPage,
 } from "@/lib/api/writing";
@@ -95,9 +96,9 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
           pages={state.selectedPages}
           empty={t("writing.empty")}
         />
-        <Section
-          title={t("writing.areas.frames")}
-          count={state.frames.length}
+        <Frames
+          frames={state.frames}
+          pages={state.selectedPages}
           empty={t("writing.empty")}
         />
         <Section
@@ -146,7 +147,7 @@ function Searches({
   return (
     <Card title={t("writing.areas.searches")} count={searches.length}>
       {!latest ? (
-        <p className="mt-2 text-xs text-muted-foreground">{empty}</p>
+        <EmptyLine>{empty}</EmptyLine>
       ) : (
         <div className="mt-2 space-y-2">
           <p className="text-[11px] text-muted-foreground">
@@ -202,7 +203,7 @@ function SelectedPages({
   return (
     <Card title={t("writing.areas.selectedPages")} count={pages.length}>
       {pages.length === 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">{empty}</p>
+        <EmptyLine>{empty}</EmptyLine>
       ) : (
         <ul className="mt-2 space-y-2">
           {pages.map((page, index) => (
@@ -230,6 +231,56 @@ function SelectedPages({
   );
 }
 
+function Frames({
+  frames,
+  pages,
+  empty,
+}: {
+  frames: WritingFrame[];
+  pages: WritingSelectedPage[];
+  empty: string;
+}) {
+  const { t } = useTranslation();
+  const groups = new Map<string, WritingFrame[]>();
+  for (const frame of frames) {
+    const key = frame.pageId ?? "";
+    const list = groups.get(key) ?? [];
+    list.push(frame);
+    groups.set(key, list);
+  }
+  const titleFor = (pageId: string) =>
+    pages.find((page) => page.id === pageId)?.title ?? pageId;
+
+  return (
+    <Card title={t("writing.areas.frames")} count={frames.length}>
+      {frames.length === 0 ? (
+        <EmptyLine>{empty}</EmptyLine>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {[...groups].map(([pageId, items]) => (
+            <li key={pageId}>
+              <p className="text-xs font-medium">{titleFor(pageId)}</p>
+              <ul className="mt-1 space-y-1">
+                {items.map((frame, index) => (
+                  <li
+                    key={frame.id ?? index}
+                    className="text-[11px] text-muted-foreground"
+                  >
+                    {frame.id} ·{" "}
+                    {t("writing.frames.blockCount", {
+                      count: frame.blockIds?.length ?? 0,
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 function Section({
   title,
   count,
@@ -243,10 +294,20 @@ function Section({
 }) {
   return (
     <Card title={title} count={count}>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {count ? (detail ?? "") : empty}
-      </p>
+      {count ? (
+        detail ? (
+          <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+        ) : null
+      ) : (
+        <EmptyLine>{empty}</EmptyLine>
+      )}
     </Card>
+  );
+}
+
+function EmptyLine({ children }: { children: ReactNode }) {
+  return (
+    <p className="mt-2 text-xs text-muted-foreground">{children}</p>
   );
 }
 

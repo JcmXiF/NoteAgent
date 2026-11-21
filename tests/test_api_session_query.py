@@ -305,6 +305,7 @@ class DefaultToolTests(unittest.TestCase):
                 "get_state",
                 "web_search",
                 "select_page",
+                "select_frame",
             ],
         )
 

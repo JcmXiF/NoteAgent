@@ -23,8 +23,9 @@ from noteagent.agent.model import ToolCall
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
-#: What a call is allowed to touch.
-SideEffect: TypeAlias = Literal["read", "network", "human"]
+#: What a call is allowed to touch. ``state`` is the project's writing state:
+#: a write the store serializes, not a network or human action.
+SideEffect: TypeAlias = Literal["read", "network", "human", "state"]
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -210,15 +211,37 @@ class ToolRegistry:
     def dispatch_many(
         self, calls: Sequence[ToolCall], context: ToolContext
     ) -> tuple[ToolResult, ...]:
-        """Run one round's calls at the same time, answering in the asked order.
+        """Run one round's calls, answering in the asked order.
 
-        The model writes its calls in the order it means them; the log keeps that
-        order even when a later call finishes first, so the prompt and the cards
-        read the same way on every replay.
+        Read/network calls run at the same time. A round that includes a state
+        (or human) call runs in the model's order instead: a state write must
+        not race the read that follows it or another state write beside it.
+        The model writes its calls in the order it means them; the log keeps
+        that order even when a later call finishes first, so the prompt and the
+        cards read the same way on every replay.
         """
         if not calls:
             return ()
         prepared = [self._prepare(call.name, call.arguments) for call in calls]
+        if any(
+            isinstance(item, tuple)
+            and item[0].side_effect in {"state", "human"}
+            for item in prepared
+        ):
+            results: list[ToolResult] = []
+            for item in prepared:
+                if isinstance(item, ToolResult):
+                    results.append(item)
+                    continue
+                spec, values = item
+                call = _PendingCall(spec)
+                call.start(values, context)
+                results.append(
+                    self._finish(
+                        spec, call.outcome(spec.timeout_s, context.cancel)
+                    )
+                )
+            return tuple(results)
         pending: dict[int, tuple[_PendingCall, ToolSpec]] = {}
         results: list[ToolResult | None] = [None] * len(calls)
         for index, item in enumerate(prepared):

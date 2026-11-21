@@ -212,6 +212,19 @@ class WritingStateTests(unittest.TestCase):
         with self.assertRaises(WritingStateError):
             self.store.load()
 
+    def test_an_unknown_frame_source_is_refused(self) -> None:
+        self.layout.writing_state.parent.mkdir(parents=True, exist_ok=True)
+        self.layout.writing_state.write_text(
+            '{"version": 1, "stateVersion": 0, '
+            '"frames": [{"id": "f1", "pageId": "p1", '
+            '"blockIds": ["b1"], "version": 1, "pageVersion": 2, '
+            '"source": "weird"}]}',
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(WritingStateError):
+            self.store.load()
+
     def test_the_wire_shape_round_trips(self) -> None:
         state = WritingState(
             state_version=4,

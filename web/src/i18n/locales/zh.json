@@ -67,6 +67,9 @@
       "failed": "失败",
       "blockCount": "{{count}} 段"
     },
+    "frames": {
+      "blockCount": "{{count}} 段"
+    },
     "areas": {
       "searches": "搜索结果",
       "selectedPages": "选页",

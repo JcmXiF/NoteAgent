@@ -239,6 +239,39 @@ class ParallelDispatchTests(unittest.TestCase):
 
         self.assertEqual([result.content for result in results], ["slow", "fast"])
 
+    def test_a_round_with_a_state_call_runs_in_order(self) -> None:
+        events: list[str] = []
+
+        def first(_arguments, _context):
+            events.append("first-start")
+            time.sleep(0.05)
+            events.append("first-end")
+            return ToolResult(content="first")
+
+        def second(_arguments, _context):
+            events.append("second")
+            return ToolResult(content="second")
+
+        registry = ToolRegistry(
+            [
+                _spec(first, name="first", side_effect="state"),
+                _spec(second, name="second"),
+            ]
+        )
+
+        results = registry.dispatch_many(
+            [
+                ToolCall("1", "first", '{"text": "x"}'),
+                ToolCall("2", "second", '{"text": "x"}'),
+            ],
+            ToolContext("s1"),
+        )
+
+        self.assertEqual(
+            [result.content for result in results], ["first", "second"]
+        )
+        self.assertEqual(events, ["first-start", "first-end", "second"])
+
     def test_one_bad_call_does_not_take_down_the_others(self) -> None:
         def broken(_arguments, _context):
             raise ValueError("boom")

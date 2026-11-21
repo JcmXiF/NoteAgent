@@ -170,4 +170,41 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain("Failed");
     expect(host.textContent).toContain("http_forbidden");
   });
+
+  it("lists frames by page", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 8,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+          },
+        ],
+        frames: [
+          {
+            id: "frame-1",
+            pageId: "page-1",
+            blockIds: ["b1", "b2"],
+            version: 1,
+            source: "agent",
+          },
+        ],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("信息熵");
+    expect(host.textContent).toContain("frame-1");
+    expect(host.textContent).toContain("2 blocks");
+  });
 });

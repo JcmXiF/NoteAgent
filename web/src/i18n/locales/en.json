@@ -67,6 +67,9 @@
       "failed": "Failed",
       "blockCount": "{{count}} blocks"
     },
+    "frames": {
+      "blockCount": "{{count}} blocks"
+    },
     "areas": {
       "searches": "Search results",
       "selectedPages": "Selected pages",

@@ -36,6 +36,7 @@ _LOCK_WAIT_S = 0.05
 #: so a hand-edited state is checked here rather than trusted.
 PAGE_STATUSES = frozenset({"fetching", "ready", "failed"})
 PAGE_ERROR_KINDS = frozenset({"fetch_failed", "login_wall"})
+FRAME_SOURCES = frozenset({"agent", "human"})
 
 _PAGE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
 
@@ -111,7 +112,7 @@ class WritingState:
             writer=dict(writer) if isinstance(writer, Mapping) else None,
             searches=_items(raw.get("searches"), "searches"),
             selected_pages=_selected_pages(raw.get("selectedPages")),
-            frames=_items(raw.get("frames"), "frames"),
+            frames=_frames(raw.get("frames")),
             draft=dict(draft),
             attention=_items(raw.get("attention"), "attention"),
         )
@@ -215,6 +216,34 @@ class WritingStateStore:
                     item if str(page.get("id")) == page_id else page
                     for page in state.selected_pages
                 ),
+            ),
+        )
+
+    def page_for_frame(
+        self, page_id: str
+    ) -> tuple[Mapping[str, object], list[dict[str, object]]]:
+        """The ready page a frame may cite, and its blocks."""
+        state = self.load()
+        page = next(
+            (
+                item
+                for item in state.selected_pages
+                if str(item.get("id")) == page_id
+            ),
+            None,
+        )
+        if page is None:
+            raise ValueError(f"no such page: {page_id}")
+        if str(page.get("status") or "") != "ready":
+            raise ValueError(f"page {page_id} is not ready")
+        return page, self.load_page_blocks(page_id)
+
+    def append_frame(self, row: Mapping[str, object]) -> WritingState:
+        """Append one frame, retrying once if another writer moved first."""
+        return self._append(
+            row,
+            lambda state, item: replace(
+                state, frames=state.frames + (item,)
             ),
         )
 
@@ -371,6 +400,46 @@ def _is_failed(row: Mapping[str, object]) -> bool:
     return str(row.get("status") or "") == "failed"
 
 
+def _frames(value: object) -> tuple[Mapping[str, object], ...]:
+    rows = _items(value, "frames")
+    for row in rows:
+        frame_id = row.get("id")
+        if not isinstance(frame_id, str) or not frame_id.strip():
+            raise WritingStateError("a frame needs an id")
+        page_id = row.get("pageId")
+        if not isinstance(page_id, str) or not page_id.strip():
+            raise WritingStateError("a frame needs a pageId")
+        block_ids = row.get("blockIds")
+        if not isinstance(block_ids, list) or any(
+            not isinstance(block, str) for block in block_ids
+        ):
+            raise WritingStateError(
+                "a frame's blockIds must be a list of strings"
+            )
+        version = row.get("version")
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < 1
+        ):
+            raise WritingStateError(
+                "a frame's version must be a positive integer"
+            )
+        page_version = row.get("pageVersion")
+        if (
+            isinstance(page_version, bool)
+            or not isinstance(page_version, int)
+            or page_version < 0
+        ):
+            raise WritingStateError(
+                "a frame's pageVersion must be a non-negative integer"
+            )
+        source = row.get("source")
+        if source is not None and str(source) not in FRAME_SOURCES:
+            raise WritingStateError(f"unknown frame source: {source!r}")
+    return rows
+
+
 def _draft_pages(draft: Mapping[str, object]) -> list[Mapping[str, object]]:
     raw = draft.get("pages")
     if not isinstance(raw, list):
@@ -384,6 +453,7 @@ def _draft_sections(page: Mapping[str, object]) -> list[object]:
 
 
 __all__ = [
+    "FRAME_SOURCES",
     "PAGE_ERROR_KINDS",
     "PAGE_STATUSES",
     "STATE_SCHEMA_VERSION",

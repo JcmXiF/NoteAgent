@@ -13,6 +13,7 @@ from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import Diagnostic, OutputLimits, ToolResult, ToolSpec
+from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
 from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.layout import ProjectLayout
 from noteagent.writing.state import (
@@ -24,6 +25,7 @@ from noteagent.writing.state import (
 GET_STATE = "get_state"
 WEB_SEARCH = "web_search"
 SELECT_PAGE = "select_page"
+SELECT_FRAME = "select_frame"
 
 WebSearchFn = Callable[[str], Sequence[CandidateCard]]
 WebFetchFn = Callable[[str], Capture]
@@ -36,9 +38,11 @@ _GET_STATE_DESCRIPTION = (
     "Read this project's writing state. With no arguments it returns the summary: "
     "stateVersion, the current writer, the counts of searches, selected pages, "
     "frames and the draft, the latest search, and attention. With searchId it "
-    "returns that search's hits; with pageId it returns that page's blocks. Each "
-    "detail is truncated with a diagnostic when it is too large. The state is the "
-    "only source of truth for those areas; read it before acting on them."
+    "returns that search's hits; with pageId it returns that page's blocks; with "
+    "framesFor it returns that page's frames; with section:'frames' it returns "
+    "every frame. Each detail is truncated with a diagnostic when it is too "
+    "large. The state is the only source of truth for those areas; read it "
+    "before acting on them."
 )
 
 _WEB_SEARCH_DESCRIPTION = (
@@ -55,6 +59,13 @@ _SELECT_PAGE_DESCRIPTION = (
     "an error observation. The same URL is not fetched twice."
 )
 
+_SELECT_FRAME_DESCRIPTION = (
+    "Select a frame as a list of block ids on one selected page. Returns a frame "
+    "id, version and block count; the frames are in the writing state. Read them "
+    "with get_state({framesFor: pageId}). Empty, unknown or too many blocks are "
+    "errors."
+)
+
 
 def get_state_tool(layout: ProjectLayout) -> ToolSpec:
     """The one perception tool the writing workflow starts from."""
@@ -62,6 +73,8 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
     def get_state(arguments, _context) -> ToolResult:
         search_id = str(arguments.get("searchId") or "").strip()
         page_id = str(arguments.get("pageId") or "").strip()
+        frames_for = str(arguments.get("framesFor") or "").strip()
+        section = str(arguments.get("section") or "").strip()
         store = WritingStateStore(layout)
         state = store.load()
         if search_id:
@@ -102,6 +115,29 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                 meta={"title": f"page {page_id}", "target": page_id},
                 diagnostics=diagnostics,
             )
+        if frames_for:
+            rows = [
+                dict(item)
+                for item in state.frames
+                if str(item.get("pageId")) == frames_for
+            ]
+            content, diagnostics = _bounded(rows)
+            return ToolResult(
+                content=content,
+                meta={
+                    "title": f"frames for {frames_for}",
+                    "target": frames_for,
+                },
+                diagnostics=diagnostics,
+            )
+        if section == "frames":
+            rows = [dict(item) for item in state.frames]
+            content, diagnostics = _bounded(rows)
+            return ToolResult(
+                content=content,
+                meta={"title": "frames", "target": "frames"},
+                diagnostics=diagnostics,
+            )
         summary = state_summary(state)
         return ToolResult(
             content=json.dumps(summary, ensure_ascii=False),
@@ -125,6 +161,16 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
                     "type": "string",
                     "minLength": 1,
                     "description": "Read one selected page's blocks by id.",
+                },
+                "framesFor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Read the frames of one selected page by id.",
+                },
+                "section": {
+                    "type": "string",
+                    "enum": ["frames"],
+                    "description": "Read every frame; the other selectors read one search or page.",
                 },
             },
             "additionalProperties": False,
@@ -456,6 +502,101 @@ def select_page_tool(
     )
 
 
+def select_frame_tool(
+    layout: ProjectLayout,
+    *,
+    clock: Clock | None = None,
+    ids: Ids | None = None,
+) -> ToolSpec:
+    """The agent's frame selection: a frame id and its blocks in the state."""
+    moment = clock or SystemClock()
+    minted = ids or UuidIds()
+    store = WritingStateStore(layout, clock=moment)
+
+    def select_frame(arguments, _context) -> ToolResult:
+        page_id = str(arguments["pageId"]).strip()
+        block_ids = [
+            str(item).strip()
+            for item in arguments["blockIds"]
+            if str(item).strip()
+        ]
+        if not block_ids:
+            raise ValueError("a frame needs at least one block")
+        if len(block_ids) > MAX_BLOCKS_PER_COLLECTION:
+            raise ValueError(
+                f"at most {MAX_BLOCKS_PER_COLLECTION} blocks per frame"
+            )
+        page, blocks = store.page_for_frame(page_id)
+        known = {str(block.get("id")) for block in blocks}
+        unknown = [
+            block_id for block_id in block_ids if block_id not in known
+        ]
+        if unknown:
+            raise ValueError(f"no such block: {unknown[0]}")
+        ordered = list(dict.fromkeys(block_ids))
+        frame_id = minted.new_id("frame")
+        store.append_frame(
+            _frame_row(
+                frame_id=frame_id,
+                page_id=page_id,
+                page_version=_version(page),
+                block_ids=ordered,
+                version=1,
+                source="agent",
+                updated_at=iso_timestamp(moment),
+            )
+        )
+        return ToolResult(
+            content=json.dumps(
+                {
+                    "status": "ok",
+                    "frameId": frame_id,
+                    "version": 1,
+                    "blockCount": len(ordered),
+                },
+                ensure_ascii=False,
+            ),
+            meta={
+                "title": f"frame {frame_id}",
+                "target": page_id,
+                "hits": len(ordered),
+            },
+        )
+
+    return ToolSpec(
+        name=SELECT_FRAME,
+        description=_SELECT_FRAME_DESCRIPTION,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pageId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": r"\S",
+                    "description": "A selected page id from get_state",
+                },
+                "blockIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                    "description": "The blocks that make the frame",
+                },
+            },
+            "required": ["pageId", "blockIds"],
+            "additionalProperties": False,
+        },
+        side_effect="state",
+        timeout_s=5.0,
+        output_limits=OutputLimits(
+            max_items=1,
+            max_chars_per_item=4_000,
+            max_chars_total=4_000,
+        ),
+        handler=select_frame,
+        argument_hint="pageId",
+    )
+
+
 def _search_row(
     *,
     search_id: str,
@@ -515,6 +656,27 @@ def _page_row(
     }
 
 
+def _frame_row(
+    *,
+    frame_id: str,
+    page_id: str,
+    page_version: int,
+    block_ids: list[str],
+    version: int,
+    source: str,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "id": frame_id,
+        "pageId": page_id,
+        "pageVersion": page_version,
+        "blockIds": block_ids,
+        "version": version,
+        "source": source,
+        "updatedAt": updated_at,
+    }
+
+
 def _failed_page(
     row: Mapping[str, object],
     message: str,
@@ -565,6 +727,7 @@ def _bounded(items: list[object]) -> tuple[str, tuple[Diagnostic, ...]]:
 
 __all__ = [
     "GET_STATE",
+    "SELECT_FRAME",
     "SELECT_PAGE",
     "WEB_SEARCH",
     "WebFetchFn",
@@ -572,6 +735,7 @@ __all__ = [
     "get_state_tool",
     "project_fetch",
     "project_web_search",
+    "select_frame_tool",
     "select_page_tool",
     "web_search_tool",
 ]

@@ -42,14 +42,24 @@ export type WritingSelectedPage = {
   fetchedAt?: string;
 };
 
-/** The state as the core writes it; the frame items are JSON for now. */
+export type WritingFrame = {
+  id?: string;
+  pageId?: string;
+  pageVersion?: number;
+  blockIds?: string[];
+  version?: number;
+  source?: "agent" | "human";
+  updatedAt?: string;
+};
+
+/** The state as the core writes it; the draft items are JSON for now. */
 export type WritingStatePayload = {
   version: number;
   stateVersion: number;
   writer: WritingWriter | null;
   searches: WritingSearch[];
   selectedPages: WritingSelectedPage[];
-  frames: Record<string, unknown>[];
+  frames: WritingFrame[];
   draft: { pages?: WritingDraftPage[]; [key: string]: unknown };
   attention: Record<string, unknown>[];
 };

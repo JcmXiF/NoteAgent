@@ -46,6 +46,7 @@ from noteagent.writing.tools import (
     get_state_tool,
     project_fetch,
     project_web_search,
+    select_frame_tool,
     select_page_tool,
     web_search_tool,
 )
@@ -212,6 +213,9 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
             clock=deps.clock,
             ids=deps.ids,
         )
+    )
+    tools.register(
+        select_frame_tool(layout, clock=deps.clock, ids=deps.ids)
     )
     return tools
 
