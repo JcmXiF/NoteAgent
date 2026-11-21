@@ -45,28 +45,6 @@ class EvidenceTests(unittest.TestCase):
 
         self.assertEqual(evidence.tools, ("wiki_read", "search"))
 
-    def test_wait_comes_from_the_session_view(self) -> None:
-        evidence = evidence_from(
-            session={"wait": {"waitId": "w1", "status": "proposed"}}
-        )
-
-        self.assertEqual(evidence.wait_status, "proposed")
-
-    def test_wait_falls_back_to_the_entries(self) -> None:
-        entries = [
-            {"type": "wait_proposed", "waitId": "w1"},
-            {"type": "wait_completed", "waitId": "w1", "status": "completed"},
-        ]
-
-        evidence = evidence_from(entries=entries)
-
-        self.assertEqual(evidence.wait_status, "completed")
-
-    def test_no_wait_is_absent(self) -> None:
-        evidence = evidence_from(session={"wait": None})
-
-        self.assertIsNone(evidence.wait_status)
-
     def test_errors_include_sse_failures_and_bad_tool_records(self) -> None:
         events = [
             ("status", {"step": "think"}),
@@ -102,21 +80,6 @@ class EvidenceTests(unittest.TestCase):
         )
 
         self.assertEqual(evidence.errors, ())
-
-    def test_propose_is_a_wait_not_a_tool(self) -> None:
-        evidence = evidence_from(
-            trace=[
-                {
-                    "type": "wait_proposed",
-                    "job": "plan",
-                    "status": "proposed",
-                }
-            ],
-            session={"wait": {"waitId": "w1", "status": "proposed"}},
-        )
-
-        self.assertEqual(evidence.tools, ())
-        self.assertEqual(evidence.wait_status, "proposed")
 
     def test_a_clean_run_has_no_errors(self) -> None:
         evidence = evidence_from(

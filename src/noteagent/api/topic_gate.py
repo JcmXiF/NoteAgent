@@ -7,10 +7,8 @@ from dataclasses import replace
 from typing import Any
 
 from noteagent.agent.jobs import JobArtifact, JobResult
-from noteagent.agent.store import WaitStore
 from noteagent.api.ingest import ingest_result_payload
 from noteagent.api.sse import iter_job_sse
-from noteagent.api.waited_jobs import iter_waited_job_sse
 from noteagent.ingest.clips import ClipCollection, load_clip_store, save_clip_store
 from noteagent.ingest.confirmed import ingest_confirmed
 from noteagent.ingest.topic_map import (
@@ -244,10 +242,6 @@ def iter_topic_map_sse(
     intent: str = "",
     source_identity: str = "",
     language: str = "",
-    waits: WaitStore | None = None,
-    session_id: str = "",
-    wait_id: str = "",
-    on_finished=None,
 ) -> Iterator[bytes]:
     def worker(on_status, cancel, _emit):
         return run_topic_map_job(
@@ -259,17 +253,6 @@ def iter_topic_map_sse(
             cancel=cancel,
         )
 
-    if waits is not None:
-        return iter_waited_job_sse(
-            worker,
-            waits=waits,
-            session_id=session_id,
-            wait_id=wait_id,
-            job="plan",
-            result_from_payload=plan_job_result,
-            on_finished=on_finished,
-            default_step_id="plan",
-        )
     return iter_job_sse(worker, default_step_id="plan")
 
 
@@ -371,10 +354,6 @@ def iter_ingest_confirmed_sse(
     confirmed: list[dict[str, Any]],
     *,
     intent: str = "",
-    waits: WaitStore | None = None,
-    session_id: str = "",
-    wait_id: str = "",
-    on_finished=None,
 ) -> Iterator[bytes]:
     def worker(on_status, cancel, _emit):
         return run_ingest_confirmed_job(
@@ -385,19 +364,6 @@ def iter_ingest_confirmed_sse(
             cancel=cancel,
         )
 
-    if waits is not None:
-        return iter_waited_job_sse(
-            worker,
-            waits=waits,
-            session_id=session_id,
-            wait_id=wait_id,
-            job="compile",
-            result_from_payload=lambda payload: compile_job_result(
-                payload, confirmed=confirmed
-            ),
-            on_finished=on_finished,
-            default_step_id="compose",
-        )
     return iter_job_sse(worker, default_step_id="compose")
 
 

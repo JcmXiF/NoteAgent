@@ -8,16 +8,12 @@ from agent_fakes import FakeModelClient, FakeRuntime
 from noteagent.agent.events import (
     DoneEvent,
     ErrorEvent,
-    JobResultEvent,
     ObservationEvent,
     StatusEvent,
     TokenEvent,
-    WaitEvent,
     is_terminal,
 )
-from noteagent.agent.jobs import JobArtifact, JobResult
-from noteagent.agent.runtime import AgentRuntime, OnBusy, Resume, Retry, UserInput
-from noteagent.agent.wait import WaitState
+from noteagent.agent.runtime import AgentRuntime, OnBusy, Retry, UserInput
 
 
 class RunRequestTests(unittest.TestCase):
@@ -25,17 +21,11 @@ class RunRequestTests(unittest.TestCase):
         # A second question in the same conversation would be a second model loop.
         self.assertEqual(UserInput("s1", "what is entropy?").on_busy, OnBusy.REJECT)
 
-    def test_a_resume_waits_for_the_running_turn(self) -> None:
-        # A finished job is an event, not a person: it may not be dropped, so it
-        # queues behind whatever the session is doing.
-        self.assertEqual(Resume("s1", "w1").on_busy, OnBusy.QUEUE)
-
     def test_a_retry_is_rejected_unless_it_says_otherwise(self) -> None:
         self.assertEqual(Retry("s1").on_busy, OnBusy.REJECT)
 
     def test_a_request_can_choose_the_other_policy(self) -> None:
         self.assertEqual(UserInput("s1", "again", on_busy=OnBusy.QUEUE).on_busy, OnBusy.QUEUE)
-        self.assertEqual(Resume("s1", "w1", on_busy=OnBusy.REJECT).on_busy, OnBusy.REJECT)
 
 
 class EventPayloadTests(unittest.TestCase):
@@ -56,53 +46,6 @@ class EventPayloadTests(unittest.TestCase):
     def test_an_observation_is_the_card_itself(self) -> None:
         card = {"tool": "wiki_read", "title": "Entropy", "slug": "concepts/entropy"}
         self.assertEqual(ObservationEvent(card).payload(), card)
-
-    def test_a_wait_names_the_job_and_where_it_is_finished(self) -> None:
-        event = WaitEvent(
-            wait=WaitState(
-                wait_id="w1",
-                job="plan",
-                interface="source",
-                status="proposed",
-                proposed_at="2026-11-10T09:00:00Z",
-                completion="confirm",
-            )
-        )
-        self.assertEqual(
-            event.payload(),
-            {
-                "waitId": "w1",
-                "job": "plan",
-                "interface": "source",
-                "completion": "confirm",
-                "status": "proposed",
-                "proposedAt": "2026-11-10T09:00:00Z",
-            },
-        )
-
-    def test_a_job_result_carries_typed_summary_and_artifacts(self) -> None:
-        event = JobResultEvent(
-            wait_id="w1",
-            result=JobResult(
-                job="plan",
-                status="succeeded",
-                summary="planned 3 pages",
-                artifacts=(
-                    JobArtifact("plan", "concepts/entropy", "Entropy plan"),
-                ),
-            ),
-        )
-        self.assertEqual(
-            event.payload(),
-            {
-                "waitId": "w1",
-                "status": "succeeded",
-                "summary": "planned 3 pages",
-                "artifacts": [
-                    {"kind": "plan", "id": "concepts/entropy", "label": "Entropy plan"}
-                ],
-            },
-        )
 
     def test_an_error_carries_a_code_and_whether_retrying_can_help(self) -> None:
         self.assertEqual(

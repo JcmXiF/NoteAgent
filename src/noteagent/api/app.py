@@ -103,7 +103,6 @@ from noteagent.api.projects import (
     use_project,
 )
 from noteagent.api.rag_settings import rag_rebuild_payload, rag_status_payload
-from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
 from noteagent.effects.journal import EffectJournal, effect_payload
 from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
@@ -128,11 +127,7 @@ from noteagent.writing.state import (
 from noteagent.api.session_access import (
     active_layout,
     cancel_session,
-    cancel_wait,
-    claim_job,
     default_session_store,
-    enter_wait_for_job,
-    job_wait_for_body,
     migrate_active_project_chats,
     migrate_sessions,
     open_session_store,
@@ -141,14 +136,12 @@ from noteagent.api.session_access import (
     resume_refusal,
     session_busy,
     session_runtime,
-    session_waits,
 )
 from noteagent.agent.store import SessionStore, summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
 from noteagent.prompts.writing_skill import sync_writing_skill
-from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
 from noteagent.ingest.revision_inbox import (
@@ -735,15 +728,6 @@ async def _app_lifespan(_app: FastAPI):
 logger = logging.getLogger(__name__)
 
 
-def _after_plan(deps: AppDeps, job_wait, layout: ProjectLayout, job_id: str) -> None:
-    """Close a planning job, then let a waiting run follow the new plan."""
-    job_cleanup(deps, job_wait, layout, job_id, "plan")
-    try:
-        pipeline_service_for(deps, layout).sync_waiting()
-    except Exception:  # noqa: BLE001 - the plan itself is already saved
-        logger.exception("a finished plan could not reach a waiting run")
-
-
 def _pipeline_retired() -> CodedHTTPException:
     """The old pipeline's start is closed; its runs stay readable."""
     return CodedHTTPException(
@@ -1012,7 +996,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.get("/api/v1/sessions/{session_id}")
@@ -1020,12 +1003,10 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """One session's transcript, and the same log read as the model sees it."""
         layout = active_layout(deps)
         store = open_session_store(deps, session_id, layout=layout)
-        reconcile_session(deps, store, layout, session_id)
         return session_payload(
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.patch("/api/v1/sessions/{session_id}")
@@ -1054,7 +1035,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.delete("/api/v1/sessions/{session_id}", status_code=204)
@@ -1094,8 +1074,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 body.content,
                 enabled=deps.writing_skill,
             )
-        reconcile_session(deps, store, layout, session_id)
-        waits = session_waits(deps, store)
         try:
             runtime = session_runtime(deps, store, layout)
         except LlmConfigError as err:
@@ -1105,7 +1083,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 runtime,
                 UserInput(session_id, body.content),
                 store=store,
-                waits=waits,
             ),
             media_type="text/event-stream",
             headers={
@@ -1164,7 +1141,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 runtime,
                 RunResume(session_id, body.runId, claim=claim),
                 store=store,
-                waits=session_waits(deps, store),
             ),
             media_type="text/event-stream",
             headers={
@@ -1213,7 +1189,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 store,
                 session_id,
                 busy=session_busy(deps, session_id),
-                waits=session_waits(deps, store),
             ),
         }
 
@@ -1222,12 +1197,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Stop this session's run; an idle session has nothing to stop."""
         open_session_store(deps, session_id)
         return {"cancelled": cancel_session(deps, session_id)}
-
-    @app.post("/api/v1/sessions/{session_id}/wait/{wait_id}/cancel")
-    def kernel_wait_cancel(session_id: str, wait_id: str) -> dict[str, object]:
-        """Stop a wait the human has not entered, before the job starts."""
-        store = open_session_store(deps, session_id)
-        return cancel_wait(session_waits(deps, store), session_id, wait_id)
 
     @app.post("/api/v1/sessions/{session_id}/compact")
     def kernel_session_compact(
@@ -1254,7 +1223,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 store,
                 session_id,
                 busy=session_busy(deps, session_id),
-                waits=session_waits(deps, store),
             ),
         }
 
@@ -2105,97 +2073,12 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.post("/api/projects/{name}/topic-map")
     def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:
         raise _pipeline_retired()
-        layout = require_project_layout(name)
-
-        # A plan proposed by the chat is entered through the same original
-        # button; the wait is what connects that press to the conversation. A
-        # wrong wait is answered before a missing model, and nothing is written
-        # until the job can actually start.
-        job_wait = job_wait_for_body(
-            deps, layout, body.sessionId, body.waitId, "plan"
-        )
-
-        try:
-            ensure_llm_configured()
-        except LlmConfigError as err:
-            raise http_error(err, 503) from err
-
-        on_finished = None
-        if job_wait is not None:
-            job_id = enter_wait_for_job(deps, job_wait, "plan")
-            on_finished = job_completion(deps, job_wait, layout, job_id)
-        else:
-            # A direct press writes the same project; it is a collaboration job
-            # too, so it waits for the one the chat entered.
-            job_id = claim_job(deps)
-
-        return StreamingResponse(
-            iter_topic_map_sse(
-                layout,
-                intent=body.intent,
-                source_identity=body.sourceIdentity,
-                language=body.language,
-                waits=job_wait.waits if job_wait is not None else None,
-                session_id=job_wait.session_id if job_wait is not None else "",
-                wait_id=job_wait.wait_id if job_wait is not None else "",
-                on_finished=on_finished,
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-            background=BackgroundTask(_after_plan, deps, job_wait, layout, job_id),
-        )
 
     @app.post("/api/projects/{name}/ingest-confirmed")
     def project_ingest_confirmed(
         name: str, body: IngestConfirmedBody
     ) -> StreamingResponse:
         raise _pipeline_retired()
-        layout = require_project_layout(name)
-
-        # A compile proposed by the chat is entered through the same original
-        # button, after the human has decided which pages to write. The wait is
-        # what connects that confirmation to the conversation.
-        job_wait = job_wait_for_body(
-            deps, layout, body.sessionId, body.waitId, "compile"
-        )
-
-        try:
-            ensure_llm_configured()
-        except LlmConfigError as err:
-            raise http_error(err, 503) from err
-
-        on_finished = None
-        if job_wait is not None:
-            job_id = enter_wait_for_job(deps, job_wait, "compile")
-            on_finished = job_completion(deps, job_wait, layout, job_id)
-        else:
-            job_id = claim_job(deps)
-
-        confirmed = [item.model_dump() for item in body.confirmed]
-        return StreamingResponse(
-            iter_ingest_confirmed_sse(
-                layout,
-                confirmed,
-                intent=body.intent,
-                waits=job_wait.waits if job_wait is not None else None,
-                session_id=job_wait.session_id if job_wait is not None else "",
-                wait_id=job_wait.wait_id if job_wait is not None else "",
-                on_finished=on_finished,
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-            background=BackgroundTask(
-                job_cleanup, deps, job_wait, layout, job_id, "compile"
-            ),
-        )
 
     # A write names its project, so these two cannot answer: saying so beats
     # letting a caller believe a capture was stored somewhere.

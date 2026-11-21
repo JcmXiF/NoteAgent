@@ -19,12 +19,18 @@ from typing import Any
 
 import yaml
 
-from noteagent.agent.wait import JOB_SOURCES
 from noteagent.ingest.frontmatter import parse_page, unquote_scalar
 
 TYPES = ("fact", "synthesis", "gap", "task")
 DIFFICULTIES = ("easy", "medium", "hard")
 WAIT_STATES = ("absent", "proposed")
+
+#: The job/interface pairs the old proposals used. Kept so the recorded dataset
+#: still parses; new runs write no waits.
+JOB_SOURCES = {
+    "plan": ("source", "plan_board"),
+    "compile": ("plan_board", "compile_board"),
+}
 DEFAULT_GOLDEN = Path(".scratch/agent-eval/golden")
 
 _QUERY_KEYS = (

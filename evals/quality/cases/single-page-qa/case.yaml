@@ -4,7 +4,6 @@ turns:
   - "熵和交叉熵的区别是什么？"
 assertions:
   tools_any: [wiki_read, search]
-  wait: absent
   max_tool_rounds: 4
   no_error: true
 judge:

@@ -18,12 +18,10 @@ import httpx
 
 from unittest.mock import patch
 
-from agent_fakes import FakeWaitStore, FixedClock, SequentialIds
+from agent_fakes import FixedClock, SequentialIds
 from noteagent.agent.events import ErrorEvent
 from noteagent.agent.kernel import KernelRuntime
 from noteagent.agent.runtime import UserInput
-from noteagent.agent.wait import WaitState
-from noteagent.api.waited_jobs import iter_waited_job_sse
 from noteagent.llm.client import ChatMessage, LlmClient, LlmError
 from noteagent.llm.config import LlmConfig
 from noteagent.llm.model_gateway import OpenAIModelClient
@@ -114,44 +112,6 @@ class KeyBoundaryTests(unittest.TestCase):
 
         self.assertNotIn(key, str(caught.exception))
         self.assertIn("[redacted]", str(caught.exception))
-
-    def test_a_job_error_cannot_carry_the_key_into_the_wait(self) -> None:
-        key = "sk-live-1234567890"
-        waits = FakeWaitStore()
-        waits.propose(
-            "s1",
-            WaitState(
-                wait_id="w1",
-                job="plan",
-                interface="source",
-                status="entered",
-                proposed_at="2026-11-10T09:00:00Z",
-                job_id="j1",
-            ),
-        )
-
-        def worker(_on_status, _cancel, _emit):
-            raise LlmError(f"provider said {key}")
-
-        with patch.dict(
-            "os.environ", {"NOTEAGENT_LLM_API_KEY": key}, clear=False
-        ):
-            list(
-                iter_waited_job_sse(
-                    worker,
-                    waits=waits,
-                    session_id="s1",
-                    wait_id="w1",
-                    job="plan",
-                    result_from_payload=lambda _payload: None,  # type: ignore[arg-type,return-value]
-                )
-            )
-
-        wait = waits.current("s1")
-        self.assertIsNotNone(wait)
-        self.assertNotIn(key, wait.error)
-        self.assertIn("[redacted]", wait.error)
-
 
 if __name__ == "__main__":
     unittest.main()

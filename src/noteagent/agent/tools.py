@@ -376,8 +376,7 @@ class _PendingCall:
 
 def toolset_name(tools: "ToolRegistry") -> str:
     """A stable name for what a run could do, recorded on its marker."""
-    names = ["propose"]
-    names.extend(tool.name for tool in tools.enabled())
+    names = [tool.name for tool in tools.enabled()]
     return "tools:" + ",".join(names)
 
 

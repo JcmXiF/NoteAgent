@@ -16,7 +16,6 @@ turns:
   - "熵是什么？"
 assertions:
   tools_any: [wiki_read, search]
-  wait: absent
   max_tool_rounds: 4
   no_error: true
 judge:
@@ -62,7 +61,6 @@ class LoadCaseTests(unittest.TestCase):
             self.assertEqual(spec.title, "样例")
             self.assertEqual(spec.turns, ("熵是什么？",))
             self.assertEqual(spec.assertions.tools_any, ("wiki_read", "search"))
-            self.assertEqual(spec.assertions.wait, "absent")
             self.assertEqual(spec.assertions.max_tool_rounds, 4)
             self.assertIs(spec.assertions.no_error, True)
             self.assertEqual(spec.judge.grounding.must, ("有 wiki 依据",))
@@ -161,11 +159,11 @@ class ShippedCaseTests(unittest.TestCase):
 
         self.assertEqual(
             [case.name for case in cases],
-            ["cross-page-gap", "propose-protocol", "single-page-qa"],
+            ["cross-page-gap", "single-page-qa"],
         )
         by_name = {case.name: case for case in cases}
         self.assertEqual(
-            by_name["propose-protocol"].assertions.wait, "proposed"
+            by_name["single-page-qa"].assertions.no_error, True
         )
         for case in cases:
             self.assertTrue(case.wiki)

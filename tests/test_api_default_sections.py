@@ -47,12 +47,9 @@ class DefaultSectionTests(unittest.TestCase):
         self.assertIn("Available tools:", sections["tools"])
         self.assertIn("- `search(query)`", sections["tools"])
         self.assertIn("- `wiki_read(slug)`", sections["tools"])
-        self.assertIn("- `propose(", sections["tools"])
+        self.assertIn("use the writing tools offered to you", sections["tools"])
         self.assertIn(
-            "do not propose a job just because", sections["tools"]
-        )
-        self.assertIn(
-            "Only when the reader explicitly asks", sections["tools"]
+            "the writing state is where the work is handed over", sections["tools"]
         )
         self.assertIn("grounding", sections)
         self.assertIn("信息论 wiki", sections["project"])

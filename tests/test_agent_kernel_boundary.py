@@ -42,7 +42,6 @@ KERNEL_MODULES = (
     "noteagent.agent.runtime",
     "noteagent.agent.store",
     "noteagent.agent.tools",
-    "noteagent.agent.wait",
 )
 
 

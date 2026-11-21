@@ -85,14 +85,9 @@ def run_case(
                 )
             entries = api.entries(session_id)
             trace = api.trace(session_id)
-            try:
-                session = api.get_session(session_id)
-            except AssertionError:
-                session = None
             evidence = evidence_from(
                 entries=entries,
                 trace=trace,
-                session=session,
                 events=_events(turns),
             )
             assertions = evaluate(spec.assertions, evidence)

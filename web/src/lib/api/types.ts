@@ -5,7 +5,7 @@
  * a rename on either side has to be mirrored here.
  */
 
-import type { ObservationPayload, WaitPayload } from "@/lib/api/client";
+import type { ObservationPayload } from "@/lib/api/client";
 
 export type ProjectInfo = {
   name: string;
@@ -476,8 +476,6 @@ export type SessionPayload = {
   updatedAt: string;
   /** Whether a run is in progress, as of this read. */
   state: { busy: boolean };
-  /** The one collaboration node this session is waiting on, if any. */
-  wait?: WaitPayload | null;
   messages: SessionTurn[];
   derived: {
     sections: Record<string, string>;

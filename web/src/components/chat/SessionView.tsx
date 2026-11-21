@@ -4,19 +4,16 @@ import { SendHorizontal, Square } from "lucide-react";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { SaveRemark } from "@/components/chat/SaveRemark";
 import { SessionCards } from "@/components/chat/SessionCards";
-import { WaitCard } from "@/components/chat/WaitCard";
 import { Button } from "@/components/ui/button";
 import {
   ApiError,
   errorMessage,
   type ObservationPayload,
-  type WaitPayload,
 } from "@/lib/api/client";
 import {
   fetchSession,
   postSessionCancel,
   postSessionQuery,
-  postSessionWaitCancel,
 } from "@/lib/api/sessions";
 import type { SessionPayload } from "@/lib/api/types";
 import { questionBefore } from "@/lib/chat";
@@ -37,7 +34,6 @@ export function SessionView({
   sessionId,
   slot,
   onOpenLink = () => {},
-  onOpenInterface = () => {},
   onSessionChanged = () => {},
 }: {
   sessionId: string;
@@ -45,8 +41,6 @@ export function SessionView({
   slot: PaneSlot;
   /** A wiki link in an answer; absent leaves the link inert. */
   onOpenLink?: (target: string) => void;
-  /** Opening the interface a wait points at, carrying the wait it needs. */
-  onOpenInterface?: (wait: WaitPayload, sessionId: string) => void;
   /** A turn or a name changed; the list's row should say so. */
   onSessionChanged?: (session: SessionPayload) => void;
 }) {
@@ -62,12 +56,6 @@ export function SessionView({
   /** The cards the run reported while it was running; the committed answer
    * carries the same list after the stream ends. */
   const [observations, setObservations] = useState<ObservationPayload[]>([]);
-  /** The wait the session already had when it was read, or the last one. */
-  const [wait, setWait] = useState<WaitPayload | null>(null);
-  /** A wait proposed while this run is still streaming. */
-  const [liveWait, setLiveWait] = useState<WaitPayload | null>(null);
-  const [stoppingWait, setStoppingWait] = useState(false);
-  const [waitError, setWaitError] = useState("");
   /**
    * A run this tab can see but does not own: another tab asked, and this one
    * may only wait. The core decides, so this is only what the last read said.
@@ -97,10 +85,9 @@ export function SessionView({
     currentSession.current = sessionId;
   }, [sessionId]);
 
-  /** The session the view now shows, and the wait that came with it. */
+  /** The session the view now shows. */
   const adoptSession = (next: SessionPayload) => {
     setSession(next);
-    setWait(next.wait ?? null);
   };
 
   useEffect(() => {
@@ -108,12 +95,6 @@ export function SessionView({
     setSession(null);
     setError("");
     setRunningElsewhere(false);
-    setWait(null);
-    setLiveWait(null);
-    setWaitError("");
-    // A stop belongs to the session it was asked in; switching sessions must
-    // not leave the next session's wait looking permanently stopped.
-    setStoppingWait(false);
     fetchSession(sessionId).then(
       (next) => {
         if (!alive) return;
@@ -152,8 +133,6 @@ export function SessionView({
     setStreaming("");
     setActivity("think");
     setObservations([]);
-    setLiveWait(null);
-    setWaitError("");
     setRunningElsewhere(false);
     setSending(true);
     try {
@@ -172,10 +151,6 @@ export function SessionView({
           if (!live()) return;
           setActivity("tool");
           setObservations((current) => [...current, observation]);
-        },
-        onWait: (proposed) => {
-          if (!live()) return;
-          setLiveWait(proposed);
         },
       });
       if (live()) {
@@ -210,28 +185,6 @@ export function SessionView({
         setSending(false);
         setPendingQuestion(null);
         setStreaming("");
-        setLiveWait(null);
-      }
-    }
-  };
-
-  const stopWait = async (target: WaitPayload) => {
-    if (stoppingWait) return;
-    setStoppingWait(true);
-    setWaitError("");
-    try {
-      await postSessionWaitCancel(sessionId, target.waitId);
-      const next = await fetchSession(sessionId);
-      if (mounted.current && currentSession.current === sessionId) {
-        adoptSession(next);
-      }
-    } catch (reason) {
-      if (mounted.current && currentSession.current === sessionId) {
-        setWaitError(errorMessage(reason, t("chat.wait.stopFailed")));
-      }
-    } finally {
-      if (mounted.current && currentSession.current === sessionId) {
-        setStoppingWait(false);
       }
     }
   };
@@ -250,10 +203,6 @@ export function SessionView({
   if (!session) {
     return <p className="p-3 text-xs text-muted-foreground">{t("chat.loading")}</p>;
   }
-
-  // The streamed wait arrives before the session is re-read; once it is, the
-  // committed wait is the same one and the live copy can go away.
-  const shownWait = liveWait ?? wait;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -318,24 +267,6 @@ export function SessionView({
             ) : null}
           </article>
         ))}
-
-        {shownWait ? (
-          <WaitCard
-            wait={shownWait}
-            onOpen={(target) => onOpenInterface(target, sessionId)}
-            onStop={
-              sending
-                ? undefined
-                : () => {
-                    void stopWait(shownWait);
-                  }
-            }
-            stopping={stoppingWait}
-          />
-        ) : null}
-        {waitError ? (
-          <p className="mb-2 text-[11px] text-destructive">{waitError}</p>
-        ) : null}
 
         {pendingQuestion ? (
           <p className="mt-3 mb-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[13px] whitespace-pre-wrap">

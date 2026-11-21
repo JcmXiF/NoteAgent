@@ -3,9 +3,8 @@
 Every case drives the real HTTP API: a question is asked over SSE, the log and
 the session view are read back, and the model is the only scripted part. The
 cases cover the behaviour a change to the agent harness is most likely to break:
-reading the wiki, searching it, proposing work, refusing a mixed batch, the
-tool-round budget, compaction, tool errors, cancellation, and bringing old
-chats into the new store.
+reading the wiki, searching it, the tool-round budget, compaction, tool
+errors, cancellation, and bringing old chats into the new store.
 """
 
 from __future__ import annotations
@@ -20,10 +19,8 @@ from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.model import (
     AssistantMessage,
     ModelDoneEvent,
-    ModelEvent,
     ModelStartEvent,
     ModelTextDelta,
-    ModelToolCallEnd,
     TextBlock,
     ToolCall,
 )
@@ -53,26 +50,6 @@ def _only_event(reply: Exchange, kind: str) -> dict[str, object]:
             f"expected one {kind} event, got {len(items)}"
         )
     return items[0]
-
-
-def _tool_batch(*calls: tuple[str, str, str]) -> list[ModelEvent]:
-    """One model turn that asks for several tools at once."""
-    events: list[ModelEvent] = [ModelStartEvent("faux")]
-    events.extend(
-        ModelToolCallEnd(ToolCall(call_id, name, arguments))
-        for call_id, name, arguments in calls
-    )
-    events.append(ModelDoneEvent(AssistantMessage(stop_reason="tool_calls")))
-    return events
-
-
-def _propose_script(
-    job: str, interface: str, **fields: str
-) -> list[ModelEvent]:
-    arguments = {"job": job, "interface": interface, **fields}
-    return FauxModelClient.tool_call(
-        "w1", "propose", json.dumps(arguments, ensure_ascii=False)
-    ).script
 
 
 def wiki_read_and_answer(run: CaseRun) -> None:
@@ -180,101 +157,6 @@ def search_and_answer(run: CaseRun) -> None:
         ),
         "the search result never reached the model",
     )
-
-
-def propose_plan(run: CaseRun) -> None:
-    """A proposal stops the run at a wait the human can enter elsewhere."""
-    model = FauxModelClient(
-        _propose_script(
-            "plan",
-            "source",
-            intent="熵",
-            reason="先把资料排成页",
-        )
-    )
-    api = run.start(model)
-    session = api.create_session()
-    reply = api.query(session, "整理一下熵的资料")
-
-    wait = _only_event(reply, "wait")
-    run.equal("the wait proposes a plan", wait.get("job"), "plan")
-    run.equal("the plan belongs to the source screen", wait.get("interface"), "source")
-    run.equal("the wait is only proposed", wait.get("status"), "proposed")
-    run.equal("the human's action is named", wait.get("completion"), "start_plan")
-    run.equal("the intent travels with the wait", wait.get("intent"), "熵")
-    done = _only_event(reply, "done")
-    run.equal("the run ends waiting", done["run"]["status"], "waiting")
-
-    view = api.get_session(session)
-    run.equal(
-        "the session view carries the same wait",
-        view["wait"]["waitId"],
-        wait["waitId"],
-    )
-    run.equal("the session is not busy", view["state"]["busy"], False)
-    entries = api.entries(session)
-    run.equal(
-        "the log holds one proposed wait",
-        [entry.get("type") for entry in entries if entry.get("type") == "wait_proposed"],
-        ["wait_proposed"],
-    )
-    run.equal(
-        "a proposal is not a tool call",
-        [entry for entry in entries if entry.get("role") == "toolResult"],
-        [],
-    )
-    run.equal(
-        "the proposal took one model turn",
-        len(model.requests),
-        1,
-    )
-
-
-def mixed_propose_rejected(run: CaseRun) -> None:
-    """A proposal beside another call is refused whole; the run recovers."""
-    model = FauxModelClient(
-        _tool_batch(
-            ("p1", "propose", '{"job": "plan", "interface": "source"}'),
-            ("t1", "wiki_read", '{"slug": "concepts/entropy"}'),
-        ),
-        FauxModelClient.text("这次没有启动作业。").script,
-    )
-    api = run.start(model)
-    session = api.create_session()
-    reply = api.query(session, "先计划再读一下熵")
-
-    cards = reply.events_of("observation")
-    run.equal("both calls are answered", len(cards), 2)
-    for card in cards:
-        run.check(
-            f"{card.get('tool')} is refused",
-            card.get("error") is True,
-            "a refused call was not marked as an error",
-        )
-        diagnostics = card.get("diagnostics") or []
-        run.equal(
-            "the refusal names the mixed batch",
-            diagnostics[0].get("code") if diagnostics else None,
-            "propose_not_alone",
-        )
-    run.equal("no wait is proposed", reply.events_of("wait"), [])
-    run.equal(
-        "the run still answers",
-        _only_event(reply, "done")["run"]["status"],
-        "completed",
-    )
-    entries = api.entries(session)
-    run.equal(
-        "nothing was dispatched or recorded as a wait",
-        [entry.get("type") for entry in entries if entry.get("type") == "wait_proposed"],
-        [],
-    )
-    run.equal(
-        "the answer is the last entry",
-        _last_message(entries).get("content"),
-        "这次没有启动作业。",
-    )
-    run.equal("the session is not waiting", api.get_session(session)["wait"], None)
 
 
 def turn_budget(run: CaseRun) -> None:
@@ -659,16 +541,6 @@ CASES: tuple[Case, ...] = (
         "search_and_answer",
         "A wiki search returns locators the answer is built from.",
         search_and_answer,
-    ),
-    Case(
-        "propose_plan",
-        "A plan proposal ends the run at a wait the source screen can enter.",
-        propose_plan,
-    ),
-    Case(
-        "mixed_propose_rejected",
-        "A proposal beside another call is refused whole and the run recovers.",
-        mixed_propose_rejected,
     ),
     Case(
         "turn_budget",

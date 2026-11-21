@@ -4,7 +4,6 @@ turns:
   - "KL 散度和交叉熵是什么关系？wiki 里有 JS 散度吗？"
 assertions:
   tools_any: [wiki_read, search]
-  wait: absent
   max_tool_rounds: 6
   no_error: true
 judge:

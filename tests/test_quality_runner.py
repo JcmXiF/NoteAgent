@@ -28,7 +28,6 @@ turns:
   - "熵是什么？"
 assertions:
   tools_any: [wiki_read]
-  wait: absent
   max_tool_rounds: 2
   no_error: true
 judge:
@@ -97,7 +96,7 @@ class RunCaseTests(unittest.TestCase):
             self.assertTrue(result.judge.passed)
             self.assertEqual(
                 [item.name for item in result.assertions],
-                ["tools_any", "wait", "max_tool_rounds", "no_error"],
+                ["tools_any", "max_tool_rounds", "no_error"],
             )
             target = artifacts / "cases" / "sample-case"
             self.assertTrue(
@@ -209,58 +208,3 @@ class RunCaseTests(unittest.TestCase):
             self.assertIsNotNone(result.judge)
             self.assertFalse(result.judge.passed)
             self.assertEqual(result.judge.dimensions[0].verdict, "fail")
-
-    def test_a_silent_proposal_is_still_judged(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            case_dir = (
-                Path(__file__).resolve().parent.parent
-                / "evals"
-                / "quality"
-                / "cases"
-                / "propose-protocol"
-            )
-            spec = load_case(case_dir)
-            artifacts = root / "run"
-            model = FauxModelClient(
-                FauxModelClient.tool_call(
-                    "p1",
-                    "propose",
-                    json.dumps(
-                        {
-                            "job": "compile",
-                            "interface": "plan_board",
-                            "intent": "对比页",
-                            "reason": (
-                                "我会整理成对比页，需要你在计划板进入编译。"
-                            ),
-                        },
-                        ensure_ascii=False,
-                    ),
-                ).script
-            )
-            judge = FakeJudge(ALL_PASS)
-
-            result = run_case(
-                spec,
-                config(),
-                artifacts,
-                model=model,
-                judge_client=judge,
-            )
-
-            self.assertTrue(result.passed, result.error)
-            self.assertIsNotNone(result.judge)
-            self.assertEqual(result.judge.skipped, "")
-            request = "\n".join(
-                message.content for message in judge.requests[0]
-            )
-            self.assertIn("我会整理成对比页", request)
-            self.assertTrue(
-                (
-                    artifacts
-                    / "cases"
-                    / "propose-protocol"
-                    / "judge.json"
-                ).is_file()
-            )

@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from agent_fakes import FixedClock, SequentialIds
 
-from noteagent.agent.events import ErrorEvent, TokenEvent, WaitEvent
+from noteagent.agent.events import ErrorEvent, TokenEvent
 from noteagent.agent.kernel import LEAK_RETRY, KernelRuntime
 from noteagent.agent.model import ModelErrorEvent
 from noteagent.agent.runtime import UserInput
@@ -82,39 +82,6 @@ class TurnBudgetTests(unittest.TestCase):
             for entry in self.store.load("s1").entries
             if entry["type"] == "message"
         ]
-
-    def test_a_lone_propose_is_allowed(self) -> None:
-        from noteagent.agent.faux import FauxModelClient
-
-        model = FauxModelClient(
-            FauxModelClient.tool_call(
-                "p1",
-                "propose",
-                json.dumps(
-                    {"job": "plan", "interface": "source"}
-                ),
-            ).script
-        )
-        runtime = self.runtime(model)
-        events = []
-
-        result = runtime.execute(UserInput("s1", "整理"), events.append)
-
-        self.assertEqual(result.status, "waiting")
-        self.assertEqual(len(model.requests), 1)
-        wait = runtime.wait_state("s1")
-        self.assertIsNotNone(wait)
-        assert wait is not None
-        self.assertEqual(wait.status, "proposed")
-        self.assertTrue(
-            any(isinstance(event, WaitEvent) for event in events)
-        )
-        self.assertFalse(
-            any(
-                entry.get("role") == "toolResult"
-                for entry in self.store.load("s1").entries
-            )
-        )
 
     def test_max_turns_is_a_hard_bound(self) -> None:
         from noteagent.agent.faux import FauxModelClient

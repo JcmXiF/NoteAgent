@@ -12,10 +12,9 @@ def evidence(
     *,
     tools: tuple[str, ...] = (),
     rounds: int = 0,
-    wait: str | None = None,
     errors: tuple[str, ...] = (),
 ) -> Evidence:
-    return Evidence(tools=tools, tool_rounds=rounds, wait_status=wait, errors=errors)
+    return Evidence(tools=tools, tool_rounds=rounds, errors=errors)
 
 
 class ToolAssertionTests(unittest.TestCase):
@@ -53,32 +52,7 @@ class ToolAssertionTests(unittest.TestCase):
         self.assertEqual(result.actual, ["propose"])
 
 
-class WaitAssertionTests(unittest.TestCase):
-    def test_absent_wait_matches_no_wait(self) -> None:
-        [result] = evaluate(
-            AssertionSpec(wait="absent"), evidence(wait=None)
-        )
-
-        self.assertTrue(result.passed)
-        self.assertEqual(result.actual, "absent")
-
-    def test_proposed_wait_matches_the_session(self) -> None:
-        [result] = evaluate(
-            AssertionSpec(wait="proposed"), evidence(wait="proposed")
-        )
-
-        self.assertTrue(result.passed)
-
-    def test_a_different_wait_state_fails(self) -> None:
-        [result] = evaluate(
-            AssertionSpec(wait="proposed"), evidence(wait="completed")
-        )
-
-        self.assertFalse(result.passed)
-        self.assertIn("completed", result.detail)
-
-
-class RoundAndErrorTests(unittest.TestCase):
+class RoundAssertionTests(unittest.TestCase):
     def test_max_tool_rounds_is_inclusive(self) -> None:
         spec = AssertionSpec(max_tool_rounds=4)
 
@@ -110,7 +84,6 @@ class ResultOrderTests(unittest.TestCase):
             tools_any=("wiki_read",),
             tools_all=("wiki_read",),
             tools_none=("propose",),
-            wait="absent",
             max_tool_rounds=4,
             no_error=True,
         )
@@ -123,7 +96,6 @@ class ResultOrderTests(unittest.TestCase):
                 "tools_any",
                 "tools_all",
                 "tools_none",
-                "wait",
                 "max_tool_rounds",
                 "no_error",
             ],

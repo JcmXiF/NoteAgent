@@ -316,41 +316,12 @@ export type SseHandlers = {
    * the answer.
    */
   onObservation?: (observation: ObservationPayload) => void;
-  /**
-   * `wait`: a collaboration node the run proposed, and where the human
-   * finishes it. The job starts in that interface, never here.
-   */
-  onWait?: (wait: WaitPayload) => void;
   /** `state`: the writing state's version moved; the panel reads it again. */
   onState?: (stateVersion: number) => void;
   /** Aborting this stops the reader; the backend cancels before its next model call. */
   signal?: AbortSignal;
   /** Message used when the stream ends without a `done` or `error` event. */
   emptyError?: string;
-};
-
-/**
- * The one collaboration node a session is waiting on.
- *
- * `completion` is a stable name for the action the human takes, not a sentence:
- * the core does not know which language the reader is using, so the interface
- * words it. `interface` is where the original button lives.
- */
-export type WaitPayload = {
-  waitId: string;
-  job: string;
-  interface: string;
-  status: string;
-  completion: string;
-  proposedAt: string;
-  /** The job the human started, once the wait has been entered. */
-  jobId?: string;
-  intent?: string;
-  reason?: string;
-  resultSummary?: string;
-  /** What a finished job produced, as bounded references. */
-  artifacts?: { kind: string; id: string; label?: string }[];
-  error?: string;
 };
 
 /**
@@ -381,7 +352,6 @@ export type ObservationPayload = {
   omitted?: string;
   truncated?: boolean;
   not_source?: boolean;
-  needs_human?: boolean;
   job?: string;
   fidelity?: string;
   http_status?: number;
@@ -407,7 +377,6 @@ export async function postSse<T>(
     onToken,
     onTokenReset,
     onObservation,
-    onWait,
     onState,
     signal,
     emptyError = fallbackError,
@@ -453,10 +422,6 @@ export async function postSse<T>(
           } else if (parsed.event === "observation") {
             if (typeof payload.tool === "string" && payload.tool) {
               onObservation?.(payload as unknown as ObservationPayload);
-            }
-          } else if (parsed.event === "wait") {
-            if (typeof payload.waitId === "string" && payload.waitId) {
-              onWait?.(payload as unknown as WaitPayload);
             }
           } else if (parsed.event === "state") {
             if (typeof payload.stateVersion === "number") {

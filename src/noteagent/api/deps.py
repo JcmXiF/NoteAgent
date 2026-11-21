@@ -12,11 +12,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
-from noteagent.agent.jobs import JobClient, JobGate
 from noteagent.agent.kernel import RunRegistry
 from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime
-from noteagent.agent.store import SessionStore, WaitStore
+from noteagent.agent.store import SessionStore
 from noteagent.agent.tools import ToolRegistry
 from noteagent.pipeline.frame_model import (
     DEFAULT_CHARS as DEFAULT_FRAME_CHARS,
@@ -44,10 +43,6 @@ class AppDeps:
     runtime: AgentRuntime | None = None
     model: ModelClient | None = None
     sessions: SessionStore | None = None
-    waits: WaitStore | None = None
-    jobs: JobClient | None = None
-    #: One collaboration job at a time, across every session.
-    job_gate: JobGate = field(default_factory=JobGate)
     #: The project's pipeline, when a test hands one in; otherwise it is built
     #: from the active project on each request.
     pipeline: PipelineService | None = None

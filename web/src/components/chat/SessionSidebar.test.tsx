@@ -15,7 +15,6 @@ vi.mock("@/lib/api/sessions", () => ({
   deleteSession: vi.fn(),
   postSessionCancel: vi.fn(),
   postSessionQuery: vi.fn(),
-  postSessionWaitCancel: vi.fn(),
 }));
 
 import {

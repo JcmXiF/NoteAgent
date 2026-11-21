@@ -145,7 +145,6 @@ def _with_node_run(
             store,
             layout,
             node_tools(deps, layout),
-            allow_propose=False,
         )
         return action(runtime)
     finally:

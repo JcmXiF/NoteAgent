@@ -85,7 +85,7 @@ class SaveAndLoadTests(unittest.TestCase):
                     (
                         case(
                             "sample",
-                            assertions={"tools_any": True, "wait": True},
+                            assertions={"tools_any": True, "no_error": True},
                         ),
                     )
                 ),
@@ -100,7 +100,7 @@ class SaveAndLoadTests(unittest.TestCase):
             sample = baseline.cases["sample"]
             self.assertTrue(sample.passed)
             self.assertEqual(
-                sample.assertions, {"tools_any": True, "wait": True}
+                sample.assertions, {"tools_any": True, "no_error": True}
             )
             self.assertEqual(sample.judge["grounding"], "pass")
             self.assertEqual(sample.prompt_sha256, "hash")
@@ -202,14 +202,14 @@ class CompareTests(unittest.TestCase):
         baseline = self.baseline(
             case(
                 "sample",
-                assertions={"tools_any": True, "wait": True},
+                assertions={"tools_any": True, "no_error": True},
             )
         )
         current = report(
             (
                 case(
                     "sample",
-                    assertions={"tools_any": False, "wait": True},
+                    assertions={"tools_any": False, "no_error": True},
                     verdicts=("fail", "pass", "pass"),
                 ),
             )

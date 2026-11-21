@@ -11,22 +11,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import yaml
 
-from noteagent.agent.wait import WaitStatus
 from noteagent.ingest.frontmatter import parse_page, unquote_scalar
-
-#: The final wait states a case may assert: no wait, or one of the kernel's.
-WAIT_STATES = ("absent", *get_args(WaitStatus))
 
 JUDGE_DIMENSIONS = ("grounding", "completeness", "uncertainty")
 _ASSERTION_KEYS = (
     "tools_any",
     "tools_all",
     "tools_none",
-    "wait",
     "max_tool_rounds",
     "no_error",
 )
@@ -53,7 +48,6 @@ class AssertionSpec:
     tools_any: tuple[str, ...] | None = None
     tools_all: tuple[str, ...] | None = None
     tools_none: tuple[str, ...] | None = None
-    wait: str | None = None
     max_tool_rounds: int | None = None
     no_error: bool | None = None
 
@@ -196,15 +190,6 @@ def _assertions(value: Any, path: Path) -> AssertionSpec:
         raise CaseError(f"{path}: assertions must be a non-empty mapping")
     _reject_unknown(value, _ASSERTION_KEYS, path, "assertion")
 
-    wait: str | None = None
-    if "wait" in value:
-        candidate = value["wait"]
-        if not isinstance(candidate, str) or candidate not in WAIT_STATES:
-            raise CaseError(
-                f"{path}: assertions.wait must be one of {', '.join(WAIT_STATES)}"
-            )
-        wait = candidate
-
     rounds: int | None = None
     if "max_tool_rounds" in value:
         candidate = value["max_tool_rounds"]
@@ -241,7 +226,6 @@ def _assertions(value: Any, path: Path) -> AssertionSpec:
             if "tools_none" in value
             else None
         ),
-        wait=wait,
         max_tool_rounds=rounds,
         no_error=no_error,
     )
@@ -314,7 +298,6 @@ __all__ = [
     "JUDGE_DIMENSIONS",
     "JudgeRule",
     "JudgeSpec",
-    "WAIT_STATES",
     "WikiPage",
     "load_case",
     "load_cases",

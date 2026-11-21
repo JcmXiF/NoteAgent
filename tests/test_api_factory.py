@@ -5,20 +5,17 @@ from __future__ import annotations
 import unittest
 
 from agent_fakes import (
-    FakeJobClient,
     FakeModelClient,
     FakeRuntime,
     FakeSessionStore,
-    FakeWaitStore,
     FixedClock,
     SequentialIds,
 )
 from noteagent.agent.clock import SystemClock, UuidIds
 from noteagent.agent.events import ObservationEvent, TokenEvent, is_terminal
-from noteagent.agent.jobs import JobClient
 from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime, UserInput
-from noteagent.agent.store import SessionStore, WaitStore
+from noteagent.agent.store import SessionStore
 from noteagent.agent.tools import ToolRegistry, ToolResult, ToolSpec
 
 try:
@@ -55,8 +52,6 @@ def _deps() -> AppDeps:
         runtime=FakeRuntime(model, tools),
         model=model,
         sessions=FakeSessionStore(),
-        waits=FakeWaitStore(),
-        jobs=FakeJobClient(),
         settings={"model": "faux"},
     )
 
@@ -110,8 +105,6 @@ class InjectedSeamTests(unittest.TestCase):
         self.assertIsInstance(deps.runtime, AgentRuntime)
         self.assertIsInstance(deps.model, ModelClient)
         self.assertIsInstance(deps.sessions, SessionStore)
-        self.assertIsInstance(deps.waits, WaitStore)
-        self.assertIsInstance(deps.jobs, JobClient)
 
 
 if __name__ == "__main__":

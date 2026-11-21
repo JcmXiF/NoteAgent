@@ -4,16 +4,12 @@ import type { ConfirmedPage, IngestDone, TopicMap } from "@/lib/api/types";
 
 type StepStatus = (message: string, stepId?: string) => void;
 
-/** The chat wait this press is entering, when the job was proposed there. */
 export type JobWait = {
   sessionId: string;
   waitId: string;
 };
 
 /** The body fields a job endpoint reads when the press belongs to a wait. */
-function waitFields(wait?: JobWait): Record<string, string> {
-  return wait ? { sessionId: wait.sessionId, waitId: wait.waitId } : {};
-}
 
 /**
  * Turns the selected passages into candidate pages.
@@ -26,7 +22,6 @@ export function planTopicMap(
   options: {
     intent: string;
     sourceIdentity?: string;
-    wait?: JobWait;
     onStatus?: StepStatus;
     signal?: AbortSignal;
   },
@@ -36,7 +31,6 @@ export function planTopicMap(
     {
       intent: options.intent,
       ...(options.sourceIdentity ? { sourceIdentity: options.sourceIdentity } : {}),
-      ...waitFields(options.wait),
       // The core cannot know what language the reader is using, and the reasons it
       // asks the model for are read by that reader. Page names follow the material
       // either way.
@@ -60,7 +54,6 @@ export function compileConfirmed(
     projectPath(project, "ingest-confirmed"),
     {
       ...body,
-      ...waitFields(options.wait),
     },
     {
       onStatus: options.onStatus,

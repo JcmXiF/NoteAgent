@@ -29,10 +29,8 @@ from noteagent.agent.events import (
     RunEvent,
     StatusEvent,
     TokenEvent,
-    WaitEvent,
 )
 from noteagent.agent.model import (
-    AssistantMessage,
     Message,
     ModelClient,
     ModelEvent,
@@ -44,20 +42,12 @@ from noteagent.agent.model import (
     collect,
 )
 from noteagent.agent.projection import project
-from noteagent.agent.propose import (
-    PROPOSE_NAME,
-    PROPOSE_TOOL,
-    Proposal,
-    ProposeError,
-    parse_proposal,
-)
 from noteagent.agent.run_marker import (
     CANCELLED,
     FAILED,
     FINISHED,
     INTERRUPTED,
     RUNNING,
-    WAITING,
     RunFingerprint,
     RunMarker,
     config_digest,
@@ -70,7 +60,6 @@ from noteagent.agent.run_marker import (
 from noteagent.agent.runtime import (
     BusyError,
     EventSink,
-    Resume,
     ResumeCheck,
     Retry,
     RunCancelled,
@@ -83,24 +72,13 @@ from noteagent.agent.runtime import (
     UserInput,
     busy_message,
 )
-from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
+from noteagent.agent.store import SessionSnapshot, SessionStore
 from noteagent.agent.tools import (
     Diagnostic,
     ToolContext,
     ToolRegistry,
     ToolResult,
     toolset_name,
-)
-from noteagent.agent.wait import (
-    WaitState,
-    completion_for,
-    is_active,
-    render_run_section,
-)
-from noteagent.agent.wait_store import (
-    SessionWaitStore,
-    current_wait,
-    has_resumed,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,7 +98,7 @@ SUMMARY_INSTRUCTIONS = (
     "Summarize the earlier part of this conversation so it can be left out of "
     "the context. Keep: the reader's goals, constraints, decisions and open "
     "questions; important tool results (pages read or searched, job results); "
-    "the current task state, pending waits or jobs, and the next step; project "
+    "the current task state and the next step; project "
     "constraints that must not be forgotten. Drop: raw tool output, repeated "
     "material, and intermediate reasoning. Write a compact summary in the "
     "language of the conversation."
@@ -130,10 +108,9 @@ SUMMARY_INSTRUCTIONS = (
 #: transient; it is not a step budget.
 LEAK_RETRY = (
     "Your previous response contained tool-call markup instead of an answer. "
-    "Do not write tool-call markup. If the reader asked for a page/job, make "
-    "one valid, lone `propose` call now; otherwise answer in prose from the "
-    "evidence above; if a read tool is still needed, say that the tool budget "
-    "is exhausted and what is missing."
+    "Do not write tool-call markup. Answer in prose from the evidence above; "
+    "if a read tool is still needed, say that the tool budget is exhausted "
+    "and what is missing."
 )
 
 
@@ -185,7 +162,6 @@ class KernelRuntime:
         model: ModelClient,
         sessions: SessionStore,
         tools: ToolRegistry | None = None,
-        waits: WaitStore | None = None,
         clock: Clock | None = None,
         ids: Ids | None = None,
         registry: RunRegistry | None = None,
@@ -199,18 +175,11 @@ class KernelRuntime:
         #: Non-secret project/config digests a run marker records. The kernel
         #: stays generic: the composition root decides what the project is.
         fingerprint: Mapping[str, str] | None = None,
-        #: Whether the model may take the control action. A scoped node run
-        #: offers only its own tools, so it turns this off.
-        allow_propose: bool = True,
     ) -> None:
         self._model = model
         self._trace = trace
         self._sessions = sessions
         self._tools = tools or ToolRegistry()
-        self._allow_propose = allow_propose
-        # A wait is read from the same log as the turns, so the default keeps
-        # the runtime and the session view looking at one record.
-        self._waits = waits if waits is not None else SessionWaitStore(sessions)
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIds()
         self._registry = registry or RunRegistry()
@@ -237,10 +206,6 @@ class KernelRuntime:
         try:
             if isinstance(request, RunResume):
                 return self._run_crash_resume(
-                    request, sink, run_id, cancel, pause
-                )
-            if isinstance(request, Resume):
-                return self._run_resume(
                     request, sink, run_id, cancel, pause
                 )
             return self._run_user(request, sink, run_id, cancel, pause)
@@ -282,9 +247,6 @@ class KernelRuntime:
     def cancel(self, session_id: str) -> None:
         self._registry.cancel(session_id)
 
-    def wait_state(self, session_id: str) -> WaitState | None:
-        return self._waits.current(session_id)
-
     def is_busy(self, session_id: str) -> bool:
         return self._registry.is_busy(session_id)
 
@@ -304,56 +266,6 @@ class KernelRuntime:
             _check_cancel(cancel)
             self._sessions.append(
                 session_id, {"type": "message", "role": "user", "content": content}
-            )
-        except RunCancelled:
-            return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
-
-    def _run_resume(
-        self,
-        request: Resume,
-        sink: EventSink,
-        run_id: str,
-        cancel: Event,
-        pause: Event | None = None,
-    ) -> RunResult:
-        """Continue a session after the job it waited on came back.
-
-        A resume is a run like any other, except that its turn begins with the
-        job result the log now holds rather than with something a person said.
-        The marker makes a second delivery of the same completion a no-op.
-        """
-        session_id = request.session_id
-        try:
-            _check_cancel(cancel)
-            snapshot = self._sessions.load(session_id)
-            wait = current_wait(snapshot.entries)
-            if wait is None or wait.wait_id != request.wait_id:
-                raise ValueError(
-                    f"session {session_id} is not waiting on {request.wait_id}"
-                )
-            # A job that was cancelled still has a result: the cancellation.
-            # A wait the human stopped before starting has no job and no
-            # continuation to run.
-            finished = wait.status in ("completed", "failed") or (
-                wait.status == "cancelled" and bool(wait.job_id)
-            )
-            if not finished:
-                raise ValueError(
-                    f"wait {request.wait_id} is {wait.status}, not finished"
-                )
-            if has_resumed(snapshot.entries, request.wait_id):
-                # The completion was delivered twice: the job may only continue
-                # the conversation once.
-                sink(
-                    DoneEvent(
-                        {"id": session_id}, {"id": run_id, "status": "completed"}
-                    )
-                )
-                return RunResult(session_id, run_id, "completed")
-            self._sessions.append(
-                session_id,
-                {"type": "resume_started", "waitId": request.wait_id},
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
@@ -596,33 +508,15 @@ class KernelRuntime:
                 leak_retry_note = False
                 if assistant.tool_calls:
                     calls = assistant.tool_calls
-                    refusal: ToolResult | None = None
-                    if (
-                        self._allow_propose
-                        and len(calls) == 1
-                        and calls[0].name == PROPOSE_NAME
-                    ):
-                        proposal, refusal = self._read_proposal(session_id, calls[0])
-                        if proposal is not None:
-                            return self._wait_for_proposal(
-                                session_id,
-                                run_id,
-                                sink,
-                                assistant,
-                                proposal,
-                            )
-                    # A refused proposal and an ordinary batch share one tail:
-                    # the preamble becomes a step, every call gets its result,
+                    # The preamble becomes a step, every call gets its result,
                     # and the next round reads the log.
                     sink(TokenEvent("", reset=True))
                     self._commit_tool_calls(session_id, calls, assistant.content)
                     # The preamble is now part of the tool-call entry, so a stop
                     # from here on must not commit it a second time.
                     partial.clear()
-                    results = (
-                        (refusal,)
-                        if refusal is not None
-                        else self._round_results(session_id, run_id, calls, cancel)
+                    results = self._round_results(
+                        session_id, run_id, calls, cancel
                     )
                     self._commit_results(session_id, calls, results, sink)
                     sink(StatusEvent("thinking", "think"))
@@ -675,10 +569,8 @@ class KernelRuntime:
             raise
 
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
-        """The tools the model may call, with the control action beside them."""
-        if not self._allow_propose:
-            return self._tools.model_tools()
-        return (PROPOSE_TOOL,) + self._tools.model_tools()
+        """The tools the model may call."""
+        return self._tools.model_tools()
 
     def _mark(
         self,
@@ -715,81 +607,6 @@ class KernelRuntime:
         except Exception:
             logger.exception("the run marker could not be written")
 
-    def _read_proposal(
-        self, session_id: str, call: ToolCall
-    ) -> tuple[Proposal | None, ToolResult | None]:
-        """The checked proposal, or the observation that says why not."""
-        try:
-            proposal = parse_proposal(call.arguments)
-        except ProposeError as err:
-            return None, self._refused(
-                call, f"invalid proposal: {err}", "invalid_proposal"
-            )
-        active = self._waits.current(session_id)
-        if is_active(active):
-            assert active is not None
-            return None, self._refused(
-                call,
-                (
-                    f"this session is already waiting on {active.job}; "
-                    "finish or stop it first"
-                ),
-                "already_waiting",
-                job=active.job,
-            )
-        return proposal, None
-
-    def _record_wait(self, session_id: str, proposal: Proposal) -> WaitState:
-        """Commit the wait a checked proposal asks for, and return it."""
-        wait = WaitState(
-            wait_id=self._ids.new_id("wait"),
-            job=proposal.job,
-            interface=proposal.interface,
-            status="proposed",
-            proposed_at=iso_timestamp(self._clock),
-            completion=completion_for(proposal.job),
-            intent=proposal.intent,
-            reason=proposal.reason,
-        )
-        self._waits.propose(session_id, wait)
-        return wait
-
-    def _wait_for_proposal(
-        self,
-        session_id: str,
-        run_id: str,
-        sink: EventSink,
-        assistant: AssistantMessage,
-        proposal: Proposal,
-    ) -> RunResult:
-        """Commit the proposal's prose, record the wait, and end the run."""
-        text = assistant.content.strip()
-        if text:
-            self._sessions.append(
-                session_id,
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": text,
-                    "stopReason": "propose",
-                },
-            )
-        wait = self._record_wait(session_id, proposal)
-        self._mark(session_id, run_id, WAITING)
-        sink(WaitEvent(wait))
-        sink(
-            DoneEvent(
-                {"id": session_id},
-                {"id": run_id, "status": "waiting"},
-            )
-        )
-        return RunResult(
-            session_id,
-            run_id,
-            "waiting",
-            wait_id=wait.wait_id,
-        )
-
     def _round_results(
         self,
         session_id: str,
@@ -797,21 +614,7 @@ class KernelRuntime:
         calls: tuple[ToolCall, ...],
         cancel: Event,
     ) -> tuple[ToolResult, ...]:
-        """One result per call, in the model's order.
-
-        A batch that has propose beside another call is refused whole: the
-        control action is only meaningful alone, and running the rest would
-        leave the model believing half of it happened.
-        """
-        if self._allow_propose and any(
-            call.name == PROPOSE_NAME for call in calls
-        ):
-            message = (
-                "propose must be alone in its batch; nothing in this batch was run"
-            )
-            return tuple(
-                self._refused(call, message, "propose_not_alone") for call in calls
-            )
+        """One result per call, in the model's order."""
         within = calls[:MAX_TOOL_CALLS_PER_ROUND]
         results = list(
             self._tools.dispatch_many(
@@ -841,26 +644,6 @@ class KernelRuntime:
                 )
             )
         return tuple(results)
-
-    def _refused(
-        self,
-        call: ToolCall,
-        message: str,
-        code: str,
-        *,
-        job: str = "",
-    ) -> ToolResult:
-        """A call that did not run, as both the model and the reader see it."""
-        meta: dict[str, object] = {"title": call.name, "error": True}
-        if call.name == PROPOSE_NAME:
-            meta["needs_human"] = True
-        if job:
-            meta["job"] = job
-        return ToolResult(
-            content=message,
-            meta=meta,
-            diagnostics=(Diagnostic("error", code, message),),
-        )
 
     def _commit_tool_calls(
         self,
@@ -1072,9 +855,6 @@ class KernelRuntime:
                 "\n\nAdditional instructions from the reader:\n"
                 + instructions.strip()
             )
-        run_section = render_run_section(current_wait(snapshot.entries))
-        if run_section.strip():
-            system += "\n\nCurrent run state:\n" + run_section
         sink(StatusEvent("compacting earlier turns", "think"))
         try:
             summary_message = collect(
@@ -1128,9 +908,6 @@ class KernelRuntime:
         parts = [text for text in projection.sections.values() if text.strip()]
         if projection.summary.strip():
             parts.append("Summary of earlier conversation:\n" + projection.summary)
-        run_section = render_run_section(current_wait(snapshot.entries))
-        if run_section.strip():
-            parts.append(run_section)
         messages = list(
             trim_tool_results(projection.messages, self._compaction)
         )
