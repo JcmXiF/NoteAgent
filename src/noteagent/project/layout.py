@@ -122,6 +122,11 @@ class ProjectLayout:
         return self.writing / "state.json"
 
     @property
+    def writing_pages(self) -> Path:
+        """The selected pages' blocks, one file each, beside the state index."""
+        return self.writing / "pages"
+
+    @property
     def pipeline(self) -> Path:
         """The pipeline's own state: runs and the staging area, per project."""
         return self.meta / "pipeline"

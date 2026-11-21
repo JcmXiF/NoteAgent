@@ -23,14 +23,11 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from noteagent.acquire.adapters.image_source import ImageSourceAdapter
-from noteagent.acquire.adapters.office_source import OfficeSourceAdapter
 from noteagent.acquire.adapters.pdf_source import (
-    PdfSourceAdapter,
     blocks_from_payload,
     save_derived_blocks,
 )
-from noteagent.acquire.derive import blocks_payload
+from noteagent.acquire.derive import blocks_for_capture
 from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.types import Capture
 from noteagent.acquire.write_raw import (
@@ -328,7 +325,7 @@ class StagingArea:
             raise ValueError("a capture that failed the quality gate is not material")
         kind = capture_kind(capture)
         material = raw_relative_for_capture(capture)
-        blocks = _blocks_for(capture, kind)
+        blocks = blocks_for_capture(capture, kind)
         data = _source_bytes(capture, kind, captured_at)
 
         directory = self._material_directory(material, run_id=run_id)
@@ -640,23 +637,6 @@ class Materials:
                 )
             self._staging.remove(path)
         return len(doomed)
-
-
-def _blocks_for(capture: Capture, kind: str) -> list[dict[str, str]]:
-    if kind == "pdf":
-        return [
-            block.to_dict()
-            for block in PdfSourceAdapter().derive_bytes(capture.pdf_bytes)
-        ]
-    if kind == "office":
-        return [
-            block.to_dict()
-            for block in OfficeSourceAdapter().derive_bytes(capture.office_bytes).blocks
-        ]
-    if kind == "image":
-        derived = ImageSourceAdapter().derive_bytes(capture.image_bytes)
-        return [block.to_dict() for block in derived.blocks]
-    return blocks_payload(capture.html)
 
 
 def _source_bytes(capture: Capture, kind: str, captured_at: str) -> bytes:

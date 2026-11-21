@@ -3,7 +3,14 @@ import { useTranslation } from "react-i18next";
 import { Loader2, PenLine, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWritingState } from "@/components/writing/use-writing-state";
-import type { WritingSearch } from "@/lib/api/writing";
+import type {
+  WritingSearch,
+  WritingSelectedPage,
+} from "@/lib/api/writing";
+import {
+  writingAttention,
+  type WritingAttention,
+} from "@/lib/writing";
 import type { PaneSlot } from "@/stores/layout-store";
 
 /**
@@ -58,18 +65,9 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
   const writer = state.writer
     ? state.writer.id || state.writer.kind || t("writing.noWriter")
     : t("writing.noWriter");
-  // Attention is derived, as the spec says: a failed search is one of its
-  // sources, not a second row kept beside it.
-  const attention: { kind?: unknown; message?: unknown }[] = [
-    ...state.attention,
-    ...state.searches
-      .filter((search) => search.status === "failed")
-      .map((search) => ({
-        kind: "fetch_failed",
-        target: search.id ?? "",
-        message: search.error ?? "",
-      })),
-  ];
+  // Attention is derived, as the spec says: a failed search or page is one of
+  // its sources, not a second row kept beside it.
+  const attention: WritingAttention[] = writingAttention(state);
 
   return (
     <article className="flex h-full min-h-0 flex-col overflow-auto">
@@ -93,9 +91,8 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
       </header>
       <div className="grid gap-3 p-4 md:grid-cols-2">
         <Searches searches={state.searches} empty={t("writing.empty")} />
-        <Section
-          title={t("writing.areas.selectedPages")}
-          count={state.selectedPages.length}
+        <SelectedPages
+          pages={state.selectedPages}
           empty={t("writing.empty")}
         />
         <Section
@@ -188,6 +185,46 @@ function Searches({
             </ul>
           )}
         </div>
+      )}
+    </Card>
+  );
+}
+
+function SelectedPages({
+  pages,
+  empty,
+}: {
+  pages: WritingSelectedPage[];
+  empty: string;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Card title={t("writing.areas.selectedPages")} count={pages.length}>
+      {pages.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">{empty}</p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {pages.map((page, index) => (
+            <li key={page.id ?? index}>
+              <p className="text-xs font-medium">
+                {page.title ?? page.url ?? ""}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {t(`writing.pages.${page.status ?? "fetching"}`)}
+                {" · "}
+                {t("writing.pages.blockCount", {
+                  count: page.blockCount ?? 0,
+                })}
+              </p>
+              {page.status === "failed" && page.error ? (
+                <p className="text-[11px] text-destructive">
+                  {page.error}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
       )}
     </Card>
   );

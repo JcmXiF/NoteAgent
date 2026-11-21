@@ -44,7 +44,9 @@ from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
 from noteagent.writing.tools import (
     get_state_tool,
+    project_fetch,
     project_web_search,
+    select_page_tool,
     web_search_tool,
 )
 
@@ -199,6 +201,14 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
         web_search_tool(
             layout,
             deps.web_search or project_web_search(layout),
+            clock=deps.clock,
+            ids=deps.ids,
+        )
+    )
+    tools.register(
+        select_page_tool(
+            layout,
+            deps.web_fetch or project_fetch(layout),
             clock=deps.clock,
             ids=deps.ids,
         )

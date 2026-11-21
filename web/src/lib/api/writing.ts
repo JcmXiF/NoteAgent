@@ -29,13 +29,26 @@ export type WritingSearch = {
   createdAt?: string;
 };
 
-/** The state as the core writes it; the other section items are JSON for now. */
+export type WritingSelectedPage = {
+  id?: string;
+  hitId?: string;
+  url?: string;
+  title?: string;
+  status?: "fetching" | "ready" | "failed";
+  blockCount?: number;
+  version?: number;
+  error?: string;
+  errorKind?: string;
+  fetchedAt?: string;
+};
+
+/** The state as the core writes it; the frame items are JSON for now. */
 export type WritingStatePayload = {
   version: number;
   stateVersion: number;
   writer: WritingWriter | null;
   searches: WritingSearch[];
-  selectedPages: Record<string, unknown>[];
+  selectedPages: WritingSelectedPage[];
   frames: Record<string, unknown>[];
   draft: { pages?: WritingDraftPage[]; [key: string]: unknown };
   attention: Record<string, unknown>[];

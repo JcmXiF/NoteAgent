@@ -9,8 +9,9 @@ error, never a silent reset.
 from __future__ import annotations
 
 import json
+import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from noteagent.agent.clock import Clock, SystemClock
@@ -30,6 +31,13 @@ STATE_WRITER = "writing-state"
 #: turn a successful search into a lost one. A long holder still gets a refusal.
 _LOCK_ATTEMPTS = 3
 _LOCK_WAIT_S = 0.05
+
+#: The statuses and failure kinds a selected page may carry. The wire is JSON,
+#: so a hand-edited state is checked here rather than trusted.
+PAGE_STATUSES = frozenset({"fetching", "ready", "failed"})
+PAGE_ERROR_KINDS = frozenset({"fetch_failed", "login_wall"})
+
+_PAGE_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,80}\Z")
 
 
 class WritingStateError(RuntimeError):
@@ -102,7 +110,7 @@ class WritingState:
             state_version=state_version,
             writer=dict(writer) if isinstance(writer, Mapping) else None,
             searches=_items(raw.get("searches"), "searches"),
-            selected_pages=_items(raw.get("selectedPages"), "selectedPages"),
+            selected_pages=_selected_pages(raw.get("selectedPages")),
             frames=_items(raw.get("frames"), "frames"),
             draft=dict(draft),
             attention=_items(raw.get("attention"), "attention"),
@@ -175,23 +183,96 @@ class WritingStateStore:
         finally:
             lock.release(owner)
 
-    def append_search(
+    def append_search(self, row: Mapping[str, object]) -> WritingState:
+        """Append one search row, retrying once if another writer moved first."""
+        return self._append(
+            row,
+            lambda state, item: replace(
+                state, searches=state.searches + (item,)
+            ),
+        )
+
+    def append_selected_page(
+        self, row: Mapping[str, object]
+    ) -> WritingState:
+        """Append one selected page, retrying once if another writer moved first."""
+        return self._append(
+            row,
+            lambda state, item: replace(
+                state, selected_pages=state.selected_pages + (item,)
+            ),
+        )
+
+    def update_selected_page(
+        self, page_id: str, row: Mapping[str, object]
+    ) -> WritingState:
+        """Replace one selected page by id, retrying once on a version conflict."""
+        return self._append(
+            row,
+            lambda state, item: replace(
+                state,
+                selected_pages=tuple(
+                    item if str(page.get("id")) == page_id else page
+                    for page in state.selected_pages
+                ),
+            ),
+        )
+
+    def save_page_blocks(
+        self, page_id: str, blocks: Sequence[Mapping[str, object]]
+    ) -> None:
+        """Keep one selected page's blocks beside the state index."""
+        path = self._page_file(page_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(
+            path,
+            json.dumps(
+                {
+                    "version": 1,
+                    "blocks": [dict(block) for block in blocks],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
+
+    def load_page_blocks(self, page_id: str) -> list[dict[str, object]]:
+        """Read one selected page's blocks; a missing file is an error."""
+        path = self._page_file(page_id)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as err:
+            raise WritingStateError(
+                f"the blocks for page {page_id} cannot be read: {err}"
+            ) from err
+        if not isinstance(raw, Mapping):
+            raise WritingStateError(
+                f"the blocks for page {page_id} must be an object"
+            )
+        blocks = raw.get("blocks")
+        if not isinstance(blocks, list):
+            raise WritingStateError(
+                f"the blocks for page {page_id} must be a list"
+            )
+        return [dict(block) for block in blocks if isinstance(block, Mapping)]
+
+    def _page_file(self, page_id: str) -> Path:
+        key = (page_id or "").strip()
+        if _PAGE_ID.fullmatch(key) is None:
+            raise ValueError(f"not a page id: {page_id!r}")
+        return self._layout.writing_pages / f"{key}.json"
+
+    def _append(
         self,
         row: Mapping[str, object],
-        attention: Mapping[str, object] | None = None,
+        build: Callable[
+            [WritingState, Mapping[str, object]], WritingState
+        ],
     ) -> WritingState:
-        """Append one search row, retrying once if another writer moved first."""
         for attempt in range(2):
             state = self.load()
-            next_state = replace(
-                state,
-                searches=state.searches + (row,),
-                attention=(
-                    state.attention + (attention,)
-                    if attention is not None
-                    else state.attention
-                ),
-            )
+            next_state = build(state, row)
             try:
                 return self.save(next_state)
             except WritingStateConflict:
@@ -213,7 +294,16 @@ def state_summary(state: WritingState) -> dict[str, object]:
             "message": str(row.get("error") or "the search failed"),
         }
         for row in state.searches
-        if str(row.get("status") or "") == "failed"
+        if _is_failed(row)
+    )
+    attention.extend(
+        {
+            "kind": str(row.get("errorKind") or "fetch_failed"),
+            "target": str(row.get("id") or ""),
+            "message": str(row.get("error") or "the page could not be fetched"),
+        }
+        for row in state.selected_pages
+        if _is_failed(row)
     )
     return {
         "stateVersion": state.state_version,
@@ -231,7 +321,14 @@ def state_summary(state: WritingState) -> dict[str, object]:
                     else None
                 ),
             },
-            "selectedPages": {"count": len(state.selected_pages)},
+            "selectedPages": {
+                "count": len(state.selected_pages),
+                "failed": sum(
+                    1
+                    for row in state.selected_pages
+                    if _is_failed(row)
+                ),
+            },
             "frames": {"count": len(state.frames)},
             "draft": {"pages": len(pages), "sections": sections},
         },
@@ -254,6 +351,26 @@ def _items(value: object, name: str) -> tuple[Mapping[str, object], ...]:
     return tuple(items)
 
 
+def _selected_pages(value: object) -> tuple[Mapping[str, object], ...]:
+    rows = _items(value, "selectedPages")
+    for row in rows:
+        status = row.get("status")
+        if status is not None and str(status) not in PAGE_STATUSES:
+            raise WritingStateError(
+                f"unknown selected page status: {status!r}"
+            )
+        kind = row.get("errorKind")
+        if kind and str(kind) not in PAGE_ERROR_KINDS:
+            raise WritingStateError(
+                f"unknown selected page error kind: {kind!r}"
+            )
+    return rows
+
+
+def _is_failed(row: Mapping[str, object]) -> bool:
+    return str(row.get("status") or "") == "failed"
+
+
 def _draft_pages(draft: Mapping[str, object]) -> list[Mapping[str, object]]:
     raw = draft.get("pages")
     if not isinstance(raw, list):
@@ -267,6 +384,8 @@ def _draft_sections(page: Mapping[str, object]) -> list[object]:
 
 
 __all__ = [
+    "PAGE_ERROR_KINDS",
+    "PAGE_STATUSES",
     "STATE_SCHEMA_VERSION",
     "STATE_WRITER",
     "WritingState",

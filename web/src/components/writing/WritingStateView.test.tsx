@@ -128,4 +128,46 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain("The search failed.");
     expect(host.textContent).toContain("the provider is down");
   });
+
+  it("lists selected pages with status and block count", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 7,
+        writer: null,
+        searches: [],
+        selectedPages: [
+          {
+            id: "page-1",
+            url: "https://example.com/entropy",
+            title: "信息熵",
+            status: "ready",
+            blockCount: 2,
+            version: 2,
+          },
+          {
+            id: "page-2",
+            url: "https://example.com/kl",
+            title: "KL 散度",
+            status: "failed",
+            blockCount: 0,
+            error: "http_forbidden",
+            errorKind: "login_wall",
+          },
+        ],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("信息熵");
+    expect(host.textContent).toContain("Ready");
+    expect(host.textContent).toContain("2 blocks");
+    expect(host.textContent).toContain("KL 散度");
+    expect(host.textContent).toContain("Failed");
+    expect(host.textContent).toContain("http_forbidden");
+  });
 });

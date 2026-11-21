@@ -126,7 +126,7 @@ class WritingStateApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            summary["areas"]["selectedPages"], {"count": 1}
+            summary["areas"]["selectedPages"], {"count": 1, "failed": 0}
         )
 
 

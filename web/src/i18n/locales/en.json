@@ -61,6 +61,12 @@
       "failed": "The search failed.",
       "noHits": "No hits."
     },
+    "pages": {
+      "fetching": "Fetching",
+      "ready": "Ready",
+      "failed": "Failed",
+      "blockCount": "{{count}} blocks"
+    },
     "areas": {
       "searches": "Search results",
       "selectedPages": "Selected pages",

@@ -61,6 +61,12 @@
       "failed": "搜索失败。",
       "noHits": "没有命中。"
     },
+    "pages": {
+      "fetching": "抓取中",
+      "ready": "就绪",
+      "failed": "失败",
+      "blockCount": "{{count}} 段"
+    },
     "areas": {
       "searches": "搜索结果",
       "selectedPages": "选页",

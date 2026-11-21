@@ -138,7 +138,9 @@ class WritingStateTests(unittest.TestCase):
                 "latest": {"id": "s1", "query": "", "status": ""},
             },
         )
-        self.assertEqual(summary["areas"]["selectedPages"], {"count": 1})
+        self.assertEqual(
+            summary["areas"]["selectedPages"], {"count": 1, "failed": 0}
+        )
         self.assertEqual(summary["areas"]["frames"], {"count": 1})
         self.assertEqual(
             summary["areas"]["draft"], {"pages": 2, "sections": 3}
@@ -189,6 +191,26 @@ class WritingStateTests(unittest.TestCase):
             str(row["id"]) for row in self.store.load().searches
         }
         self.assertEqual(rows, {"s0", "s1"})
+
+    def test_page_blocks_round_trip_beside_the_state(self) -> None:
+        blocks = [{"id": "b1", "tag": "p", "text": "熵"}]
+
+        self.store.save_page_blocks("page-1", blocks)
+
+        self.assertEqual(self.store.load_page_blocks("page-1"), blocks)
+        with self.assertRaises(ValueError):
+            self.store.load_page_blocks("../escape")
+
+    def test_an_unknown_selected_page_status_is_refused(self) -> None:
+        self.layout.writing_state.parent.mkdir(parents=True, exist_ok=True)
+        self.layout.writing_state.write_text(
+            '{"version": 1, "stateVersion": 0, '
+            '"selectedPages": [{"id": "p1", "status": "weird"}]}',
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(WritingStateError):
+            self.store.load()
 
     def test_the_wire_shape_round_trips(self) -> None:
         state = WritingState(

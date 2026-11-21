@@ -299,7 +299,13 @@ class DefaultToolTests(unittest.TestCase):
 
         self.assertEqual(
             [tool.name for tool in tools.enabled()],
-            ["wiki_read", "search", "get_state", "web_search"],
+            [
+                "wiki_read",
+                "search",
+                "get_state",
+                "web_search",
+                "select_page",
+            ],
         )
 
     def test_a_test_store_without_tools_gets_a_bare_run(self) -> None:
