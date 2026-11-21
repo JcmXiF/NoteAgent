@@ -14,14 +14,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from noteagent.api.ingest import run_ingest_job
-from noteagent.api.topic_gate import run_ingest_confirmed_job, run_topic_map_job
 from noteagent.ingest.clips import (
     ClipCollection,
     ClipStore,
     DerivedBlock,
     save_clip_store,
 )
-from noteagent.ingest.topic_map import map_clips
 from noteagent.llm.config import LlmConfig
 from noteagent.project.init import init_project
 from noteagent.wiki.deep_search import act_session
@@ -104,91 +102,6 @@ TOPIC_MAP_JSON = json.dumps(
         }
     }
 )
-
-
-class TopicMapSnapshotTests(unittest.TestCase):
-    def test_a_planning_pass_reads_the_connection_once(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            source = layout.raw / "web" / "kl.html"
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text("<p>KL</p>\n", encoding="utf-8")
-            save_clip_store(
-                layout,
-                ClipStore(
-                    intent="KL",
-                    collections=(
-                        ClipCollection(
-                            id="c1",
-                            source_key="raw/web/kl.html",
-                            source_label="KL",
-                            block_ids=("b1",),
-                            blocks=(
-                                DerivedBlock(
-                                    id="b1",
-                                    tag="p",
-                                    text="KL 是相对熵。",
-                                    preview="KL",
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-            loader = _LoadOnce(CONFIG_A)
-            seen: list[LlmConfig] = []
-
-            def fake_map(layout, *, llm_config, map_text=None, **kwargs):
-                seen.append(llm_config)
-                return map_clips(
-                    layout,
-                    llm_config=llm_config,
-                    map_text=TOPIC_MAP_JSON,
-                    **kwargs,
-                )
-
-            with (
-                patch("noteagent.llm.config.load_llm_config", loader),
-                patch("noteagent.api.topic_gate.map_clips", fake_map),
-            ):
-                run_topic_map_job(layout)
-
-            self.assertEqual(loader.calls, 1)
-            self.assertEqual(seen, [CONFIG_A])
-
-
-class ConfirmedIngestSnapshotTests(unittest.TestCase):
-    def test_a_confirmed_ingest_reads_the_connection_once(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "proj")
-            loader = _LoadOnce(CONFIG_A)
-            seen: list[LlmConfig] = []
-
-            class Session:
-                round_id = ""
-                step = 0
-
-            def fake_ingest(*_args, **kwargs):
-                seen.append(kwargs["llm_config"])
-                return object()
-
-            with (
-                patch("noteagent.llm.config.load_llm_config", loader),
-                patch("noteagent.api.topic_gate.ingest_confirmed", fake_ingest),
-                patch(
-                    "noteagent.api.topic_gate.ingest_result_payload",
-                    lambda *_args, **_kwargs: {"ok": True},
-                ),
-                patch(
-                    "noteagent.api.topic_gate.load_session",
-                    lambda _layout: Session(),
-                ),
-            ):
-                payload = run_ingest_confirmed_job(layout, [])
-
-            self.assertEqual(payload["errors"], [])
-            self.assertEqual(loader.calls, 1)
-            self.assertEqual(seen, [CONFIG_A])
 
 
 class DeepSearchSnapshotTests(unittest.TestCase):

@@ -23,24 +23,6 @@ class PipelineCancelled(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class PlanSummary:
-    """How planning went: pages proposed, answers carried, plan identified."""
-
-    pages: int = 0
-    carried: int = 0
-    #: What the plan and answers were, so a confirmation can prove it is the
-    #: revision the person was shown.
-    digest: str = ""
-
-    def detail(self) -> dict[str, object]:
-        return {
-            "planPages": self.pages,
-            "planCarried": self.carried,
-            "planDigest": self.digest,
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class FrameSummary:
     """How framing went: materials framed, and what it cost."""
 
@@ -71,8 +53,6 @@ class StageContext:
     stage_material: Callable[[Capture], MaterialState]
     #: Turn this run's staged materials into frames, through the single writer.
     frame_materials: Callable[[], FrameSummary]
-    #: Plan the run's frames, through the single writer.
-    plan_materials: Callable[[], PlanSummary]
 
     def update(self, **changes: object) -> PipelineRun:
         """Write one change to the run and carry on with the fresh copy."""
@@ -107,6 +87,5 @@ __all__ = [
     "FrameSummary",
     "PipelineCancelled",
     "PipelineStage",
-    "PlanSummary",
     "StageContext",
 ]

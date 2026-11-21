@@ -44,22 +44,6 @@ export type PipelineRun = {
   result?: PipelineRunResult;
 };
 
-export type PipelineConfirmationPage = {
-  name: string;
-  slug: string;
-  wikiPath: string;
-  action: "write" | "mention" | "skip";
-  sectionIds: string[];
-  sections: { id: string; title: string }[];
-};
-
-export type PipelineConfirmation = {
-  runId: string;
-  intent: string;
-  planRevision: number;
-  pages: PipelineConfirmationPage[];
-};
-
 export type PipelineRestoreClassification =
   | "unchanged"
   | "changed_by_person"
@@ -151,13 +135,6 @@ export function cancelPipelineRun(id: string): Promise<PipelineRun> {
   );
 }
 
-export function fetchPipelineConfirmation(
-  runId: string,
-): Promise<PipelineConfirmation> {
-  return getJson<PipelineConfirmation>(
-    `/v1/pipeline/runs/${encodeURIComponent(runId)}/confirmation`,
-  );
-}
 
 export function fetchPipelineRestorePreview(
   runId: string,

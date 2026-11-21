@@ -45,8 +45,6 @@ export const RIGHT_SECTIONS = [
   "attention",
   "selection",
   "pipeline",
-  "plan",
-  "compile",
 ] as const;
 export type RightSectionId = (typeof RIGHT_SECTIONS)[number];
 
@@ -55,8 +53,6 @@ export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
   attention: "selections.attention",
   selection: "selections.selection",
   pipeline: "selections.pipeline",
-  plan: "selections.plan",
-  compile: "selections.compile",
 };
 
 /**
@@ -69,13 +65,10 @@ export const RIGHT_SECTION_LABEL: Record<RightSectionId, string> = {
  */
 const DEFAULT_OPEN: Record<ModuleId, RightSectionId[]> = {
   chat: ["selection"],
-  // Selecting, planning and compiling is the one sitting the workbench exists for.
-  sources: ["selection", "pipeline", "plan", "compile"],
-  docs: ["selection", "plan"],
-  // Writing a remark is not part of planning or compiling anything, so nothing of
-  // the right panel has a claim on it and the panel starts empty.
+  sources: ["selection", "pipeline"],
+  docs: ["selection"],
   notes: [],
-  graph: ["plan", "compile"],
+  graph: [],
   browse: ["selection"],
   // The writing panel shows its own four sections; none of the workbench's
   // right-panel sections has a claim on it.

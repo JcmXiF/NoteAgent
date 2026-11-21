@@ -2,7 +2,6 @@ import { useActivityStore } from "@/stores/activity-store";
 import { useAcquireStore } from "@/stores/acquire-store";
 import { useBrowseStore } from "@/stores/browse-store";
 import { useClipsStore } from "@/stores/clips-store";
-import { useCompileStore } from "@/stores/compile-store";
 import { useDeepSearchStore } from "@/stores/deep-search-store";
 import { useDocsReads } from "@/stores/docs-reads";
 import { useDocsStore } from "@/stores/docs-store";
@@ -11,7 +10,6 @@ import { useLayoutStore } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
 import { useNotePageStore } from "@/stores/note-page-store";
 import { useNotesStore } from "@/stores/notes-store";
-import { usePlanStore } from "@/stores/plan-store";
 import { useReadingStore } from "@/stores/reading-store";
 import { useUiStore } from "@/stores/ui-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -46,7 +44,6 @@ export function installDevBridge(): void {
         acquire: useAcquireStore,
         browse: useBrowseStore,
         clips: useClipsStore,
-        compile: useCompileStore,
         deepSearch: useDeepSearchStore,
         docs: useDocsStore,
         docsReads: useDocsReads,
@@ -55,7 +52,6 @@ export function installDevBridge(): void {
         nav: useNavStore,
         notePage: useNotePageStore,
         notes: useNotesStore,
-        plan: usePlanStore,
         reading: useReadingStore,
         ui: useUiStore,
         workspace: useWorkspaceStore,

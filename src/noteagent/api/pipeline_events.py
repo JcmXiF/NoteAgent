@@ -1,7 +1,7 @@
 """A pipeline run as it happens, streamed to whoever started it.
 
 The run is a file, not a live object: an Agent connecting from another process
-reads the same state the interface does. The stream reads the run, its plan
+reads the same state the interface does. The stream reads the run
 revision and its materials, and says what changed; it ends when the run does.
 
 The stream observes the run; it does not own it. A client that goes away does
@@ -17,9 +17,8 @@ from collections.abc import Iterator
 from typing import Any
 
 from noteagent.api.sse import KEEPALIVE_SECONDS
-from noteagent.pipeline.confirm import confirmation_payload
-from noteagent.pipeline.run import PipelineRun, TERMINAL_STATUSES
-from noteagent.pipeline.service import PipelineConflict, PipelineService
+from noteagent.pipeline.run import TERMINAL_STATUSES
+from noteagent.pipeline.service import PipelineService
 
 #: How often the stream reads the run. A stage is a model call, so this is a
 #: read of a local file, not a busy loop.
@@ -43,7 +42,6 @@ def iter_pipeline_events(
         return _frame(kind, {**data, "seq": seq})
 
     seen_stage: tuple[str, str] | None = None
-    seen_plan = 0
     seen_detail: dict[str, object] = {}
     seen_materials: list[dict[str, object]] | None = None
     seen_waiting_revision = -1
@@ -70,24 +68,6 @@ def iter_pipeline_events(
                 {"runId": run.id, "stage": run.stage, "status": run.status},
             )
 
-        if run.plan_revision > 0 and run.plan_revision != seen_plan:
-            seen_plan = run.plan_revision
-            payload: dict[str, object] = {
-                "runId": run.id,
-                "planRevision": run.plan_revision,
-            }
-            pages = run.detail.get("planPages")
-            if isinstance(pages, int):
-                payload["pages"] = pages
-            last_write = time.monotonic()
-            yield frame("plan", payload)
-
-        detail = dict(run.detail)
-        if detail != seen_detail:
-            seen_detail = detail
-            last_write = time.monotonic()
-            yield frame("progress", {"runId": run.id, "detail": detail})
-
         materials = [
             state.payload() for state in service.materials_for_run(run.id)
         ]
@@ -96,18 +76,6 @@ def iter_pipeline_events(
             last_write = time.monotonic()
             yield frame(
                 "material", {"runId": run.id, "materials": materials}
-            )
-
-        if (
-            run.status == "awaiting_confirmation"
-            and run.plan_revision != seen_waiting_revision
-        ):
-            # A revision bump while the run still waits is a different plan to
-            # confirm, so it is announced again with its pages.
-            seen_waiting_revision = run.plan_revision
-            last_write = time.monotonic()
-            yield frame(
-                "awaiting_confirmation", _confirmation_event(service, run)
             )
 
         if run.status in TERMINAL_STATUSES:
@@ -139,19 +107,6 @@ def iter_pipeline_events(
             last_write = time.monotonic()
             yield b": keepalive\n\n"
         time.sleep(POLL_SECONDS)
-
-
-def _confirmation_event(
-    service: PipelineService, run: PipelineRun
-) -> dict[str, object]:
-    """The pages a waiting run proposes, when the plan still backs them."""
-    try:
-        confirmation = service.confirmation(run.id)
-    except PipelineConflict:
-        confirmation = None
-    if confirmation is None:
-        return {"runId": run.id, "planRevision": run.plan_revision}
-    return confirmation_payload(confirmation)
 
 
 def _frame(kind: str, data: dict[str, Any]) -> bytes:

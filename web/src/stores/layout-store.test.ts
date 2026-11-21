@@ -70,31 +70,28 @@ describe("the sidebar's width", () => {
 describe("the right panel's sections", () => {
   it("opens the sections that belong to the module in front", () => {
     const state = () => useLayoutStore.getState();
-    // Planning and compiling is what the graph is for.
-    expect(sectionIsOpen(state(), "plan", "graph")).toBe(true);
-    expect(sectionIsOpen(state(), "compile", "graph")).toBe(true);
+    // The graph holds no workbench sections any more.
+    expect(sectionIsOpen(state(), "pipeline", "graph")).toBe(false);
     // A conversation does not write pages.
-    expect(sectionIsOpen(state(), "compile", "chat")).toBe(false);
+    expect(sectionIsOpen(state(), "pipeline", "chat")).toBe(false);
     expect(sectionIsOpen(state(), "selection", "chat")).toBe(true);
   });
 
   it("opens the whole workbench where the workbench is", () => {
-    // Selecting, planning and compiling happen in one sitting in the sources
-    // module — its own acceptance runs them all from the right panel.
+    // Selecting and the pipeline happen in one sitting in the sources module.
     const state = () => useLayoutStore.getState();
     expect(sectionIsOpen(state(), "selection", "sources")).toBe(true);
-    expect(sectionIsOpen(state(), "plan", "sources")).toBe(true);
-    expect(sectionIsOpen(state(), "compile", "sources")).toBe(true);
+    expect(sectionIsOpen(state(), "pipeline", "sources")).toBe(true);
     // A page's own source, opened from the extension, lands in the same module.
-    expect(sectionIsOpen(state(), "plan", "browse")).toBe(false);
+    expect(sectionIsOpen(state(), "pipeline", "browse")).toBe(false);
   });
 
   it("lets the reader's own choice win over the default", () => {
-    useLayoutStore.setState({ rightFolds: { plan: false } });
-    expect(sectionIsOpen(useLayoutStore.getState(), "plan", "graph")).toBe(false);
+    useLayoutStore.setState({ rightFolds: { pipeline: false } });
+    expect(sectionIsOpen(useLayoutStore.getState(), "pipeline", "sources")).toBe(false);
 
-    useLayoutStore.getState().setSectionOpen("compile", true);
-    expect(sectionIsOpen(useLayoutStore.getState(), "compile", "chat")).toBe(true);
+    useLayoutStore.getState().setSectionOpen("attention", true);
+    expect(sectionIsOpen(useLayoutStore.getState(), "attention", "chat")).toBe(true);
   });
 
   it("closes a section that is opened by default", () => {
@@ -245,12 +242,12 @@ describe("reading a stored arrangement", () => {
     const stored = {
       view: "graph",
       leftWidths: { ...current().leftWidths, docs: 400 },
-      rightFolds: { plan: false },
+      rightFolds: { pipeline: false },
     };
     const merged = mergeStoredLayout(stored, current());
     expect(merged.view).toBe("graph");
     expect(merged.leftWidths.docs).toBe(400);
-    expect(merged.rightFolds.plan).toBe(false);
+    expect(merged.rightFolds.pipeline).toBe(false);
   });
 
   it("opens a sidebar that was stored before it had sections", () => {

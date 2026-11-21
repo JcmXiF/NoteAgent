@@ -16,30 +16,8 @@ from typing import TypeVar
 
 from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
-from noteagent.effects.journal import (
-    COMMITTED,
-    WIKI_PAGE_WRITE,
-    EffectJournal,
-)
 from noteagent.effects.restore import preview_restore, restore_run
-from noteagent.ingest.clips import (
-    ClipCollection,
-    ClipStore,
-    durable_source_file,
-    load_clip_store,
-    save_clip_store,
-)
 from noteagent.pipeline.captures import CaptureInbox, LoginWall
-from noteagent.pipeline.confirm import (
-    CompileFn,
-    Confirmation,
-    NothingToWrite,
-    PlanMissing,
-    compile_outcome,
-    confirmation_digest,
-    default_compile,
-    derive_confirmation,
-)
 from noteagent.pipeline.frame_model import ModelFraming
 from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
@@ -47,9 +25,7 @@ from noteagent.pipeline.materials import (
     DEFAULT_KEEP_RUNS,
     MaterialState,
     Materials,
-    hydrate_collection,
 )
-from noteagent.pipeline.planning import PlanError, PlanFn, Planning
 from noteagent.pipeline.run import (
     MATERIAL_MODES,
     QUERY_MODES,
@@ -64,7 +40,6 @@ from noteagent.pipeline.stage import (
     FrameSummary,
     PipelineCancelled,
     PipelineStage,
-    PlanSummary,
     StageContext,
 )
 from noteagent.pipeline.store import PipelineRunStore
@@ -146,8 +121,6 @@ class PipelineService:
         spawn: Callable[[Callable[[], None]], None] | None = None,
         keep_runs: int = DEFAULT_KEEP_RUNS,
         frame_model: ModelFraming | None = None,
-        planner: PlanFn | None = None,
-        compile: CompileFn | None = None,
     ) -> None:
         self._layout = layout
         self._clock = clock
@@ -165,10 +138,6 @@ class PipelineService:
         self._framing = Framing(
             layout, materials=self._materials, model=frame_model
         )
-        self._planning = Planning(
-            layout, materials=self._materials, planner=planner
-        )
-        self._compile = compile or default_compile
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
 
@@ -251,12 +220,6 @@ class PipelineService:
     def active(self) -> list[PipelineRun]:
         return self._store.active()
 
-    def _waiting_run(self) -> PipelineRun | None:
-        for run in self._store.list():
-            if run.status == "awaiting_confirmation":
-                return run
-        return None
-
     def use_stages(self, stages: Sequence[PipelineStage]) -> None:
         """Wire the stages, before a run starts; a mistyped name is refused."""
         checked = tuple(stages)
@@ -282,219 +245,6 @@ class PipelineService:
         """Frame the run's staged materials, serialized with every other write."""
         with self._registry.writer(self._project_key):
             return self._framing.frame_run(run_id)
-
-    def plan_materials(
-        self, run_id: str, cancel: Event | None = None
-    ) -> PlanSummary:
-        """Plan the run's frames, serialized with every other write."""
-        run = self._store.get(run_id)
-        if run is None:
-            raise PlanError(f"no pipeline run: {run_id}")
-        with self._registry.writer(self._project_key):
-            return self._planning.plan_run(run, cancel=cancel)
-
-    def confirmation(self, run_id: str) -> Confirmation | None:
-        """What this run proposes to write, while it waits for a person."""
-        run = self._store.get(run_id)
-        if run is None:
-            return None
-        return self._confirmation_for(run)
-
-    def sync_waiting(self) -> bool:
-        """Bring a waiting run's confirmation in line with the board.
-
-        A plan board edit is the person changing what they will confirm. When the
-        plan or its answers changed, the run gets a new revision, so an approval
-        of the old one is refused instead of writing pages nobody saw. A frame or
-        intent change clears the plan; the run then re-plans before waiting again.
-        """
-        run = self._waiting_run()
-        if run is None:
-            return False
-        store = load_clip_store(self._layout)
-        if store.topic_map is None:
-            return self.resume_planning()
-        digest = confirmation_digest(store)
-        if digest == _recorded_digest(run):
-            return False
-        self._lock.acquire(run.id)
-        try:
-            current = self._store.get(run.id) or run
-            if current.status != "awaiting_confirmation":
-                return False
-            store = load_clip_store(self._layout)
-            digest = confirmation_digest(store)
-            if store.topic_map is not None and digest != _recorded_digest(current):
-                self._save(
-                    replace(
-                        current,
-                        plan_revision=current.plan_revision + 1,
-                        detail={**dict(current.detail), "planDigest": digest},
-                    )
-                )
-                return True
-        finally:
-            self._lock.release(run.id)
-        return self.resume_planning() if store.topic_map is None else False
-
-    def resume_planning(self) -> bool:
-        """Plan a waiting run again after its frames or intent changed."""
-        run = self._waiting_run()
-        if run is None:
-            return False
-        if load_clip_store(self._layout).topic_map is not None:
-            return False
-        try:
-            cancel = self._registry.claim(self._project_key, run.id)
-        except PipelineBusy:
-            return False
-        try:
-            self._lock.acquire(run.id)
-        except ProjectBusy:
-            self._registry.release(self._project_key, run.id)
-            return False
-        started = False
-        try:
-            current = self._store.get(run.id) or run
-            if current.status != "awaiting_confirmation":
-                return False
-            if load_clip_store(self._layout).topic_map is not None:
-                return False
-            running = replace(
-                current,
-                status="running",
-                stage="plan",
-                error="",
-                updated_at=iso_timestamp(self._clock),
-            )
-            with self._registry.writer(self._project_key):
-                self._store.save(running)
-            started = True
-        finally:
-            if not started:
-                self._lock.release(run.id)
-                self._registry.release(self._project_key, run.id)
-        self._spawn(lambda: self._replan_work(running, cancel))
-        return True
-
-    def approve(
-        self,
-        run_id: str,
-        *,
-        plan_revision: int,
-        overrides: Sequence[Mapping[str, object]] = (),
-    ) -> PipelineRun | None:
-        """Approve a run's plan revision and start its compile.
-
-        The pages come from the run and its plan; the caller names a revision,
-        never a list of pages. A revision that no longer matches is a conflict,
-        and nothing is written.
-        """
-        run = self._store.get(run_id)
-        if run is None:
-            return None
-        cancel = self._registry.claim(self._project_key, run.id)
-        try:
-            self._lock.acquire(run.id)
-        except ProjectBusy:
-            self._registry.release(self._project_key, run.id)
-            raise
-        started = False
-        try:
-            current = self._store.get(run_id) or run
-            if current.plan_revision != plan_revision:
-                raise PipelineConflict(
-                    "the plan has changed since this revision; review it again"
-                )
-            store = load_clip_store(self._layout)
-            confirmation = self._confirmation_for(current, overrides, store)
-            if not confirmation.writes:
-                raise NothingToWrite("select at least one page to write")
-            if cancel.is_set():
-                self._save(replace(current, status="cancelled", error=""))
-                return self._store.get(run_id) or current
-            with self._registry.writer(self._project_key):
-                # The confirmation becomes the stored gate; the person's own
-                # answers stay for the next plan to carry over.
-                save_clip_store(
-                    self._layout,
-                    replace(
-                        store,
-                        choices=confirmation.choices,
-                        decisions=confirmation.decisions,
-                    ),
-                )
-                current = replace(
-                    current,
-                    status="compiling",
-                    stage="compile",
-                    error="",
-                    updated_at=iso_timestamp(self._clock),
-                )
-                self._store.save(current)
-            started = True
-        finally:
-            if not started:
-                self._lock.release(run.id)
-                self._registry.release(self._project_key, run.id)
-        self._spawn(lambda: self._compile_work(current, confirmation, cancel))
-        return self._store.get(run_id) or current
-
-    def _confirmation_for(
-        self,
-        run: PipelineRun,
-        overrides: Sequence[Mapping[str, object]] = (),
-        store=None,
-    ) -> Confirmation:
-        if run.status != "awaiting_confirmation":
-            raise PipelineConflict("this run is not waiting for confirmation")
-        clip_store = store or load_clip_store(self._layout)
-        digest = confirmation_digest(clip_store)
-        if digest != _recorded_digest(run):
-            raise PipelineConflict(
-                "the plan changed since this revision; review it again"
-            )
-        try:
-            hydrated = self._store_with_blocks(run, clip_store)
-            return derive_confirmation(
-                self._layout,
-                run_id=run.id,
-                intent=run.intent,
-                revision=run.plan_revision,
-                store=hydrated,
-                overrides=overrides,
-            )
-        except PlanMissing as err:
-            raise PipelineConflict(str(err)) from err
-
-    def _store_with_blocks(self, run: PipelineRun, store: ClipStore) -> ClipStore:
-        """The store as this run sees it: its selections carry their block texts.
-
-        Framing stores block ids, not texts; a confirmation that needs the text
-        reads it from the run's staging, where the capture put it. The saved
-        selection keeps only ids, as the material identity says it should.
-        """
-        run_materials = {
-            state.material for state in self._materials.for_run(run.id)
-        }
-        collections: list[ClipCollection] = []
-        for collection in store.collections:
-            blocks = self._materials.blocks(
-                collection.source_key, run_id=run.id
-            )
-            if blocks is None:
-                if collection.source_key in run_materials:
-                    raise PlanMissing(
-                        "the staged blocks for "
-                        f"{collection.source_key} are gone"
-                    )
-                collections.append(collection)
-                continue
-            hydrated = hydrate_collection(collection, blocks)
-            collections.append(
-                collection if hydrated is None else hydrated
-            )
-        return replace(store, collections=tuple(collections))
 
     def write_clips(self, work: Callable[[], _T]) -> _T:
         """Run a selection write under the project's lock and single writer."""
@@ -660,9 +410,6 @@ class PipelineService:
                         capture, run_id=current.id
                     ),
                     frame_materials=lambda: self.frame_materials(current.id),
-                    plan_materials=lambda: self.plan_materials(
-                        current.id, cancel
-                    ),
                 )
                 try:
                     stage(context)
@@ -677,18 +424,7 @@ class PipelineService:
                     return
             if cancel.is_set():
                 raise PipelineCancelled("the run was cancelled")
-            if current.plan_revision > 0:
-                # A plan is a proposal until a person approves it. The run waits
-                # with the project released, so the board can still be changed.
-                self._save(
-                    replace(
-                        current,
-                        status="awaiting_confirmation",
-                        stage="confirm",
-                    )
-                )
-            else:
-                self._save(replace(current, status="succeeded", stage="done"))
+            self._save(replace(current, status="succeeded", stage="done"))
         except (PipelineCancelled, JobCancelled):
             # A stop during planning surfaces from the shared job as
             # JobCancelled; either way the reader cancelled the run.
@@ -698,153 +434,6 @@ class PipelineService:
             self._save(replace(current, status="failed", error=str(err)[:500]))
         finally:
             self._release_run(current)
-
-    def _compile_work(
-        self,
-        run: PipelineRun,
-        confirmation: Confirmation,
-        cancel: Event,
-    ) -> None:
-        current = run
-        try:
-            # Only the pages being written need durable originals; everything
-            # else this run collected stays in staging for retention.
-            self._promote_for(current, confirmation)
-            result = self._compile(self._layout, confirmation, cancel)
-            effect_ids = self._run_effect_ids(current.id)
-            if result.written:
-                self._mark_compiled(current, confirmation)
-            self._save(
-                replace(
-                    current,
-                    status="succeeded",
-                    stage="done",
-                    result=compile_outcome(
-                        confirmation, result, effect_ids
-                    ),
-                )
-            )
-        except (PipelineCancelled, JobCancelled):
-            self._save(
-                replace(
-                    current,
-                    status="cancelled",
-                    error="",
-                    result=self._result_with_effects(current),
-                )
-            )
-        except Exception as err:  # noqa: BLE001 - a failed compile is a result
-            logger.exception("pipeline compile %s failed", current.id)
-            self._save(
-                replace(
-                    current,
-                    status="failed",
-                    error=str(err)[:500],
-                    result=self._result_with_effects(current),
-                )
-            )
-        finally:
-            self._release_run(current)
-
-    def _run_effect_ids(self, run_id: str) -> tuple[str, ...]:
-        """What the journal says this compile actually wrote."""
-        return tuple(
-            effect.ident
-            for effect in EffectJournal(self._layout).query(
-                run_id=run_id,
-                kind=WIKI_PAGE_WRITE,
-                status=COMMITTED,
-            )
-        )
-
-    def _result_with_effects(
-        self, run: PipelineRun
-    ) -> dict[str, object]:
-        """Keep the committed effect ids when a compile did not finish cleanly."""
-        result = dict(run.result)
-        effect_ids = self._run_effect_ids(run.id)
-        if effect_ids:
-            result["effectIds"] = list(effect_ids)
-        return result
-
-    def _mark_compiled(
-        self, run: PipelineRun, confirmation: Confirmation
-    ) -> None:
-        """Link each written page back to the material it was compiled from."""
-        pages_by_source: dict[str, list[str]] = {}
-        for page in confirmation.writes:
-            node = confirmation.topic_map.node_for_slug(page.slug)
-            if node is None:
-                continue
-            cited = [
-                section.collection_id
-                for section in node.outline
-                if (not page.section_ids or section.id in page.section_ids)
-                and section.collection_id
-            ]
-            if not cited:
-                cited = list(node.collection_ids)
-            for collection in confirmation.selections:
-                if collection.id not in cited:
-                    continue
-                source = collection.source_key.replace("\\", "/").strip()
-                pages = pages_by_source.setdefault(source, [])
-                if page.wiki_path not in pages:
-                    pages.append(page.wiki_path)
-        with self._registry.writer(self._project_key):
-            for source, pages in sorted(pages_by_source.items()):
-                if not source.startswith("raw/"):
-                    continue
-                if durable_source_file(self._layout, source) is None:
-                    continue
-                self._materials.mark(
-                    source,
-                    "compiled",
-                    run_id=run.id,
-                    detail={"pages": pages},
-                )
-
-    def _promote_for(
-        self, run: PipelineRun, confirmation: Confirmation
-    ) -> None:
-        """Make the write pages' originals durable; unused material stays staged."""
-        sources = {
-            collection.source_key.replace("\\", "/").strip()
-            for collection in confirmation.selections
-        }
-        with self._registry.writer(self._project_key):
-            for source in sorted(sources):
-                if not source.startswith("raw/"):
-                    # A preview key belongs to the manual path's storage step.
-                    continue
-                self._materials.promote(source, run_id=run.id)
-
-    def _replan_work(self, run: PipelineRun, cancel: Event) -> None:
-        current = run
-        try:
-            summary = self.plan_materials(current.id, cancel)
-            self._save(
-                replace(
-                    current,
-                    status="awaiting_confirmation",
-                    stage="confirm",
-                    plan_revision=current.plan_revision + 1,
-                    detail={**dict(current.detail), **summary.detail()},
-                )
-            )
-        except (PipelineCancelled, JobCancelled):
-            self._save(replace(current, status="cancelled", error=""))
-        except Exception as err:  # noqa: BLE001 - a failed replan is a result
-            logger.exception("pipeline replan %s failed", current.id)
-            self._save(replace(current, status="failed", error=str(err)[:500]))
-        finally:
-            self._release_run(current)
-
-
-def _recorded_digest(run: PipelineRun) -> str:
-    value = run.detail.get("planDigest")
-    return value.strip() if isinstance(value, str) else ""
-
 
 def _spawn_thread(work: Callable[[], None]) -> None:
     threading.Thread(target=work, name="pipeline-run", daemon=True).start()

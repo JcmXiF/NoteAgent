@@ -141,7 +141,6 @@ class CoreCodeTests(unittest.TestCase):
         self.assertIn("provider.notConfigured", found)
         # A code raised by keyword on an HTTP error is still a situation the
         # interface is told about, and the scan has to see it.
-        self.assertIn("pipeline.busy", found)
         self.assertIn("pipeline.notFound", found)
         # A local variable called `code` is not a situation the interface is told
         # about, and its values must not be read as codes.

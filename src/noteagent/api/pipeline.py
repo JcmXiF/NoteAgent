@@ -19,7 +19,6 @@ from noteagent.api.projects import get_active_layout
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.pipeline.frame_model import default_frame_model
 from noteagent.pipeline.framing import FrameStage
-from noteagent.pipeline.planning import PlanStage, default_planner
 from noteagent.pipeline.service import PipelineService
 from noteagent.pipeline.stage import PipelineStage
 from noteagent.project.config import ProjectNotConfiguredError
@@ -45,15 +44,12 @@ def pipeline_service_for(deps: AppDeps, layout: ProjectLayout) -> PipelineServic
     # A test that wires its own stages gets the deterministic split unless it
     # hands in a model too; a real core frames with the model.
     frame_model = deps.pipeline_frame_model
-    planner = deps.pipeline_planner
     if deps.pipeline_stages is None:
         if frame_model is None:
             frame_model = default_frame_model(
                 rounds=deps.pipeline_frame_rounds,
                 chars=deps.pipeline_frame_chars,
             )
-        if planner is None:
-            planner = default_planner
     # The service exists before its stages do: a default stage writes the
     # sign-in queue through the same single writer the service owns.
     service = PipelineService(
@@ -64,8 +60,6 @@ def pipeline_service_for(deps: AppDeps, layout: ProjectLayout) -> PipelineServic
         spawn=deps.pipeline_spawn,
         keep_runs=deps.pipeline_keep_runs,
         frame_model=frame_model,
-        planner=planner,
-        compile=deps.pipeline_compile,
     )
     if deps.pipeline_stages is None:
         service.use_stages(default_stages(layout))
@@ -91,7 +85,7 @@ def prepare_active_project(deps: AppDeps) -> None:
 
 
 def default_stages(layout: ProjectLayout) -> Sequence[PipelineStage]:
-    """The stages a product run walks: acquire, frame, plan."""
+    """The stages a product run walks: acquire and frame."""
     logger = RunLogger.for_layout(layout)
 
     def search(query: str):
@@ -112,7 +106,6 @@ def default_stages(layout: ProjectLayout) -> Sequence[PipelineStage]:
             rewrite=rewrite_query,
         ),
         FrameStage(),
-        PlanStage(),
     )
 
 

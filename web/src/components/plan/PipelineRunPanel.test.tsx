@@ -17,7 +17,6 @@ import { useLayoutStore } from "@/stores/layout-store";
 vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineRuns: vi.fn(),
   fetchPipelineMaterials: vi.fn(),
-  fetchPipelineConfirmation: vi.fn(),
   fetchPipelineRestorePreview: vi.fn(),
   restorePipelineRun: vi.fn(),
   cancelPipelineRun: vi.fn(),

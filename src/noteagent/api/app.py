@@ -14,11 +14,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, contextmanager, suppress
-from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from noteagent import __version__
@@ -79,14 +78,9 @@ from noteagent.api.pipeline import (
     prepare_active_project,
 )
 from noteagent.api.pipeline_events import iter_pipeline_events
-from noteagent.pipeline.confirm import NothingToWrite, confirmation_payload
 from noteagent.pipeline.lock import ProjectBusy
 from noteagent.pipeline.run import run_to_dict
-from noteagent.pipeline.service import (
-    PipelineBusy,
-    PipelineConflict,
-    PipelineService,
-)
+from noteagent.pipeline.service import PipelineService
 from noteagent.api.projects import (
     create_project,
     delete_project,
@@ -252,24 +246,6 @@ class CaptureDismissBody(BaseModel):
     """One page in the sign-in queue the reader is done with."""
 
     id: str = Field(..., min_length=1, max_length=80)
-
-
-class PipelineStartBody(BaseModel):
-    """What a person or a conversation asks one run to do."""
-
-    intent: str = Field(..., min_length=1, max_length=2000)
-    startedBy: Literal["human", "session"] = "human"
-    sessionId: str | None = Field(default=None, max_length=120)
-    queryMode: Literal["precise", "model"] = "precise"
-    materialMode: Literal["manual", "auto"] = "auto"
-
-    @field_validator("intent")
-    @classmethod
-    def _intent_is_not_blank(cls, value: str) -> str:
-        cleaned = " ".join(value.split())
-        if not cleaned:
-            raise ValueError("a pipeline run needs an intent")
-        return cleaned
 
 
 class FolderOpenBody(BaseModel):
@@ -499,6 +475,22 @@ class ClipCollectionBody(BaseModel):
     targetSlug: str = ""
 
 
+class GateDecisionBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=160)
+    action: str = "skip"
+    sectionIds: list[str] = Field(default_factory=list, max_length=40)
+
+
+class ClipsPutBody(BaseModel):
+    intent: str = ""
+    collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
+    topicMap: dict[str, object] | None = None
+    decisions: list[GateDecisionBody] | None = None
+    #: The board's answers, which a later plan carries over. Separate from the gate
+    #: above, which only ever holds the pass that was confirmed.
+    choices: list[GateDecisionBody] | None = None
+
+
 class NoteCreateBody(BaseModel):
     page: str = Field(..., min_length=1, max_length=500)
     body: str = ""
@@ -567,59 +559,6 @@ class CompactBody(BaseModel):
 
 class SessionTitleBody(BaseModel):
     title: str = Field(default="", max_length=2_000)
-
-
-class GateDecisionBody(BaseModel):
-    slug: str = Field(..., min_length=1, max_length=160)
-    action: str = "skip"
-    sectionIds: list[str] = Field(default_factory=list, max_length=40)
-
-
-class PipelineApproveBody(BaseModel):
-    """Approval of a run's plan revision, with optional per-page overrides."""
-
-    planRevision: int = Field(..., ge=0)
-    overrides: list[GateDecisionBody] = Field(default_factory=list, max_length=24)
-
-
-class ClipsPutBody(BaseModel):
-    intent: str = ""
-    collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
-    topicMap: dict[str, object] | None = None
-    decisions: list[GateDecisionBody] | None = None
-    #: The board's answers, which a later plan carries over. Separate from the gate
-    #: above, which only ever holds the pass that was confirmed.
-    choices: list[GateDecisionBody] | None = None
-
-
-class TopicMapBody(BaseModel):
-    intent: str = ""
-    sourceIdentity: str = Field(default="", max_length=500)
-    #: The language the reader is using. Explanations are written for them, so they
-    #: follow this; page names follow the material.
-    language: str = Field(default="", max_length=20)
-    #: When this pass was proposed from the chat, the wait it belongs to. The
-    #: human started the job here, and the placement of these fields is what
-    #: lets the chat record that it entered and what it came back with.
-    sessionId: str = Field(default="", max_length=80)
-    waitId: str = Field(default="", max_length=120)
-
-
-class ConfirmedPageBody(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
-    slug: str = ""
-    wikiPath: str = ""
-    action: str = "skip"
-    sectionIds: list[str] = Field(default_factory=list)
-
-
-class IngestConfirmedBody(BaseModel):
-    intent: str = ""
-    confirmed: list[ConfirmedPageBody] = Field(..., min_length=1, max_length=20)
-    #: When this compile was proposed from the chat, the wait it belongs to.
-    #: The human confirmed the pages here, and the chat records the outcome.
-    sessionId: str = Field(default="", max_length=80)
-    waitId: str = Field(default="", max_length=120)
 
 
 class DeepSearchActBody(BaseModel):
@@ -728,16 +667,6 @@ async def _app_lifespan(_app: FastAPI):
 logger = logging.getLogger(__name__)
 
 
-def _pipeline_retired() -> CodedHTTPException:
-    """The old pipeline's start is closed; its runs stay readable."""
-    return CodedHTTPException(
-        410,
-        "the old pipeline no longer starts new runs; "
-        "write from the writing state",
-        code="pipeline.retired",
-    )
-
-
 def _pipeline_not_found(run_id: str) -> CodedHTTPException:
     """The one answer for a run id no route could resolve."""
     return CodedHTTPException(
@@ -776,32 +705,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def kernel_health() -> dict[str, str]:
         """The versioned health the packaged core reports."""
         return {"status": "ok", "version": __version__}
-
-    @app.post("/api/v1/pipeline/runs", status_code=201)
-    def pipeline_start(body: PipelineStartBody) -> dict[str, object]:
-        """The old pipeline's start is closed; the writing state replaces it."""
-        raise _pipeline_retired()
-        try:
-            run = pipeline_service(deps).start(
-                intent=body.intent,
-                started_by=body.startedBy,
-                session_id=body.sessionId or "",
-                query_mode=body.queryMode,
-                material_mode=body.materialMode,
-            )
-        except PipelineBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.busy"
-            ) from err
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        except ValueError as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.invalid"
-            ) from err
-        return run_to_dict(run)
 
     @app.get("/api/v1/pipeline/runs")
     def pipeline_runs() -> dict[str, object]:
@@ -860,55 +763,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 code="material.blocksMissing",
             )
         return {"material": material, "blocks": blocks}
-
-    @app.get("/api/v1/pipeline/runs/{run_id}/confirmation")
-    def pipeline_run_confirmation(run_id: str) -> dict[str, object]:
-        """The pages this run would write, while it waits for a person."""
-        try:
-            confirmation = pipeline_service(deps).confirmation(run_id)
-        except PipelineConflict as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.conflict"
-            ) from err
-        if confirmation is None:
-            raise _pipeline_not_found(run_id)
-        return confirmation_payload(confirmation)
-
-    @app.post("/api/v1/pipeline/runs/{run_id}/approve", status_code=202)
-    def pipeline_approve(
-        run_id: str, body: PipelineApproveBody
-    ) -> dict[str, object]:
-        """Approve a run's plan revision; the compile starts behind it."""
-        raise _pipeline_retired()
-        try:
-            run = pipeline_service(deps).approve(
-                run_id,
-                plan_revision=body.planRevision,
-                overrides=[item.model_dump() for item in body.overrides],
-            )
-        except PipelineBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.busy"
-            ) from err
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        except PipelineConflict as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.conflict"
-            ) from err
-        except NothingToWrite as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.nothingToWrite"
-            ) from err
-        except ValueError as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.invalid"
-            ) from err
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
 
     @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
     def pipeline_cancel(run_id: str) -> dict[str, object]:
@@ -1998,9 +1852,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                     layout, body.model_dump(), clock=deps.clock
                 )
             )
-            # A run waiting to be confirmed follows the board: a changed plan or
-            # answer gets a new revision, and a changed frame is planned again.
-            service.sync_waiting()
             return payload
         except ProjectBusy as err:
             raise CodedHTTPException(
@@ -2069,16 +1920,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise http_error(err, 404) from err
         except ValueError as err:
             raise http_error(err, 400) from err
-
-    @app.post("/api/projects/{name}/topic-map")
-    def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:
-        raise _pipeline_retired()
-
-    @app.post("/api/projects/{name}/ingest-confirmed")
-    def project_ingest_confirmed(
-        name: str, body: IngestConfirmedBody
-    ) -> StreamingResponse:
-        raise _pipeline_retired()
 
     # A write names its project, so these two cannot answer: saying so beats
     # letting a caller believe a capture was stored somewhere.

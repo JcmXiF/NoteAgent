@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, ArrowUpRight, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api/client";
@@ -16,10 +16,8 @@ import type { IngestRecoveryJob, RevisionInboxItem } from "@/lib/api/types";
 import { findingLines, findingSentence, severityWord } from "@/lib/doctor-findings";
 import { usePoll } from "@/lib/use-poll";
 import { useClipsStore } from "@/stores/clips-store";
-import { useCompileStore } from "@/stores/compile-store";
 import { useLayoutStore } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
-import { usePlanStore } from "@/stores/plan-store";
 import { useSectionCount } from "@/stores/right-sections";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 
@@ -50,9 +48,6 @@ export function AttentionInbox() {
   const collections = useClipsStore((state) => state.collections);
   const focusCollection = useClipsStore((state) => state.focusCollection);
   const go = useNavStore((state) => state.go);
-  const plan = usePlanStore((state) => state.run);
-  const compiling = useCompileStore((state) => state.running);
-  const compile = useCompileStore((state) => state.run);
 
   const [payload, setPayload] = useState<AttentionPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -208,10 +203,9 @@ export function AttentionInbox() {
                               { kind: "sources", sourceKey: item.identity },
                               { placement: "beside" },
                             );
-                            void plan({ sourceIdentity: item.identity });
                           }}
                         >
-                          {related.length > 0 ? t("attention.planAgain") : t("attention.pickAgain")}
+                          {t("attention.pickAgain")}
                         </Button>
                         <Button
                           variant="ghost"
@@ -249,7 +243,7 @@ export function AttentionInbox() {
               return (
                 <li key={key} className="px-2 py-1 text-[11px]">
                   <p className="truncate font-medium">
-                    {job.intent || t("compile.title")}
+                    {job.intent || t("attention.recovery")}
                     <span className="ml-1 font-normal text-muted-foreground">
                       {t("attention.pages", { count: names.length })}
                     </span>
@@ -263,24 +257,9 @@ export function AttentionInbox() {
                   </p>
                   <div className="mt-1 flex items-center gap-1">
                     <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={compiling || busyKey === key}
-                      onClick={() =>
-                        void compile({
-                          confirmed: job.confirmed,
-                          intent: job.intent,
-                          retryable: false,
-                        })
-                      }
-                    >
-                      {compiling ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-                      {t("attention.resume")}
-                    </Button>
-                    <Button
                       variant="ghost"
                       size="sm"
-                      disabled={compiling || busyKey === key}
+                      disabled={busyKey === key}
                       onClick={() => void discardRecovery(job)}
                     >
                       <Trash2 /> {t("attention.discard")}

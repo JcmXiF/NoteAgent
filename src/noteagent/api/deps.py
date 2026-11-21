@@ -22,9 +22,7 @@ from noteagent.pipeline.frame_model import (
     DEFAULT_ROUNDS as DEFAULT_FRAME_ROUNDS,
     ModelFraming,
 )
-from noteagent.pipeline.confirm import CompileFn
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
-from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
 from noteagent.writing.tools import WebFetchFn, WebSearchFn
@@ -62,12 +60,6 @@ class AppDeps:
     #: The disclosure budget a production frame model is built with.
     pipeline_frame_rounds: int = DEFAULT_FRAME_ROUNDS
     pipeline_frame_chars: int = DEFAULT_FRAME_CHARS
-    #: The planner a run calls. A test that wires its own stages hands in a
-    #: scripted planner; ``None`` leaves the plan stage unwired.
-    pipeline_planner: PlanFn | None = None
-    #: What an approved run calls to write its pages. ``None`` compiles through
-    #: the existing write path; a test scripts it and inspects what it was given.
-    pipeline_compile: CompileFn | None = None
     #: The web search the writing tools call. ``None`` uses the project's own
     #: acquire search; a test hands in a callable that returns cards.
     web_search: WebSearchFn | None = None

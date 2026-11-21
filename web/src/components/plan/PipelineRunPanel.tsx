@@ -5,12 +5,10 @@ import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api/client";
 import {
   cancelPipelineRun,
-  fetchPipelineConfirmation,
   fetchPipelineMaterials,
   fetchPipelineRestorePreview,
   fetchPipelineRuns,
   restorePipelineRun,
-  type PipelineConfirmation,
   type PipelineMaterial,
   type PipelineRestoreChoice,
   type PipelineRestorePreview,
@@ -46,8 +44,6 @@ export function PipelineRunPanel() {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmation, setConfirmation] =
-    useState<PipelineConfirmation | null>(null);
   const [preview, setPreview] = useState<PipelineRestorePreview | null>(null);
   const [choices, setChoices] = useState<Record<string, RestoreChoice>>({});
   const [restoreBusy, setRestoreBusy] = useState(false);
@@ -73,15 +69,6 @@ export function PipelineRunPanel() {
         ? await fetchPipelineMaterials(newest.id)
         : { materials: [] };
       setMaterials(listed.materials);
-      if (newest?.status === "awaiting_confirmation") {
-        try {
-          setConfirmation(await fetchPipelineConfirmation(newest.id));
-        } catch {
-          setConfirmation(null);
-        }
-      } else {
-        setConfirmation(null);
-      }
       return true;
     } catch (err) {
       setError(errorMessage(err, t("pipeline.loadFailed")));
@@ -231,31 +218,6 @@ export function PipelineRunPanel() {
           </p>
           {latest.error ? (
             <p className="text-[10px] text-destructive">{latest.error}</p>
-          ) : null}
-          {confirmation?.pages.some((page) => page.action === "write") ? (
-            <div className="mt-1 border-t pt-1">
-              <p className="text-[10px] font-medium text-muted-foreground">
-                {t("pipeline.toWrite", {
-                  count: confirmation.pages.filter(
-                    (page) => page.action === "write",
-                  ).length,
-                })}
-              </p>
-              <ul className="mt-0.5 flex flex-col gap-0.5">
-                {confirmation.pages
-                  .filter((page) => page.action === "write")
-                  .slice(0, 6)
-                  .map((page) => (
-                    <li
-                      key={page.slug}
-                      className="truncate text-[10px]"
-                      title={page.wikiPath}
-                    >
-                      {page.wikiPath}
-                    </li>
-                  ))}
-              </ul>
-            </div>
           ) : null}
           {latest.result?.written?.length ? (
             <div className="mt-1 border-t pt-1">

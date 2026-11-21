@@ -64,25 +64,20 @@ class PipelineRetiredTests(unittest.TestCase):
             json={"intent": "写一篇关于熵的 wiki"},
         )
 
-        self.assertEqual(response.status_code, 410, response.text)
-        self.assertEqual(response.json()["code"], "pipeline.retired")
+        self.assertIn(response.status_code, (404, 405), response.text)
 
     def test_the_session_job_starts_are_closed(self) -> None:
         topic = self.client.post(
             "/api/projects/demo/topic-map",
             json={"intent": "熵"},
         )
-        self.assertEqual(topic.status_code, 410, topic.text)
-        self.assertEqual(topic.json()["code"], "pipeline.retired")
+        self.assertIn(topic.status_code, (404, 405), topic.text)
 
         compile_ = self.client.post(
             "/api/projects/demo/ingest-confirmed",
             json={"confirmed": [{"name": "Entropy"}]},
         )
-        self.assertEqual(compile_.status_code, 410, compile_.text)
-        self.assertEqual(
-            compile_.json()["code"], "pipeline.retired"
-        )
+        self.assertIn(compile_.status_code, (404, 405), compile_.text)
 
     def test_the_run_approve_is_closed(self) -> None:
         response = self.client.post(
@@ -90,8 +85,7 @@ class PipelineRetiredTests(unittest.TestCase):
             json={"planRevision": 1},
         )
 
-        self.assertEqual(response.status_code, 410, response.text)
-        self.assertEqual(response.json()["code"], "pipeline.retired")
+        self.assertIn(response.status_code, (404, 405), response.text)
 
     def test_the_old_run_is_still_readable(self) -> None:
         listing = self.client.get("/api/v1/pipeline/runs")
