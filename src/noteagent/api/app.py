@@ -744,6 +744,16 @@ def _after_plan(deps: AppDeps, job_wait, layout: ProjectLayout, job_id: str) -> 
         logger.exception("a finished plan could not reach a waiting run")
 
 
+def _pipeline_retired() -> CodedHTTPException:
+    """The old pipeline's start is closed; its runs stay readable."""
+    return CodedHTTPException(
+        410,
+        "the old pipeline no longer starts new runs; "
+        "write from the writing state",
+        code="pipeline.retired",
+    )
+
+
 def _pipeline_not_found(run_id: str) -> CodedHTTPException:
     """The one answer for a run id no route could resolve."""
     return CodedHTTPException(
@@ -785,7 +795,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/v1/pipeline/runs", status_code=201)
     def pipeline_start(body: PipelineStartBody) -> dict[str, object]:
-        """Start one run of the active project's pipeline."""
+        """The old pipeline's start is closed; the writing state replaces it."""
+        raise _pipeline_retired()
         try:
             run = pipeline_service(deps).start(
                 intent=body.intent,
@@ -884,6 +895,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         run_id: str, body: PipelineApproveBody
     ) -> dict[str, object]:
         """Approve a run's plan revision; the compile starts behind it."""
+        raise _pipeline_retired()
         try:
             run = pipeline_service(deps).approve(
                 run_id,
@@ -2092,6 +2104,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/projects/{name}/topic-map")
     def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:
+        raise _pipeline_retired()
         layout = require_project_layout(name)
 
         # A plan proposed by the chat is entered through the same original
@@ -2140,6 +2153,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     def project_ingest_confirmed(
         name: str, body: IngestConfirmedBody
     ) -> StreamingResponse:
+        raise _pipeline_retired()
         layout = require_project_layout(name)
 
         # A compile proposed by the chat is entered through the same original

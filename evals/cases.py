@@ -3,16 +3,15 @@
 Every case drives the real HTTP API: a question is asked over SSE, the log and
 the session view are read back, and the model is the only scripted part. The
 cases cover the behaviour a change to the agent harness is most likely to break:
-reading the wiki, searching it, proposing work, entering a wait and resuming,
-refusing a mixed batch, the tool-round budget, compaction, tool errors,
-cancellation, and bringing old chats into the new store.
+reading the wiki, searching it, proposing work, refusing a mixed batch, the
+tool-round budget, compaction, tool errors, cancellation, and bringing old
+chats into the new store.
 """
 
 from __future__ import annotations
 
 import json
 import threading
-from unittest.mock import patch
 
 from evals.harness import Case, CaseRun, Exchange
 from evals.writing import WRITING_CASES
@@ -39,21 +38,6 @@ def _messages(entries):
 def _last_message(entries):
     messages = _messages(entries)
     return messages[-1] if messages else {}
-
-
-PLAN_PAYLOAD = {
-    "intent": "熵",
-    "candidates": [
-        {"title": "Entropy", "slug": "concepts/entropy", "coverage": "write"}
-    ],
-    "primary": {
-        "title": "Entropy",
-        "slug": "concepts/entropy",
-        "coverage": "write",
-    },
-    "alsoInSources": [],
-    "notes": "",
-}
 
 
 def _tokens(reply: Exchange) -> str:
@@ -244,82 +228,6 @@ def propose_plan(run: CaseRun) -> None:
         len(model.requests),
         1,
     )
-
-
-def wait_resume(run: CaseRun) -> None:
-    """A job entered from its own screen completes the wait and resumes the chat."""
-    model = FauxModelClient(
-        _propose_script("plan", "source", intent="熵"),
-        FauxModelClient.text("计划完成，继续。").script,
-    )
-    api = run.start(model)
-    session = api.create_session()
-    asked = api.query(session, "整理一下熵的资料")
-    wait = _only_event(asked, "wait")
-
-    # The plan job is provider-backed. It is replaced at its own boundary so
-    # the wait and resume path runs without a network or a key; everything
-    # between the endpoint and the session is the real implementation.
-    with (
-        patch("noteagent.api.app.ensure_llm_configured"),
-        patch(
-            "noteagent.api.topic_gate.run_topic_map_job",
-            return_value=PLAN_PAYLOAD,
-        ),
-    ):
-        planned = api.request(
-            "POST",
-            "/api/projects/demo/topic-map",
-            json={
-                "intent": "熵",
-                "sessionId": session,
-                "waitId": wait["waitId"],
-            },
-        )
-
-    run.equal("the plan job ran", planned.status_code, 200)
-    result = _only_event(planned, "job_result")
-    run.equal("the job succeeded", result.get("status"), "succeeded")
-    run.equal(
-        "the result says what the plan found",
-        result.get("summary"),
-        "planned 1 page(s): 1 write, 0 mention, 0 skip",
-    )
-    api.wait_for(
-        lambda: any(
-            entry.get("role") == "assistant"
-            and entry.get("content") == "计划完成，继续。"
-            for entry in api.entries(session)
-        ),
-        "the chat resumed after the plan",
-    )
-
-    entries = api.entries(session)
-    completed = next(
-        entry for entry in entries if entry.get("type") == "wait_completed"
-    )
-    run.equal("the completion names its wait", completed.get("waitId"), wait["waitId"])
-    run.equal("the completion names the job", completed.get("job"), "plan")
-    run.equal("the wait completed", completed.get("status"), "completed")
-    run.equal(
-        "the result names the planned page",
-        completed.get("artifacts"),
-        [{"kind": "write", "id": "concepts/entropy", "label": "Entropy"}],
-    )
-    run.equal(
-        "the continuation ran once",
-        len(
-            [
-                entry
-                for entry in entries
-                if entry.get("type") == "resume_started"
-            ]
-        ),
-        1,
-    )
-    view = api.get_session(session)
-    run.equal("the view reads the wait as completed", view["wait"]["status"], "completed")
-    run.equal("the continuation was the second model turn", len(model.requests), 2)
 
 
 def mixed_propose_rejected(run: CaseRun) -> None:
@@ -756,11 +664,6 @@ CASES: tuple[Case, ...] = (
         "propose_plan",
         "A plan proposal ends the run at a wait the source screen can enter.",
         propose_plan,
-    ),
-    Case(
-        "wait_resume",
-        "A plan entered from its own screen completes the wait and resumes the chat.",
-        wait_resume,
     ),
     Case(
         "mixed_propose_rejected",

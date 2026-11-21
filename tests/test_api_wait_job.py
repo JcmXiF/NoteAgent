@@ -11,6 +11,7 @@ from unittest.mock import patch
 from agent_fakes import (
     FakeJobClient,
     FixedClock,
+    OLD_PIPELINE_RETIRED,
     SequentialIds,
 )
 from noteagent.agent.faux import FauxModelClient
@@ -66,6 +67,7 @@ PLAN_PAYLOAD = {
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class WaitedPlanApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

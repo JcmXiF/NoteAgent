@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Play, RotateCcw, Square } from "lucide-react";
+import { Loader2, RotateCcw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api/client";
 import {
   cancelPipelineRun,
@@ -11,26 +10,24 @@ import {
   fetchPipelineRestorePreview,
   fetchPipelineRuns,
   restorePipelineRun,
-  startPipelineRun,
   type PipelineConfirmation,
   type PipelineMaterial,
-  type PipelineMaterialMode,
-  type PipelineQueryMode,
   type PipelineRestoreChoice,
   type PipelineRestorePreview,
   type PipelineRun,
   type PipelineRunStatus,
 } from "@/lib/api/pipeline";
 import { usePoll } from "@/lib/use-poll";
+import { useLayoutStore } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
 import { useSectionCount } from "@/stores/right-sections";
 
 /**
- * The pipeline's one run: start it with an intent, watch it, stop it.
+ * The old pipeline's runs: read, stop and restore them.
  *
- * The panel is a client of the core's run object, not its owner: it starts a run
- * and reads the state back. A run that is still moving is polled; one that has
- * settled is left alone.
+ * New runs are closed: the write path is the writing state, and the panel
+ * points there. A run that is still moving is polled; one that has settled is
+ * left alone.
  */
 const ACTIVE: ReadonlySet<PipelineRunStatus> = new Set([
   "running",
@@ -42,12 +39,10 @@ type RestoreChoice = { action: "restore" | "skip"; force: boolean };
 
 export function PipelineRunPanel() {
   const { t } = useTranslation();
+  const openModule = useLayoutStore((state) => state.openModule);
   const go = useNavStore((state) => state.go);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [materials, setMaterials] = useState<PipelineMaterial[]>([]);
-  const [draft, setDraft] = useState("");
-  const [queryMode, setQueryMode] = useState<PipelineQueryMode>("precise");
-  const [materialMode, setMaterialMode] = useState<PipelineMaterialMode>("auto");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,31 +102,6 @@ export function PipelineRunPanel() {
   // A moving run is worth watching; a settled one is not.
   usePoll(load, active, 1000);
   useSectionCount("pipeline", active ? 1 : 0);
-
-  const start = async () => {
-    const intent = draft.trim();
-    if (!intent || busy || materialMode !== "auto") return;
-    setBusy(true);
-    setError(null);
-    try {
-      const run = await startPipelineRun({
-        intent,
-        queryMode,
-        materialMode,
-      });
-      setRuns((current) => [run, ...current]);
-      setDraft("");
-      void load();
-    } catch (err) {
-      setError(errorMessage(err, t("pipeline.startFailed")));
-      // A refusal is usually another run holding the project; showing that run
-      // is the answer, and it starts the poll. The reason the start failed stays
-      // on screen, so this refresh does not clear the error.
-      void fetchAll();
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const stop = async () => {
     if (!latest || !active || busy) return;
@@ -229,66 +199,19 @@ export function PipelineRunPanel() {
 
   return (
     <div className="flex flex-col gap-1.5 p-2">
-      <form
-        className="flex items-center gap-1"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void start();
-        }}
-      >
-        <Input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder={t("pipeline.intentPlaceholder")}
-          aria-label={t("pipeline.intentLabel")}
-          className="h-7 flex-1 text-xs"
-          spellCheck={false}
-        />
-        <Button
-          type="submit"
-          size="sm"
-          disabled={!draft.trim() || busy || materialMode === "manual"}
-        >
-          {busy ? <Loader2 className="animate-spin" /> : <Play />}
-          {t("pipeline.start")}
-        </Button>
-      </form>
-
-      <div className="flex items-center gap-1 text-[10px]">
-        <span className="shrink-0 text-muted-foreground">
-          {t("pipeline.query.label")}
-        </span>
-        <ModeButton
-          active={queryMode === "precise"}
-          onClick={() => setQueryMode("precise")}
-          label={t("pipeline.query.precise")}
-        />
-        <ModeButton
-          active={queryMode === "model"}
-          onClick={() => setQueryMode("model")}
-          label={t("pipeline.query.model")}
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-1 text-[10px]">
-        <span className="shrink-0 text-muted-foreground">
-          {t("pipeline.materialMode.label")}
-        </span>
-        <ModeButton
-          active={materialMode === "auto"}
-          onClick={() => setMaterialMode("auto")}
-          label={t("pipeline.materialMode.auto")}
-        />
-        <ModeButton
-          active={materialMode === "manual"}
-          onClick={() => setMaterialMode("manual")}
-          label={t("pipeline.materialMode.manual")}
-        />
-      </div>
-      {materialMode === "manual" ? (
-        <p className="text-[10px] text-muted-foreground">
-          {t("pipeline.materialMode.manualHint")}
+      <div className="rounded-md border bg-muted/30 p-2">
+        <p className="text-[11px] text-muted-foreground">
+          {t("pipeline.retired")}
         </p>
-      ) : null}
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-1"
+          onClick={() => openModule("writing")}
+        >
+          {t("pipeline.goWriting")}
+        </Button>
+      </div>
 
       {error ? (
         <p className="text-[11px] text-destructive">{error}</p>
@@ -541,28 +464,5 @@ export function PipelineRunPanel() {
         </p>
       )}
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={active ? "secondary" : "ghost"}
-      aria-pressed={active}
-      className="h-6 px-1.5 text-[10px]"
-      onClick={onClick}
-    >
-      {label}
-    </Button>
   );
 }

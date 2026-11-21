@@ -8,7 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fakes import FixedClock, SequentialIds
+from agent_fakes import (
+    FixedClock,
+    OLD_PIPELINE_RETIRED,
+    SequentialIds,
+)
 from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.pipeline.acquire import AcquireStage
 from noteagent.project.init import init_project
@@ -131,6 +135,7 @@ def _materials(client, run_id: str) -> list[dict]:
     ).json()["materials"]
 
 
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class AcquireStageTests(unittest.TestCase):
     def test_precise_mode_uses_the_intent_and_stages_four_materials(self) -> None:
         queries: list[str] = []

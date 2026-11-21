@@ -361,12 +361,10 @@
     "saveFailed": "Could not save what has been selected"
   },
   "pipeline": {
-    "intentLabel": "What should this run write?",
-    "intentPlaceholder": "One sentence is enough",
-    "start": "Start",
+    "retired": "The old pipeline no longer starts new runs. Write from the writing state.",
+    "goWriting": "Open the writing state",
     "cancel": "Stop",
-    "empty": "No run yet. Give it an intent to start one.",
-    "startFailed": "The pipeline could not be started.",
+    "empty": "No old pipeline run yet.",
     "loadFailed": "The pipeline's state could not be read.",
     "cancelFailed": "The run could not be stopped.",
     "status": {
@@ -398,17 +396,6 @@
       "compiled": "Compiled",
       "changed": "Changed",
       "dropped": "Dropped"
-    },
-    "query": {
-      "label": "Query",
-      "precise": "Keywords",
-      "model": "Model"
-    },
-    "materialMode": {
-      "label": "Material",
-      "auto": "Automatic",
-      "manual": "Manual",
-      "manualHint": "In manual mode, pick cards in Sources."
     },
     "restore": {
       "open": "Roll back this run",
@@ -1599,6 +1586,7 @@
       },
       "pipeline": {
         "busy": "Another pipeline run is already active. Wait for it to finish.",
+        "retired": "The old pipeline no longer starts new runs.",
         "projectBusy": "Another process is writing this project. Close it and try again.",
         "notFound": "That pipeline run is no longer there.",
         "invalid": "The pipeline was given incomplete settings.",

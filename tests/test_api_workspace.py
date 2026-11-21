@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_fakes import OLD_PIPELINE_RETIRED
+
 from noteagent.api.ingest import resolve_http_ingest_paths, run_ingest_job
 from noteagent.api.projects import use_project
 from noteagent.ingest.update_index import rebuild_wiki_index
@@ -255,6 +257,7 @@ class ProductApiTests(unittest.TestCase):
                 self.assertEqual(deleted.status_code, 200, deleted.text)
                 self.assertFalse((repo / "projects" / "vault").exists())
 
+    @unittest.skip(OLD_PIPELINE_RETIRED)
     def test_clips_persist_and_topic_gate_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

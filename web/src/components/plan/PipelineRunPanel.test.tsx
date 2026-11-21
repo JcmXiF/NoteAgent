@@ -10,9 +10,9 @@ import {
   fetchPipelineRestorePreview,
   fetchPipelineRuns,
   restorePipelineRun,
-  startPipelineRun,
   type PipelineRun,
 } from "@/lib/api/pipeline";
+import { useLayoutStore } from "@/stores/layout-store";
 
 vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineRuns: vi.fn(),
@@ -20,7 +20,6 @@ vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineConfirmation: vi.fn(),
   fetchPipelineRestorePreview: vi.fn(),
   restorePipelineRun: vi.fn(),
-  startPipelineRun: vi.fn(),
   cancelPipelineRun: vi.fn(),
 }));
 
@@ -158,51 +157,19 @@ describe("PipelineRunPanel", () => {
     expect(container.textContent).toContain(i18n.t("pipeline.stage.frame"));
   });
 
-  it("starts a run with the intent the reader typed", async () => {
-    vi.mocked(startPipelineRun).mockResolvedValue(running);
+  it("points to the writing state instead of starting a run", async () => {
+    const openModule = vi.fn();
+    useLayoutStore.setState({ openModule });
     await render();
 
-    const input = container.querySelector("input") as HTMLInputElement;
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(input, "写一篇熵的笔记");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => {
-      button(i18n.t("pipeline.start")).click();
-    });
-
-    expect(vi.mocked(startPipelineRun).mock.calls[0][0].intent).toBe(
-      "写一篇熵的笔记",
+    expect(container.textContent).toContain(
+      i18n.t("pipeline.retired"),
     );
-  });
-
-  it("starts with the query mode the reader chose", async () => {
-    vi.mocked(startPipelineRun).mockResolvedValue(running);
-    await render();
-
     await act(async () => {
-      button(i18n.t("pipeline.query.model")).click();
-    });
-    const input = container.querySelector("input") as HTMLInputElement;
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(input, "写一篇熵的笔记");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => {
-      button(i18n.t("pipeline.start")).click();
+      button(i18n.t("pipeline.goWriting")).click();
     });
 
-    const call = vi.mocked(startPipelineRun).mock.calls[0][0];
-    expect(call.queryMode).toBe("model");
-    expect(call.materialMode).toBe("auto");
+    expect(openModule).toHaveBeenCalledWith("writing");
   });
 
   it("lists the materials the run collected", async () => {

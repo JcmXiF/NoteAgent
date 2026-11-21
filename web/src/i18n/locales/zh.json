@@ -361,12 +361,10 @@
     "saveFailed": "选中的内容保存失败"
   },
   "pipeline": {
-    "intentLabel": "这次流水线要写什么？",
-    "intentPlaceholder": "一句话就够",
-    "start": "启动",
+    "retired": "旧流水线不再启动新运行，请从写作状态开始。",
+    "goWriting": "打开写作状态",
     "cancel": "停止",
-    "empty": "还没有运行。给它一个意图就能开始。",
-    "startFailed": "流水线没能启动。",
+    "empty": "还没有旧的流水线运行。",
     "loadFailed": "读不到流水线的状态。",
     "cancelFailed": "没能停止这次运行。",
     "status": {
@@ -398,17 +396,6 @@
       "compiled": "已编译",
       "changed": "有变更",
       "dropped": "已丢弃"
-    },
-    "query": {
-      "label": "查询",
-      "precise": "精准关键词",
-      "model": "模型优化"
-    },
-    "materialMode": {
-      "label": "资料",
-      "auto": "自动收下",
-      "manual": "手动选卡",
-      "manualHint": "手动模式下请在资料面逐张选卡。"
     },
     "restore": {
       "open": "回滚这次运行",
@@ -1599,6 +1586,7 @@
       },
       "pipeline": {
         "busy": "另一个流水线正在运行，请等它结束。",
+        "retired": "旧流水线不再启动新运行。",
         "projectBusy": "另一个进程正在写这个项目，请关掉它再试。",
         "notFound": "这次流水线运行已经不在了。",
         "invalid": "流水线的参数不完整。",

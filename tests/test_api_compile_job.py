@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fakes import FixedClock, SequentialIds
+from agent_fakes import (
+    FixedClock,
+    OLD_PIPELINE_RETIRED,
+    SequentialIds,
+)
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.wait import WaitState
 from noteagent.agent.wait_store import SessionWaitStore
@@ -75,6 +79,7 @@ CONFIRMED = [
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class CompileWaitApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

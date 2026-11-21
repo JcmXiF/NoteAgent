@@ -12,7 +12,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fakes import FixedClock, SequentialIds
+from agent_fakes import (
+    FixedClock,
+    OLD_PIPELINE_RETIRED,
+    SequentialIds,
+)
 from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.effects.journal import UNDO, WIKI_PAGE_WRITE, EffectJournal
 from noteagent.ingest.clips import load_clip_store
@@ -252,6 +256,7 @@ def _awaiting(client) -> tuple[str, dict[str, object]]:
     return run_id, run
 
 
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class PipelineConfirmationTests(unittest.TestCase):
     def test_a_planned_run_waits_with_the_pages_it_would_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

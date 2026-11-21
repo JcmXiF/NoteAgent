@@ -14,7 +14,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fakes import FixedClock, SequentialIds
+from agent_fakes import (
+    FixedClock,
+    OLD_PIPELINE_RETIRED,
+    SequentialIds,
+)
 from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.ingest.clips import load_clip_store
 from noteagent.ingest.confirmed import ingest_confirmed
@@ -225,6 +229,7 @@ def _frames(lines):
             yield kind, json.loads(line[len("data: "):])
 
 
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class PipelineAcceptanceTests(unittest.TestCase):
     def test_one_run_writes_a_page_with_a_single_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

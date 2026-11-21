@@ -15,7 +15,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fakes import FixedClock, SequentialIds
+from agent_fakes import (
+    FixedClock,
+    OLD_PIPELINE_RETIRED,
+    SequentialIds,
+)
 from noteagent.acquire.types import CandidateCard, Capture
 from noteagent.ingest.clips import (
     ClipCollection,
@@ -193,6 +197,7 @@ def _wait_for(client, run_id: str, statuses: set[str], timeout: float = 3.0) -> 
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
+@unittest.skip(OLD_PIPELINE_RETIRED)
 class PipelineStartTests(unittest.TestCase):
     def test_starting_a_run_returns_it_and_it_can_be_read_back(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

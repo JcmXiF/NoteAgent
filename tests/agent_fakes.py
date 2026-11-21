@@ -5,6 +5,9 @@ Not named ``test_*``, so discovery treats it as a helper rather than a suite.
 
 from __future__ import annotations
 
+#: Why the old pipeline's start/advance tests are skipped after its retirement.
+OLD_PIPELINE_RETIRED = "the old pipeline no longer starts new runs"
+
 import threading
 from dataclasses import replace
 from datetime import datetime, timezone

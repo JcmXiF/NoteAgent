@@ -4,10 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { IconTip } from "@/components/ui/tooltip";
 import { CollectionList } from "@/components/source/CollectionList";
-import { PlanBoard } from "@/components/plan/PlanBoard";
-import { CompilePanel } from "@/components/plan/CompilePanel";
 import { AttentionInbox } from "@/components/plan/AttentionInbox";
 import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
+import { RetiredPipeline } from "@/components/plan/RetiredPipeline";
 import { shortcut } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import {
@@ -24,8 +23,8 @@ const SECTION_BODY: Record<RightSectionId, () => React.ReactNode> = {
   attention: () => <AttentionInbox />,
   selection: () => <CollectionList />,
   pipeline: () => <PipelineRunPanel />,
-  plan: () => <PlanBoard />,
-  compile: () => <CompilePanel />,
+  plan: () => <RetiredPipeline />,
+  compile: () => <RetiredPipeline />,
 };
 
 /**

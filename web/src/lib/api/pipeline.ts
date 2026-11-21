@@ -112,14 +112,6 @@ export type PipelineRestoreResult = {
   failed: { path: string; error: string }[];
 };
 
-export type PipelineStartInput = {
-  intent: string;
-  startedBy?: PipelineStartedBy;
-  sessionId?: string;
-  queryMode?: PipelineQueryMode;
-  materialMode?: PipelineMaterialMode;
-};
-
 export type PipelineMaterialState =
   | "staged"
   | "framed"
@@ -139,11 +131,6 @@ export type PipelineMaterial = {
   kind: string;
   fidelity: string;
 };
-
-/** Starts one run; the project refuses a second while the first is active. */
-export function startPipelineRun(input: PipelineStartInput): Promise<PipelineRun> {
-  return postJson<PipelineRun>("/v1/pipeline/runs", input);
-}
 
 export function fetchPipelineRuns(): Promise<{ runs: PipelineRun[] }> {
   return getJson<{ runs: PipelineRun[] }>("/v1/pipeline/runs");

@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_fakes import OLD_PIPELINE_RETIRED
+
 from noteagent.api.ingest import ingest_result_payload
 from noteagent.ingest.clips import load_clip_store
 from noteagent.ingest.confirmed import ingest_confirmed
@@ -141,6 +143,7 @@ _ARTICLE = (
 
 
 class LegacyPreviewTests(unittest.TestCase):
+    @unittest.skip(OLD_PIPELINE_RETIRED)
     def test_storing_the_original_then_remapping_keeps_the_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
