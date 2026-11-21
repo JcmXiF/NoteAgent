@@ -2,23 +2,10 @@
 
 from __future__ import annotations
 
-import tempfile
 import unittest
-from dataclasses import replace
-from datetime import datetime, timezone
-from pathlib import Path
 
-from agent_fakes import FixedClock
-from noteagent.acquire.types import Capture
-from noteagent.ingest.clips import (
-    MAX_BLOCKS_PER_COLLECTION,
-    load_clip_store,
-    save_clip_store,
-)
-from noteagent.pipeline.frame_model import ModelFraming
-from noteagent.pipeline.framing import Framing, frame_blocks
-from noteagent.pipeline.materials import MaterialLog, MaterialTransition, Materials
-from noteagent.project.init import init_project
+from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
+from noteagent.pipeline.framing import frame_blocks
 
 MAX = MAX_BLOCKS_PER_COLLECTION
 
@@ -29,18 +16,6 @@ def _blocks(tags: list[str]) -> list[dict[str, str]]:
         for index, tag in enumerate(tags)
     ]
 
-
-def _capture(url: str, body: str) -> Capture:
-    html = f"<html><body><article>{body}</article></body></html>"
-    return Capture(
-        url=url,
-        title=url.rsplit("/", 1)[-1],
-        markdown="",
-        html=html,
-        capture_method="test",
-        fidelity="ok",
-        reasons=(),
-    )
 
 
 class FrameBlocksTests(unittest.TestCase):
@@ -112,152 +87,3 @@ class FrameBlocksTests(unittest.TestCase):
 
     def test_an_empty_document_has_no_frames(self) -> None:
         self.assertEqual(frame_blocks([]), [])
-
-
-class FramingTests(unittest.TestCase):
-    def _materials(self, layout) -> Materials:
-        return Materials(
-            layout,
-            clock=FixedClock(
-                datetime(2026, 11, 10, 9, tzinfo=timezone.utc)
-            ),
-        )
-
-    def test_a_material_becomes_frames_of_block_ids(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "projects" / "demo")
-            materials = self._materials(layout)
-            state = materials.stage(
-                _capture(
-                    "https://example.com/entropy",
-                    '<h2 data-na-block="h1">定义</h2>'
-                    '<p data-na-block="p1">熵是不确定性的度量。</p>'
-                    '<h2 data-na-block="h2">性质</h2>'
-                    '<p data-na-block="p2">它是可加的。</p>',
-                ),
-                run_id="pr-1",
-            )
-            framing = Framing(layout, materials=materials)
-
-            summary = framing.frame_run("pr-1")
-
-            self.assertEqual(summary.framed, 1)
-            self.assertEqual(summary.model_calls, 0)
-            self.assertEqual(summary.fallbacks, 0)
-            store = load_clip_store(layout)
-            frames = [
-                collection
-                for collection in store.collections
-                if collection.source_key == state.material
-            ]
-            self.assertEqual(len(frames), 2)
-            self.assertEqual(frames[0].block_ids, ("h1", "p1"))
-            self.assertEqual(frames[1].block_ids, ("h2", "p2"))
-            self.assertEqual(frames[0].blocks, ())
-            self.assertEqual(
-                materials.states()[state.material].state, "framed"
-            )
-
-    def test_a_long_model_frame_is_split_at_the_collection_cap(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "projects" / "demo")
-            materials = self._materials(layout)
-            body = "".join(
-                f'<p data-na-block="b{index}">{index}</p>'
-                for index in range(250)
-            )
-            state = materials.stage(
-                _capture("https://example.com/long", body),
-                run_id="pr-1",
-            )
-            ids = '["' + '","'.join(f"b{i}" for i in range(250)) + '"]'
-            model = ModelFraming(
-                ask=lambda messages: '{"frames": [' + ids + "]}"
-            )
-
-            summary = Framing(
-                layout, materials=materials, model=model
-            ).frame_run("pr-1")
-
-            self.assertEqual(summary.framed, 1)
-            store = load_clip_store(layout)
-            frames = [
-                collection
-                for collection in store.collections
-                if collection.source_key == state.material
-            ]
-            self.assertEqual(
-                [len(collection.block_ids) for collection in frames],
-                [200, 50],
-            )
-
-    def test_a_human_edit_survives_a_later_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "projects" / "demo")
-            materials = self._materials(layout)
-            capture = _capture(
-                "https://example.com/entropy",
-                '<h2 data-na-block="h1">定义</h2>'
-                '<p data-na-block="p1">熵是不确定性的度量。</p>',
-            )
-            state = materials.stage(capture, run_id="pr-1")
-            MaterialLog(layout.materials_log).append(
-                MaterialTransition(
-                    at="2026-11-10T09:05:00Z",
-                    material=state.material,
-                    state="framed",
-                    run_id="pr-1",
-                    source="human",
-                )
-            )
-            materials.stage(capture, run_id="pr-2")
-            calls: list[object] = []
-
-            def ask(messages):
-                calls.append(list(messages))
-                return '{"frames": [["h1"]]}'
-
-            summary = Framing(
-                layout, materials=materials, model=ModelFraming(ask=ask)
-            ).frame_run("pr-2")
-
-            self.assertEqual(summary.framed, 0)
-            self.assertEqual(summary.model_calls, 0)
-            self.assertEqual(calls, [])
-
-    def test_new_frames_clear_the_plan(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "projects" / "demo")
-            materials = self._materials(layout)
-            url = "https://example.com/entropy"
-            materials.stage(
-                _capture(
-                    url,
-                    '<h2 data-na-block="h1">定义</h2>'
-                    '<p data-na-block="p1">熵是不确定性的度量。</p>',
-                ),
-                run_id="pr-1",
-            )
-            framing = Framing(layout, materials=materials)
-            framing.frame_run("pr-1")
-            store = load_clip_store(layout)
-            save_clip_store(
-                layout, replace(store, topic_map={"intent": "旧计划"})
-            )
-
-            materials.stage(
-                _capture(
-                    url,
-                    '<h2 data-na-block="h1">定义</h2>'
-                    '<p data-na-block="p1">熵是不确定性的度量。</p>'
-                    '<p data-na-block="p2">香农把它引入信息论。</p>',
-                ),
-                run_id="pr-1",
-            )
-            framing.frame_run("pr-1")
-
-            self.assertIsNone(load_clip_store(layout).topic_map)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -8,7 +8,7 @@ nothing here silently falls back to a fake.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds
@@ -17,14 +17,8 @@ from noteagent.agent.model import ModelClient
 from noteagent.agent.runtime import AgentRuntime
 from noteagent.agent.store import SessionStore
 from noteagent.agent.tools import ToolRegistry
-from noteagent.pipeline.frame_model import (
-    DEFAULT_CHARS as DEFAULT_FRAME_CHARS,
-    DEFAULT_ROUNDS as DEFAULT_FRAME_ROUNDS,
-    ModelFraming,
-)
 from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
-from noteagent.pipeline.stage import PipelineStage
 from noteagent.writing.tools import WebFetchFn, WebSearchFn
 
 
@@ -44,9 +38,6 @@ class AppDeps:
     #: The project's pipeline, when a test hands one in; otherwise it is built
     #: from the active project on each request.
     pipeline: PipelineService | None = None
-    #: The stages a run walks. ``None`` composes the production stages; an
-    #: explicit empty sequence is a run that does nothing (a test seam).
-    pipeline_stages: Sequence[PipelineStage] | None = None
     #: The active run of each project, shared by every request in this process.
     pipeline_registry: PipelineRegistry = field(default_factory=PipelineRegistry)
     #: How a run is taken off the request thread. A test passes a synchronous
@@ -54,12 +45,6 @@ class AppDeps:
     pipeline_spawn: Callable[[Callable[[], None]], None] | None = None
     #: How many runs of un-promoted staging are kept before the oldest is pruned.
     pipeline_keep_runs: int = DEFAULT_KEEP_RUNS
-    #: The bounded model loop that frames a material; ``None`` in a test that
-    #: wants the deterministic split, the production model in a real core.
-    pipeline_frame_model: ModelFraming | None = None
-    #: The disclosure budget a production frame model is built with.
-    pipeline_frame_rounds: int = DEFAULT_FRAME_ROUNDS
-    pipeline_frame_chars: int = DEFAULT_FRAME_CHARS
     #: The web search the writing tools call. ``None`` uses the project's own
     #: acquire search; a test hands in a callable that returns cards.
     web_search: WebSearchFn | None = None

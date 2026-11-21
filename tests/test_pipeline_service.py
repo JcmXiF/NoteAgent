@@ -19,12 +19,11 @@ def _clock(hour: int = 9) -> FixedClock:
     return FixedClock(datetime(2026, 11, 10, hour, tzinfo=timezone.utc))
 
 
-def _service(layout, *, alive, stages=()) -> PipelineService:
+def _service(layout, *, alive) -> PipelineService:
     return PipelineService(
         layout,
         clock=_clock(),
         ids=SequentialIds(),
-        stages=stages,
         lock=ProjectLock(layout.project_lock, clock=_clock(9), alive=alive),
         spawn=lambda work: work(),
     )
@@ -40,14 +39,6 @@ def _active_run() -> PipelineRun:
         status="running",
         stage="frame",
     )
-
-
-class _Stage:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __call__(self, context) -> None:
-        return None
 
 
 class InterruptionAtRestartTests(unittest.TestCase):
@@ -77,15 +68,3 @@ class InterruptionAtRestartTests(unittest.TestCase):
 
             self.assertEqual(closed, 0)
             self.assertEqual(store.get("pr-1").status, "running")
-
-
-class StageValidationTests(unittest.TestCase):
-    def test_a_stage_the_run_cannot_read_back_is_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            layout = init_project(Path(tmp) / "projects" / "demo")
-            with self.assertRaises(ValueError):
-                _service(layout, alive=lambda pid: True, stages=[_Stage("bogus")])
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -14,12 +14,9 @@ from dataclasses import replace
 from threading import Event, Lock
 from typing import TypeVar
 
-from noteagent.acquire.types import Capture
 from noteagent.agent.clock import Clock, Ids, iso_timestamp
 from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.pipeline.captures import CaptureInbox, LoginWall
-from noteagent.pipeline.frame_model import ModelFraming
-from noteagent.pipeline.framing import Framing
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.materials import (
     DEFAULT_KEEP_RUNS,
@@ -29,18 +26,11 @@ from noteagent.pipeline.materials import (
 from noteagent.pipeline.run import (
     MATERIAL_MODES,
     QUERY_MODES,
-    STAGES,
     STARTED_BY,
     MaterialMode,
     PipelineRun,
     QueryMode,
     StartedBy,
-)
-from noteagent.pipeline.stage import (
-    FrameSummary,
-    PipelineCancelled,
-    PipelineStage,
-    StageContext,
 )
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.layout import ProjectLayout
@@ -61,6 +51,10 @@ class PipelineBusy(RuntimeError):
 
 class PipelineConflict(RuntimeError):
     """The run is not in the state the caller's revision names."""
+
+
+class PipelineCancelled(RuntimeError):
+    """A stage noticed the run was cancelled."""
 
 
 class PipelineRegistry:
@@ -115,18 +109,14 @@ class PipelineService:
         *,
         clock: Clock,
         ids: Ids,
-        stages: Sequence[PipelineStage] = (),
         registry: PipelineRegistry | None = None,
         lock: ProjectLock | None = None,
         spawn: Callable[[Callable[[], None]], None] | None = None,
         keep_runs: int = DEFAULT_KEEP_RUNS,
-        frame_model: ModelFraming | None = None,
     ) -> None:
         self._layout = layout
         self._clock = clock
         self._ids = ids
-        self._stages = ()
-        self.use_stages(stages)
         if keep_runs < 1:
             raise ValueError("a pipeline keeps at least one run's staging")
         self._keep_runs = keep_runs
@@ -135,9 +125,6 @@ class PipelineService:
         self._spawn = spawn or _spawn_thread
         self._store = PipelineRunStore(layout)
         self._materials = Materials(layout, clock=clock)
-        self._framing = Framing(
-            layout, materials=self._materials, model=frame_model
-        )
         self._captures = CaptureInbox(layout.capture_inbox)
         self._project_key = str(layout.root.resolve())
 
@@ -220,16 +207,6 @@ class PipelineService:
     def active(self) -> list[PipelineRun]:
         return self._store.active()
 
-    def use_stages(self, stages: Sequence[PipelineStage]) -> None:
-        """Wire the stages, before a run starts; a mistyped name is refused."""
-        checked = tuple(stages)
-        for stage in checked:
-            # A stage the run file cannot read back would make a run vanish from
-            # the store, so a mistyped name is refused where it is wired.
-            if stage.name not in STAGES:
-                raise ValueError(f"unknown pipeline stage: {stage.name!r}")
-        self._stages = checked
-
     def materials(self) -> Materials:
         return self._materials
 
@@ -240,11 +217,6 @@ class PipelineService:
         self, material: str, *, run_id: str
     ) -> list[dict[str, object]] | None:
         return self._materials.blocks(material, run_id=run_id)
-
-    def frame_materials(self, run_id: str) -> FrameSummary:
-        """Frame the run's staged materials, serialized with every other write."""
-        with self._registry.writer(self._project_key):
-            return self._framing.frame_run(run_id)
 
     def write_clips(self, work: Callable[[], _T]) -> _T:
         """Run a selection write under the project's lock and single writer."""
@@ -278,23 +250,6 @@ class PipelineService:
                 return self._captures.dismiss(item_id)
         finally:
             self._lock.release(f"capture:{item_id}")
-
-    def stage_material(
-        self,
-        capture: Capture,
-        *,
-        run_id: str,
-        captured_at: str = "",
-    ) -> MaterialState:
-        """Stage one capture as a material, serialized with every other write."""
-        with self._registry.writer(self._project_key):
-            state = self._materials.stage(
-                capture, run_id=run_id, captured_at=captured_at
-            )
-            # Staging is where an unpromoted material accumulates; pruning here
-            # keeps a long-lived core from growing without a restart.
-            self._materials.clean(self._store.list(), keep=self._keep_runs)
-            return state
 
     def prepare(self) -> None:
         """Bring the project's runs and materials up to date at startup."""
@@ -394,34 +349,6 @@ class PipelineService:
     def _work(self, run: PipelineRun, cancel: Event) -> None:
         current = run
         try:
-            for stage in self._stages:
-                if cancel.is_set():
-                    raise PipelineCancelled("the run was cancelled")
-                self._lock.heartbeat(current.id)
-                current = self._save(
-                    replace(current, stage=stage.name, status="running")
-                )
-                context = StageContext(
-                    run=current,
-                    layout=self._layout,
-                    cancel=cancel,
-                    _save=self._save,
-                    stage_material=lambda capture: self.stage_material(
-                        capture, run_id=current.id
-                    ),
-                    frame_materials=lambda: self.frame_materials(current.id),
-                )
-                try:
-                    stage(context)
-                finally:
-                    # A stage that raises has usually written what it found to the
-                    # run already; keep that detail on the failure.
-                    current = context.run
-                    self._record_login_walls(current)
-                # A stage that pauses the run (or fails it) ends this worker; the
-                # run is not walked any further.
-                if current.status != "running":
-                    return
             if cancel.is_set():
                 raise PipelineCancelled("the run was cancelled")
             self._save(replace(current, status="succeeded", stage="done"))
@@ -445,6 +372,4 @@ __all__ = [
     "PipelineConflict",
     "PipelineRegistry",
     "PipelineService",
-    "PipelineStage",
-    "StageContext",
 ]
