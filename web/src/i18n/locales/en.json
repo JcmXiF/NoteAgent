@@ -56,6 +56,11 @@
     "noProject": "Choose a project first.",
     "attention": "Attention",
     "noAttention": "Nothing needs attention.",
+    "search": {
+      "query": "Query: {{query}}",
+      "failed": "The search failed.",
+      "noHits": "No hits."
+    },
     "areas": {
       "searches": "Search results",
       "selectedPages": "Selected pages",

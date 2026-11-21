@@ -28,6 +28,7 @@ from noteagent.pipeline.materials import DEFAULT_KEEP_RUNS
 from noteagent.pipeline.planning import PlanFn
 from noteagent.pipeline.service import PipelineRegistry, PipelineService
 from noteagent.pipeline.stage import PipelineStage
+from noteagent.writing.tools import WebSearchFn
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,9 @@ class AppDeps:
     #: What an approved run calls to write its pages. ``None`` compiles through
     #: the existing write path; a test scripts it and inspects what it was given.
     pipeline_compile: CompileFn | None = None
+    #: The web search the writing tools call. ``None`` uses the project's own
+    #: acquire search; a test hands in a callable that returns cards.
+    web_search: WebSearchFn | None = None
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

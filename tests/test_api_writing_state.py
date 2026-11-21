@@ -94,7 +94,9 @@ class WritingStateApiTests(unittest.TestCase):
         summary = json.loads(result.content)
         self.assertEqual(summary["stateVersion"], 0)
         self.assertIsNone(summary["writer"])
-        self.assertEqual(summary["areas"]["searches"], {"count": 0})
+        self.assertEqual(
+            summary["areas"]["searches"], {"count": 0, "latest": None}
+        )
         self.assertEqual(
             summary["areas"]["draft"], {"pages": 0, "sections": 0}
         )
@@ -116,7 +118,13 @@ class WritingStateApiTests(unittest.TestCase):
 
         summary = json.loads(result.content)
         self.assertEqual(summary["stateVersion"], 1)
-        self.assertEqual(summary["areas"]["searches"], {"count": 1})
+        self.assertEqual(
+            summary["areas"]["searches"],
+            {
+                "count": 1,
+                "latest": {"id": "s1", "query": "", "status": ""},
+            },
+        )
         self.assertEqual(
             summary["areas"]["selectedPages"], {"count": 1}
         )

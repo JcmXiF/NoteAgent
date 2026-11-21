@@ -56,6 +56,11 @@
     "noProject": "请先选择项目。",
     "attention": "待处理",
     "noAttention": "没有待处理项。",
+    "search": {
+      "query": "查询：{{query}}",
+      "failed": "搜索失败。",
+      "noHits": "没有命中。"
+    },
     "areas": {
       "searches": "搜索结果",
       "selectedPages": "选页",

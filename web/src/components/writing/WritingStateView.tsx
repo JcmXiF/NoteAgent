@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2, PenLine, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWritingState } from "@/components/writing/use-writing-state";
+import type { WritingSearch } from "@/lib/api/writing";
 import type { PaneSlot } from "@/stores/layout-store";
 
 /**
@@ -57,6 +58,18 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
   const writer = state.writer
     ? state.writer.id || state.writer.kind || t("writing.noWriter")
     : t("writing.noWriter");
+  // Attention is derived, as the spec says: a failed search is one of its
+  // sources, not a second row kept beside it.
+  const attention: { kind?: unknown; message?: unknown }[] = [
+    ...state.attention,
+    ...state.searches
+      .filter((search) => search.status === "failed")
+      .map((search) => ({
+        kind: "fetch_failed",
+        target: search.id ?? "",
+        message: search.error ?? "",
+      })),
+  ];
 
   return (
     <article className="flex h-full min-h-0 flex-col overflow-auto">
@@ -79,11 +92,7 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
         </Button>
       </header>
       <div className="grid gap-3 p-4 md:grid-cols-2">
-        <Section
-          title={t("writing.areas.searches")}
-          count={state.searches.length}
-          empty={t("writing.empty")}
-        />
+        <Searches searches={state.searches} empty={t("writing.empty")} />
         <Section
           title={t("writing.areas.selectedPages")}
           count={state.selectedPages.length}
@@ -103,29 +112,84 @@ export function WritingStateView(_props: { slot: PaneSlot }) {
           })}
           empty={t("writing.empty")}
         />
-        <section className="rounded-md border bg-card p-3 md:col-span-2">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-xs font-medium">{t("writing.attention")}</h2>
-            <span className="text-[11px] text-muted-foreground">
-              {state.attention.length}
-            </span>
-          </div>
-          {state.attention.length === 0 ? (
+        <Card
+          title={t("writing.attention")}
+          count={attention.length}
+          className="md:col-span-2"
+        >
+          {attention.length === 0 ? (
             <p className="mt-2 text-xs text-muted-foreground">
               {t("writing.noAttention")}
             </p>
           ) : (
             <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-              {state.attention.map((item, index) => (
+              {attention.map((item, index) => (
                 <li key={index}>
                   {String(item.message ?? item.kind ?? "")}
                 </li>
               ))}
             </ul>
           )}
-        </section>
+        </Card>
       </div>
     </article>
+  );
+}
+
+function Searches({
+  searches,
+  empty,
+}: {
+  searches: WritingSearch[];
+  empty: string;
+}) {
+  const { t } = useTranslation();
+  const latest = searches[searches.length - 1];
+
+  return (
+    <Card title={t("writing.areas.searches")} count={searches.length}>
+      {!latest ? (
+        <p className="mt-2 text-xs text-muted-foreground">{empty}</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            {t("writing.search.query", { query: latest.query ?? "" })}
+          </p>
+          {latest.status === "failed" ? (
+            <p className="text-xs text-destructive">
+              {t("writing.search.failed")}
+            </p>
+          ) : (latest.hits ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t("writing.search.noHits")}
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {(latest.hits ?? []).map((hit, index) => (
+                <li key={hit.id ?? index}>
+                  <p className="text-xs font-medium">
+                    <span className="mr-1 text-muted-foreground">
+                      #{hit.rank ?? index + 1}
+                    </span>
+                    {hit.title ?? hit.url ?? ""}
+                  </p>
+                  {hit.snippet ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      {hit.snippet}
+                    </p>
+                  ) : null}
+                  {hit.url ? (
+                    <p className="truncate text-[10px] text-muted-foreground">
+                      {hit.url}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -141,14 +205,32 @@ function Section({
   empty: string;
 }) {
   return (
-    <section className="rounded-md border bg-card p-3">
+    <Card title={title} count={count}>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {count ? (detail ?? "") : empty}
+      </p>
+    </Card>
+  );
+}
+
+function Card({
+  title,
+  count,
+  className = "",
+  children,
+}: {
+  title: string;
+  count: number;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`rounded-md border bg-card p-3 ${className}`}>
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-xs font-medium">{title}</h2>
         <span className="text-[11px] text-muted-foreground">{count}</span>
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {count ? (detail ?? "") : empty}
-      </p>
+      {children}
     </section>
   );
 }

@@ -12,12 +12,29 @@ export type WritingDraftPage = {
   [key: string]: unknown;
 };
 
-/** The state as the core writes it; section items are JSON for now. */
+export type WritingSearchHit = {
+  id?: string;
+  title?: string;
+  url?: string;
+  snippet?: string;
+  rank?: number;
+};
+
+export type WritingSearch = {
+  id?: string;
+  query?: string;
+  status?: "ok" | "failed";
+  hits?: WritingSearchHit[];
+  error?: string;
+  createdAt?: string;
+};
+
+/** The state as the core writes it; the other section items are JSON for now. */
 export type WritingStatePayload = {
   version: number;
   stateVersion: number;
   writer: WritingWriter | null;
-  searches: Record<string, unknown>[];
+  searches: WritingSearch[];
   selectedPages: Record<string, unknown>[];
   frames: Record<string, unknown>[];
   draft: { pages?: WritingDraftPage[]; [key: string]: unknown };

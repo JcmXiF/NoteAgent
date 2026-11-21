@@ -9,12 +9,13 @@ error, never a silent reset.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 from noteagent.agent.clock import Clock, SystemClock
 from noteagent.io.atomic import write_text_atomic
-from noteagent.pipeline.lock import ProjectLock
+from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
 
 #: The schema version written by this module. A state from another schema is not
@@ -24,6 +25,11 @@ STATE_SCHEMA_VERSION = 1
 #: The owner label the store uses while it holds the project lock. The state's
 #: own ``writer`` field is set by the run holding the lock, not by this store.
 STATE_WRITER = "writing-state"
+
+#: A short wait for the project lock, so two tool calls in one round do not
+#: turn a successful search into a lost one. A long holder still gets a refusal.
+_LOCK_ATTEMPTS = 3
+_LOCK_WAIT_S = 0.05
 
 
 class WritingStateError(RuntimeError):
@@ -137,7 +143,14 @@ class WritingStateStore:
         ``WritingStateConflict`` instead of silently overwriting it.
         """
         lock = ProjectLock(self._layout.project_lock, clock=self._clock)
-        lock.acquire(owner)
+        for attempt in range(_LOCK_ATTEMPTS):
+            try:
+                lock.acquire(owner)
+                break
+            except ProjectBusy:
+                if attempt + 1 == _LOCK_ATTEMPTS:
+                    raise
+                time.sleep(_LOCK_WAIT_S)
         try:
             current = self.load()
             if state.state_version != current.state_version:
@@ -162,21 +175,67 @@ class WritingStateStore:
         finally:
             lock.release(owner)
 
+    def append_search(
+        self,
+        row: Mapping[str, object],
+        attention: Mapping[str, object] | None = None,
+    ) -> WritingState:
+        """Append one search row, retrying once if another writer moved first."""
+        for attempt in range(2):
+            state = self.load()
+            next_state = replace(
+                state,
+                searches=state.searches + (row,),
+                attention=(
+                    state.attention + (attention,)
+                    if attention is not None
+                    else state.attention
+                ),
+            )
+            try:
+                return self.save(next_state)
+            except WritingStateConflict:
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
+
 
 def state_summary(state: WritingState) -> dict[str, object]:
     """The bounded answer ``get_state()`` gives: counts, writer, attention."""
     pages = _draft_pages(state.draft)
     sections = sum(len(_draft_sections(page)) for page in pages)
+    latest = state.searches[-1] if state.searches else None
+    attention = [dict(item) for item in state.attention]
+    attention.extend(
+        {
+            "kind": "fetch_failed",
+            "target": str(row.get("id") or ""),
+            "message": str(row.get("error") or "the search failed"),
+        }
+        for row in state.searches
+        if str(row.get("status") or "") == "failed"
+    )
     return {
         "stateVersion": state.state_version,
         "writer": dict(state.writer) if state.writer is not None else None,
         "areas": {
-            "searches": {"count": len(state.searches)},
+            "searches": {
+                "count": len(state.searches),
+                "latest": (
+                    {
+                        "id": str(latest.get("id") or ""),
+                        "query": str(latest.get("query") or ""),
+                        "status": str(latest.get("status") or ""),
+                    }
+                    if latest is not None
+                    else None
+                ),
+            },
             "selectedPages": {"count": len(state.selected_pages)},
             "frames": {"count": len(state.frames)},
             "draft": {"pages": len(pages), "sections": sections},
         },
-        "attention": [dict(item) for item in state.attention],
+        "attention": attention,
     }
 
 

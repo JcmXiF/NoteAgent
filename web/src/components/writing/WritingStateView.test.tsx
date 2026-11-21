@@ -61,4 +61,71 @@ describe("the writing state panel", () => {
     expect(host.textContent).toContain("Attention");
     expect(host.textContent).toContain("Nothing needs attention.");
   });
+
+  it("lists the latest search's hits", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 5,
+        writer: null,
+        searches: [
+          {
+            id: "search-1",
+            query: "信息熵",
+            status: "ok",
+            hits: [
+              {
+                id: "hit-1",
+                title: "信息熵 - 维基百科",
+                url: "https://example.com/entropy",
+                snippet: "熵是信息的平均量。",
+                rank: 1,
+              },
+            ],
+            createdAt: "2026-11-21T00:00:00Z",
+          },
+        ],
+        selectedPages: [],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("Query: 信息熵");
+    expect(host.textContent).toContain("#1");
+    expect(host.textContent).toContain("信息熵 - 维基百科");
+    expect(host.textContent).toContain("熵是信息的平均量。");
+  });
+
+  it("shows a failed search in attention", async () => {
+    useWritingStore.setState({
+      state: {
+        version: 1,
+        stateVersion: 6,
+        writer: null,
+        searches: [
+          {
+            id: "search-2",
+            query: "坏查询",
+            status: "failed",
+            hits: [],
+            error: "the provider is down",
+            createdAt: "2026-11-21T00:00:00Z",
+          },
+        ],
+        selectedPages: [],
+        frames: [],
+        draft: { pages: [] },
+        attention: [],
+      },
+    });
+
+    await draw();
+
+    expect(host.textContent).toContain("The search failed.");
+    expect(host.textContent).toContain("the provider is down");
+  });
 });

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -130,13 +131,64 @@ class WritingStateTests(unittest.TestCase):
 
         self.assertEqual(summary["stateVersion"], 3)
         self.assertEqual(summary["writer"], {"kind": "agent", "id": "run-1"})
-        self.assertEqual(summary["areas"]["searches"], {"count": 1})
+        self.assertEqual(
+            summary["areas"]["searches"],
+            {
+                "count": 1,
+                "latest": {"id": "s1", "query": "", "status": ""},
+            },
+        )
         self.assertEqual(summary["areas"]["selectedPages"], {"count": 1})
         self.assertEqual(summary["areas"]["frames"], {"count": 1})
         self.assertEqual(
             summary["areas"]["draft"], {"pages": 2, "sections": 3}
         )
         self.assertEqual(summary["attention"], [{"kind": "fetch_failed"}])
+
+    def test_a_failed_search_is_derived_into_attention(self) -> None:
+        state = WritingState(
+            searches=(
+                {
+                    "id": "s1",
+                    "status": "failed",
+                    "error": "the provider is down",
+                },
+            ),
+        )
+
+        summary = state_summary(state)
+
+        self.assertEqual(
+            summary["attention"],
+            [
+                {
+                    "kind": "fetch_failed",
+                    "target": "s1",
+                    "message": "the provider is down",
+                }
+            ],
+        )
+
+    def test_two_appends_keep_both_search_rows(self) -> None:
+        barrier = threading.Barrier(2)
+
+        def add(index: int) -> None:
+            barrier.wait()
+            self.store.append_search({"id": f"s{index}"})
+
+        threads = [
+            threading.Thread(target=add, args=(index,))
+            for index in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        rows = {
+            str(row["id"]) for row in self.store.load().searches
+        }
+        self.assertEqual(rows, {"s0", "s1"})
 
     def test_the_wire_shape_round_trips(self) -> None:
         state = WritingState(
