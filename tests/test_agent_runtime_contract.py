@@ -13,16 +13,13 @@ from noteagent.agent.events import (
     TokenEvent,
     is_terminal,
 )
-from noteagent.agent.runtime import AgentRuntime, OnBusy, Retry, UserInput
+from noteagent.agent.runtime import AgentRuntime, OnBusy, UserInput
 
 
 class RunRequestTests(unittest.TestCase):
     def test_a_question_is_rejected_when_the_session_is_already_running(self) -> None:
         # A second question in the same conversation would be a second model loop.
         self.assertEqual(UserInput("s1", "what is entropy?").on_busy, OnBusy.REJECT)
-
-    def test_a_retry_is_rejected_unless_it_says_otherwise(self) -> None:
-        self.assertEqual(Retry("s1").on_busy, OnBusy.REJECT)
 
     def test_a_request_can_choose_the_other_policy(self) -> None:
         self.assertEqual(UserInput("s1", "again", on_busy=OnBusy.QUEUE).on_busy, OnBusy.QUEUE)

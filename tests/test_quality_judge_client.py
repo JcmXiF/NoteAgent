@@ -70,26 +70,7 @@ class ConversationTests(unittest.TestCase):
             (("user", "问题"), ("assistant", "最终答案")),
         )
 
-    def test_a_silent_proposal_uses_its_reason_as_the_answer(self) -> None:
-        entries = [
-            {"type": "message", "role": "user", "content": "整理成对比页"},
-            {
-                "type": "wait_proposed",
-                "job": "compile",
-                "intent": "对比页",
-                "reason": "我会整理成对比页，需要你在计划板进入编译。",
-            },
-        ]
-
-        self.assertEqual(
-            conversation_from(entries),
-            (
-                ("user", "整理成对比页"),
-                ("assistant", "我会整理成对比页，需要你在计划板进入编译。"),
-            ),
-        )
-
-    def test_an_assistant_answer_wins_over_the_proposal_reason(self) -> None:
+    def test_old_wait_entries_are_ignored(self) -> None:
         entries = [
             {"type": "message", "role": "user", "content": "问题"},
             {"type": "message", "role": "assistant", "content": "答案"},

@@ -117,9 +117,7 @@ def choose_cut(entries: Sequence[Entry], limits: CompactionLimits) -> str | None
     """The first entry the prompt keeps, or ``None`` when nothing can be shed.
 
     The recent window is measured from the tail. A cut that lands on a tool
-    result moves back to the call it answers, so a pair is never split. The
-    latest job result is kept even when it sits outside the recent window,
-    because the model must still know what the last collaboration job did.
+    result moves back to the call it answers, so a pair is never split.
     """
     if not entries:
         return None
@@ -136,16 +134,9 @@ def choose_cut(entries: Sequence[Entry], limits: CompactionLimits) -> str | None
 
     cut = pair_start(entries, recent_start)
 
-    # ADR-0005: the turns from the wait's proposal through its result are what
-    # a resume needs; keep them even when they sit outside the recent window.
-    anchor = _last_wait_start(entries)
-    if anchor is None:
-        anchor = _last_job_result(entries)
-    if anchor is not None and anchor < cut:
-        cut = anchor
-
-    # The cut must name a message (or a job result). A cut on a compaction or a
-    # silent event would start the next prompt after the live request.
+    # The cut must name a message (or an old job result). A cut on a
+    # compaction or a silent event would start the next prompt after the
+    # live request.
     cut = _message_boundary(entries, cut)
     if cut is None or cut <= 0:
         return None
@@ -225,20 +216,6 @@ def _entry_tokens(entry: Entry, chars_per_token: int) -> int:
     if chars <= 0:
         return 0
     return max(1, math.ceil(chars / max(1, chars_per_token)))
-
-
-def _last_wait_start(entries: Sequence[Entry]) -> int | None:
-    for index in range(len(entries) - 1, -1, -1):
-        if entries[index].get("type") == "wait_proposed":
-            return index
-    return None
-
-
-def _last_job_result(entries: Sequence[Entry]) -> int | None:
-    for index in range(len(entries) - 1, -1, -1):
-        if entries[index].get("type") == "wait_completed":
-            return index
-    return None
 
 
 def _message_boundary(entries: Sequence[Entry], index: int) -> int | None:

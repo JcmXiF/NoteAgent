@@ -122,19 +122,9 @@ def make_judge_client(config: LlmConfig) -> JudgeClient:
 def conversation_from(
     entries: Iterable[Mapping[str, Any]],
 ) -> tuple[tuple[str, str], ...]:
-    """The user turns and the assistant's final answers, not tool preambles.
-
-    A silent propose call leaves no assistant message; its recorded reason
-    (or intent) is the proposal the judge must grade.
-    """
+    """The user turns and the assistant's final answers, not tool preambles."""
     out: list[tuple[str, str]] = []
-    proposal = ""
     for entry in entries:
-        if entry.get("type") == "wait_proposed":
-            text = entry.get("reason") or entry.get("intent")
-            if isinstance(text, str) and text.strip():
-                proposal = text.strip()
-            continue
         role = entry.get("role")
         content = entry.get("content")
         if role not in ("user", "assistant"):
@@ -144,8 +134,6 @@ def conversation_from(
         if role == "assistant" and entry.get("toolCalls"):
             continue
         out.append((str(role), content.strip()))
-    if proposal and not any(role == "assistant" for role, _ in out):
-        out.append(("assistant", proposal))
     return tuple(out)
 
 

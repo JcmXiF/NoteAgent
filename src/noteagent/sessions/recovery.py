@@ -104,8 +104,8 @@ def recover_store(
             continue
         if marker.state in SETTLED_STATES:
             if marker.state == WAITING:
-                # The run is parked on a job, not interrupted; a question
-                # typed meanwhile continues through the wait's own resume.
+                # Legacy: an old run parked on a job. It is not interrupted,
+                # and no new run enters this state.
                 continue
             pending = _pending_question(entries)
             if pending is not None:

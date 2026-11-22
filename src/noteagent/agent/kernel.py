@@ -32,6 +32,7 @@ from noteagent.agent.events import (
     TokenEvent,
 )
 from noteagent.agent.model import (
+    AssistantMessage,
     Message,
     ModelClient,
     ModelEvent,
@@ -63,7 +64,6 @@ from noteagent.agent.runtime import (
     BusyError,
     EventSink,
     ResumeCheck,
-    Retry,
     RunCancelled,
     RunPaused,
     RunRef,
@@ -99,7 +99,7 @@ MAX_TOOL_CALLS_PER_ROUND = 8
 SUMMARY_INSTRUCTIONS = (
     "Summarize the earlier part of this conversation so it can be left out of "
     "the context. Keep: the reader's goals, constraints, decisions and open "
-    "questions; important tool results (pages read or searched, job results); "
+    "questions; important tool results (pages read or searched); "
     "the current task state and the next step; project "
     "constraints that must not be forgotten. Drop: raw tool output, repeated "
     "material, and intermediate reasoning. Write a compact summary in the "
@@ -204,8 +204,6 @@ class KernelRuntime:
         return self._compaction
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
-        if isinstance(request, Retry):
-            raise ValueError("no route opens a retry yet")
         session_id = request.session_id
         preclaimed = (
             request.claim if isinstance(request, RunResume) else None
@@ -596,7 +594,7 @@ class KernelRuntime:
                     # The preamble becomes a step, every call gets its result,
                     # and the next round reads the log.
                     sink(TokenEvent("", reset=True))
-                    self._commit_tool_calls(session_id, calls, assistant.content)
+                    self._commit_tool_calls(session_id, assistant)
                     # The preamble is now part of the tool-call entry, so a stop
                     # from here on must not commit it a second time.
                     partial.clear()
@@ -629,11 +627,7 @@ class KernelRuntime:
                     "stopReason": assistant.stop_reason or "stop",
                 }
                 if assistant.usage is not None:
-                    entry["usage"] = {
-                        "inputTokens": assistant.usage.input_tokens,
-                        "outputTokens": assistant.usage.output_tokens,
-                        "cacheReadTokens": assistant.usage.cache_read_tokens,
-                    }
+                    entry["usage"] = _usage_entry(assistant.usage)
                 self._sessions.append(session_id, entry)
                 self._mark(
                     session_id,
@@ -779,27 +773,24 @@ class KernelRuntime:
         return tuple(results)
 
     def _commit_tool_calls(
-        self,
-        session_id: str,
-        calls: tuple[ToolCall, ...],
-        content: str,
+        self, session_id: str, assistant: AssistantMessage
     ) -> None:
-        self._sessions.append(
-            session_id,
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": content,
-                "toolCalls": [
-                    {
-                        "id": call.id,
-                        "name": call.name,
-                        "arguments": call.arguments,
-                    }
-                    for call in calls
-                ],
-            },
-        )
+        entry: dict[str, object] = {
+            "type": "message",
+            "role": "assistant",
+            "content": assistant.content,
+            "toolCalls": [
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                }
+                for call in assistant.tool_calls
+            ],
+        }
+        if assistant.usage is not None:
+            entry["usage"] = _usage_entry(assistant.usage)
+        self._sessions.append(session_id, entry)
 
     def _commit_results(
         self,
@@ -1031,11 +1022,7 @@ class KernelRuntime:
             return False
         usage = None
         if summary_message.usage is not None:
-            usage = {
-                "inputTokens": summary_message.usage.input_tokens,
-                "outputTokens": summary_message.usage.output_tokens,
-                "cacheReadTokens": summary_message.usage.cache_read_tokens,
-            }
+            usage = _usage_entry(summary_message.usage)
         self._sessions.append(
             session_id,
             compaction_entry(summary, cut_id, tokens_before, usage),
@@ -1056,6 +1043,15 @@ class KernelRuntime:
         if parts:
             messages.insert(0, Message("system", "\n\n".join(parts)))
         return tuple(messages)
+
+
+def _usage_entry(usage: Usage) -> dict[str, object]:
+    """One turn's usage as the session entry spells it."""
+    return {
+        "inputTokens": usage.input_tokens,
+        "outputTokens": usage.output_tokens,
+        "cacheReadTokens": usage.cache_read_tokens,
+    }
 
 
 def _token_count(value: object) -> int:

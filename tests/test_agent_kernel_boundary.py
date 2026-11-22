@@ -35,7 +35,6 @@ KERNEL_MODULES = (
     "noteagent.agent.context",
     "noteagent.agent.events",
     "noteagent.agent.faux",
-    "noteagent.agent.jobs",
     "noteagent.agent.kernel",
     "noteagent.agent.model",
     "noteagent.agent.projection",

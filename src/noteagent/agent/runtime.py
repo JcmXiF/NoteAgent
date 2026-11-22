@@ -73,17 +73,7 @@ class RunResume:
     claim: Event | None = field(default=None, repr=False, compare=False)
 
 
-@dataclass(frozen=True, slots=True)
-class Retry:
-    """The last run failed and the caller is asking for it again."""
-
-    session_id: str
-    on_busy: OnBusy = OnBusy.REJECT
-    reason: str = ""
-    pause: Event | None = field(default=None, repr=False, compare=False)
-
-
-RunRequest: TypeAlias = UserInput | RunResume | Retry
+RunRequest: TypeAlias = UserInput | RunResume
 
 RunStatus: TypeAlias = Literal[
     "completed", "failed", "cancelled", "interrupted"

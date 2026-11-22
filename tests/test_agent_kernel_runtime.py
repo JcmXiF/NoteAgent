@@ -17,7 +17,6 @@ from noteagent.agent.events import (
     is_terminal,
 )
 from noteagent.agent.faux import FauxModelClient
-from noteagent.agent.jobs import JobArtifact, JobResult
 from noteagent.agent.kernel import MAX_ABORTED_CHARS, KernelRuntime, RunRegistry
 from noteagent.agent.model import (
     AssistantMessage,

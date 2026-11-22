@@ -409,30 +409,6 @@ class RunResumeKernelTests(unittest.TestCase):
             )
         self.assertEqual(model.requests, [])
 
-    def test_a_waiting_run_refuses_resume(self) -> None:
-        self.user()
-        self.start()
-        self.store.append(
-            "s1",
-            {
-                "type": "wait_proposed",
-                "id": "w1",
-                "waitId": "w1",
-                "job": "plan",
-                "interface": "source",
-                "completion": "start_plan",
-                "proposedAt": "2026-11-10T09:00:00Z",
-            },
-        )
-        recover_store(self.store, clock=FixedClock())
-        model = FauxModelClient.text("不该被调用")
-
-        with self.assertRaises(ValueError):
-            self.runtime(model).execute(
-                RunResume("s1", "run-1"), lambda _event: None
-            )
-        self.assertEqual(model.requests, [])
-
     def test_a_duplicate_resume_is_refused(self) -> None:
         self.interrupt_after_tool_call()
         model = FauxModelClient.text("继续回答")

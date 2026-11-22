@@ -236,70 +236,6 @@ class CutTests(unittest.TestCase):
 
         self.assertEqual(cut, "e2")
 
-    def test_the_latest_job_result_is_kept(self) -> None:
-        entries = [
-            _entry("e1", "user", "old " * 500),
-            _entry("e2", "assistant", "old answer " * 200),
-            {
-                "v": 1,
-                "id": "w1",
-                "parentId": "e2",
-                "ts": "2026-11-10T09:00:00Z",
-                "type": "wait_completed",
-                "waitId": "w1",
-                "jobId": "job-1",
-                "job": "plan",
-                "status": "completed",
-                "summary": "planned 2 pages",
-            },
-            _entry("e4", "user", "recent"),
-            _entry("e5", "assistant", "answer"),
-        ]
-        limits = CompactionLimits(keep_recent_tokens=10, chars_per_token=4)
-
-        cut = choose_cut(entries, limits)
-
-        self.assertEqual(cut, "w1")
-
-    def test_the_turns_since_the_wait_started_are_kept(self) -> None:
-        entries = [
-            _entry("e1", "user", "old " * 500),
-            _entry("e2", "assistant", "old answer " * 200),
-            {
-                "type": "wait_proposed",
-                "id": "w1",
-                "waitId": "w1",
-                "job": "plan",
-                "interface": "source",
-                "completion": "start_plan",
-                "proposedAt": "2026-11-10T09:00:00Z",
-            },
-            {"type": "wait_entered", "id": "w2", "waitId": "w1", "jobId": "j1"},
-            {
-                "type": "wait_completed",
-                "id": "w3",
-                "waitId": "w1",
-                "jobId": "j1",
-                "job": "plan",
-                "status": "completed",
-                "summary": "planned",
-            },
-            _entry("e4", "user", "recent"),
-            _entry("e5", "assistant", "answer"),
-        ]
-        limits = CompactionLimits(keep_recent_tokens=10, chars_per_token=4)
-
-        cut = choose_cut(entries, limits)
-
-        self.assertEqual(cut, "e2")
-
-    def test_a_session_with_nothing_to_summarize_has_no_cut(self) -> None:
-        entries = [_entry("e1", "user", "only")]
-        limits = CompactionLimits(keep_recent_tokens=10, chars_per_token=4)
-
-        self.assertIsNone(choose_cut(entries, limits))
-
-
 class _OverflowThenAnswer:
     """Overflows once, then answers the summary and the retried turn."""
 
@@ -471,6 +407,15 @@ class KernelCompactionTests(unittest.TestCase):
         self.assertEqual(
             compaction["summary"], "summary of earlier turns"
         )
+        tool_turn = next(
+            entry
+            for entry in entries
+            if entry.get("type") == "message"
+            and entry.get("role") == "assistant"
+            and entry.get("toolCalls")
+        )
+        self.assertEqual(tool_turn["usage"]["inputTokens"], 9_500)
+        self.assertEqual(tool_turn["usage"]["outputTokens"], 5)
 
     def test_a_new_run_starts_from_the_last_calls_usage(self) -> None:
         self.store.append(

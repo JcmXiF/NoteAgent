@@ -145,9 +145,8 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
             # a section the prompt still needs.
             continue
         if kind == "wait_completed":
-            # The job result is a message the model must see; it is not a turn
-            # the reader wrote, so it has no transcript row of its own. The
-            # interface shows it from the wait the session carries.
+            # Legacy: a job result old sessions still hold. Nothing writes one
+            # now; the read-only rendering keeps those transcripts usable.
             if in_context:
                 pieces.append(
                     _Piece(entry_id, Message("system", _job_result_text(entry)))
