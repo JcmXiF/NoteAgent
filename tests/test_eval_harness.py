@@ -163,6 +163,18 @@ class TraceSpecTests(unittest.TestCase):
         self.assertEqual(violations[0].name, "select_page")
         self.assertIsNone(violations[0].step)
 
+    def test_a_missing_required_tool_records_the_divergence_step(self) -> None:
+        spec = TraceSpec(required=("web_search", "select_page"))
+        evidence = TraceEvidence(
+            tools=(ToolCall("web_search", 1), ToolCall("compose_wiki", 2)),
+            model_turns=2,
+        )
+
+        violations = spec.violations(evidence)
+
+        self.assertEqual(violations[0].name, "select_page")
+        self.assertEqual(violations[0].step, 2)
+
     def test_out_of_order_is_a_missing_required_tool(self) -> None:
         spec = TraceSpec(required=("web_search", "select_page"))
         evidence = TraceEvidence(

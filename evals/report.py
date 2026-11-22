@@ -18,6 +18,24 @@ if TYPE_CHECKING:
 
 REPORT_VERSION = 3
 UNCATEGORIZED = "uncategorized"
+STATE = "state"
+TOOL_CONTRACT = "tool-contract"
+PROVENANCE = "provenance"
+PUBLISH = "publish"
+LOCK = "lock"
+RECOVERY = "recovery"
+NODE_RUN = "node-run"
+COMPACTION = "compaction"
+CATEGORIES = (
+    STATE,
+    TOOL_CONTRACT,
+    PROVENANCE,
+    PUBLISH,
+    LOCK,
+    RECOVERY,
+    NODE_RUN,
+    COMPACTION,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,9 +235,20 @@ def _last_line(text: str) -> str:
 
 
 __all__ = [
+    "CATEGORIES",
+    "COMPACTION",
     "CaseResult",
     "Check",
     "EvalReport",
+    "FirstError",
+    "LOCK",
+    "NODE_RUN",
+    "PROVENANCE",
+    "PUBLISH",
+    "RECOVERY",
     "REPORT_VERSION",
+    "STATE",
+    "TOOL_CONTRACT",
+    "UNCATEGORIZED",
     "utc_now",
 ]

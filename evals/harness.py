@@ -27,7 +27,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from evals.report import CaseResult, Check
+from evals.report import UNCATEGORIZED, CaseResult, Check
 from evals.sse import parse_sse
 from evals.support import FixedClock, SequentialIds, remove_tree
 from evals.trace import TraceEvidence, TraceSpec, evidence_from_entries, first_error
@@ -310,20 +310,32 @@ class CaseRun:
             encoding="utf-8",
         )
 
-    def check(self, name: str, condition: object, detail: str = "") -> bool:
+    def check(
+        self,
+        name: str,
+        condition: object,
+        detail: str = "",
+        category: str = UNCATEGORIZED,
+    ) -> bool:
         passed = bool(condition)
         self.checks.append(
-            Check(name, passed, "" if passed else detail)
+            Check(name, passed, "" if passed else detail, category)
         )
         return passed
 
-    def equal(self, name: str, actual: object, expected: object) -> bool:
+    def equal(
+        self,
+        name: str,
+        actual: object,
+        expected: object,
+        category: str = UNCATEGORIZED,
+    ) -> bool:
         return self.check(
-            name, actual == expected, f"expected {expected!r}, got {actual!r}"
+            name,
+            actual == expected,
+            f"expected {expected!r}, got {actual!r}",
+            category,
         )
-
-    def metric(self, name: str, value: object) -> None:
-        """One reported number for the run's report; never a pass/fail check."""
 
     def note(self, text: str) -> None:
         self.log.append(text)

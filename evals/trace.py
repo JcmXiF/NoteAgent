@@ -11,9 +11,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from evals.report import UNCATEGORIZED, Check, FirstError
+from evals.report import TOOL_CONTRACT, UNCATEGORIZED, Check, FirstError
 
-TRACE_CATEGORY = "tool-contract"
+TRACE_CATEGORY = TOOL_CONTRACT
 REQUIRED = "required"
 FORBIDDEN = "forbidden"
 MAX_TURNS = "max_turns"
@@ -78,12 +78,19 @@ class TraceSpec:
                 )
         if self.required:
             index = 0
-            for call in evidence.tools:
+            last_match = -1
+            for position, call in enumerate(evidence.tools):
                 if index < len(self.required) and call.name == self.required[index]:
                     index += 1
+                    last_match = position
             if index < len(self.required):
                 missing = self.required[index]
                 previous = self.required[index - 1] if index else None
+                divergence = (
+                    evidence.tools[last_match + 1]
+                    if last_match + 1 < len(evidence.tools)
+                    else None
+                )
                 expected = (
                     f"required tool {missing} after {previous}"
                     if previous
@@ -93,7 +100,7 @@ class TraceSpec:
                     TraceViolation(
                         REQUIRED,
                         missing,
-                        None,
+                        divergence.step if divergence is not None else None,
                         expected,
                         f"the tool path was {', '.join(names) or 'empty'}",
                     )
