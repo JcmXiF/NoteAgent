@@ -53,6 +53,10 @@ class Check:
     def __post_init__(self) -> None:
         if not self.category:
             object.__setattr__(self, "category", UNCATEGORIZED)
+        elif self.category not in CATEGORIES and self.category != UNCATEGORIZED:
+            raise ValueError(
+                f"unknown check category: {self.category!r}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +143,38 @@ class EvalReport:
         return len(self.results) - self.passed_count
 
     @property
+    def passed_check_count(self) -> int:
+        return sum(len(result.passed_checks) for result in self.results)
+
+    @property
+    def total_check_count(self) -> int:
+        return sum(len(result.checks) for result in self.results)
+
+    @property
+    def first_error_categories(self) -> dict[str, int]:
+        """Count the failed cases by their first-error category."""
+        counts: dict[str, int] = {}
+        for result in self.results:
+            if result.passed:
+                continue
+            category = (
+                result.first_error.category
+                if result.first_error is not None
+                else UNCATEGORIZED
+            )
+            counts[category] = counts.get(category, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def aggregate(self) -> dict[str, object]:
+        return {
+            "cases": _score(self.passed_count, len(self.results)),
+            "checks": _score(
+                self.passed_check_count, self.total_check_count
+            ),
+            "firstErrorCategories": self.first_error_categories,
+        }
+
+    @property
     def passed(self) -> bool:
         return self.failed_count == 0
 
@@ -149,6 +185,7 @@ class EvalReport:
             "durationSeconds": round(self.duration_s, 3),
             "passed": self.passed_count,
             "failed": self.failed_count,
+            "aggregate": self.aggregate(),
             "cases": [
                 {
                     "name": result.name,
@@ -184,6 +221,23 @@ class EvalReport:
             (
                 f"- Result: **{self.passed_count} passed, "
                 f"{self.failed_count} failed** in {self.duration_s:.1f}s"
+            ),
+            "",
+            "## Aggregate",
+            f"- Cases: {_fraction(self.passed_count, len(self.results))}",
+            (
+                f"- Checks: "
+                f"{_fraction(self.passed_check_count, self.total_check_count)}"
+            ),
+            (
+                "- First-error categories: "
+                + (
+                    ", ".join(
+                        f"{category}={count}"
+                        for category, count in self.first_error_categories.items()
+                    )
+                    or "none"
+                )
             ),
             "",
             "| Case | Result | Checks | Time |",
@@ -227,6 +281,22 @@ class EvalReport:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _score(passed: int, total: int) -> dict[str, object]:
+    return {
+        "passed": passed,
+        "total": total,
+        "rate": _rate(passed, total),
+    }
+
+
+def _rate(passed: int, total: int) -> float | None:
+    return round(passed / total, 4) if total else None
+
+
+def _fraction(passed: int, total: int) -> str:
+    return f"{passed}/{total} passed ({passed / total:.0%})" if total else "n/a"
 
 
 def _last_line(text: str) -> str:

@@ -108,20 +108,33 @@ class FailureArtifactTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def _case(self, name, *, passed=True, first_error=None):
+        checks = (
+            Check(
+                "ok" if passed else "not ok",
+                passed,
+                "" if passed else "no",
+                "publish",
+            ),
+        )
+        return CaseResult(name, name.upper(), checks, "", 0.1, (), (), first_error)
+
     def test_the_report_counts_both_verdicts_and_writes_markdown(self) -> None:
         report = EvalReport(
             (
-                CaseResult(
-                    "a", "A", (Check("ok", True),), "", 0.1, (), ()
-                ),
-                CaseResult(
+                self._case("a"),
+                self._case(
                     "b",
-                    "B",
-                    (Check("not ok", False, "no"),),
-                    "",
-                    0.2,
-                    (),
-                    (),
+                    passed=False,
+                    first_error=FirstError(
+                        "not ok",
+                        "publish",
+                        None,
+                        "check",
+                        "",
+                        "check to pass",
+                        "no",
+                    ),
                 ),
             ),
             "2026-11-10T09:00:00Z",
@@ -134,8 +147,68 @@ class ReportTests(unittest.TestCase):
             summary = path.with_suffix(".md").read_text(encoding="utf-8")
 
         self.assertEqual((payload["passed"], payload["failed"]), (1, 1))
+        self.assertEqual(
+            payload["aggregate"]["cases"],
+            {"passed": 1, "total": 2, "rate": 0.5},
+        )
+        self.assertEqual(
+            payload["aggregate"]["checks"],
+            {"passed": 1, "total": 2, "rate": 0.5},
+        )
+        self.assertEqual(
+            payload["aggregate"]["firstErrorCategories"],
+            {"publish": 1},
+        )
         self.assertIn("1 passed, 1 failed", summary)
+        self.assertIn("Cases: 1/2 passed (50%)", summary)
+        self.assertIn("First-error categories: publish=1", summary)
         self.assertIn("not ok: no", summary)
+        self.assertIn("first error: not ok [publish]", summary)
+
+    def test_first_error_categories_count_only_failed_cases(self) -> None:
+        report = EvalReport(
+            (
+                self._case("a"),
+                self._case(
+                    "b",
+                    passed=False,
+                    first_error=FirstError(
+                        "b", "publish", None, "check", "", "x", "y"
+                    ),
+                ),
+            ),
+            "now",
+            0.3,
+        )
+
+        self.assertEqual(report.first_error_categories, {"publish": 1})
+
+    def test_a_failed_case_without_a_first_error_is_uncategorized(self) -> None:
+        report = EvalReport(
+            (self._case("a", passed=False),),
+            "now",
+            0.1,
+        )
+
+        self.assertEqual(
+            report.first_error_categories, {"uncategorized": 1}
+        )
+
+    def test_an_empty_report_has_no_rate(self) -> None:
+        report = EvalReport((), "now", 0.0)
+
+        aggregate = report.aggregate()
+
+        self.assertEqual(
+            aggregate["cases"],
+            {"passed": 0, "total": 0, "rate": None},
+        )
+        self.assertEqual(
+            aggregate["checks"],
+            {"passed": 0, "total": 0, "rate": None},
+        )
+        self.assertIn("Cases: n/a", report.markdown())
+        self.assertIn("First-error categories: none", report.markdown())
 
 
 class TraceSpecTests(unittest.TestCase):
@@ -233,6 +306,10 @@ class CheckCategoryTests(unittest.TestCase):
 
         assert error is not None
         self.assertEqual(error.category, "uncategorized")
+
+    def test_an_unknown_category_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            Check("bad", False, "", "typo")
 
 
 class FirstErrorTests(unittest.TestCase):
