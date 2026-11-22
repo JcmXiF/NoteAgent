@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,8 @@ class V3JudgeVerdict:
     skipped: str = ""
     raw: str = ""
     prompt_sha256: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def verdicts(self) -> dict[str, str]:
         if self.error or self.skipped:
@@ -59,6 +61,8 @@ class V3JudgeVerdict:
             "skipped": self.skipped,
             "prompt_sha256": self.prompt_sha256,
             "raw": self.raw,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
         }
 
 
@@ -75,6 +79,7 @@ def judge_item(
 ) -> V3JudgeVerdict:
     """Ask the judge for the four content verdicts of one item."""
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
+    prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     message = _user_message(
         question=question,
         wiki=wiki,
@@ -93,13 +98,20 @@ def judge_item(
             response_format={"type": "json_object"},
         )
     except Exception as err:  # noqa: BLE001 - recorded for the report
-        return V3JudgeVerdict(error=f"judge_error: {err}")
+        return V3JudgeVerdict(
+            error=f"judge_error: {err}",
+            prompt_sha256=prompt_sha256,
+            input_tokens=getattr(err, "input_tokens", 0),
+            output_tokens=getattr(err, "output_tokens", 0),
+        )
     raw = redact(
         response.content or "", (secret,) if secret else ()
     )
-    return _parse(
-        raw,
-        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+    verdict = _parse(raw, prompt_sha256=prompt_sha256)
+    return replace(
+        verdict,
+        input_tokens=response.input_tokens,
+        output_tokens=response.output_tokens,
     )
 
 

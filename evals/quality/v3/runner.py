@@ -25,8 +25,16 @@ from evals.golden.trace import (
 from evals.harness import CaseRun
 from evals.quality.assertions import evaluate, evidence_from
 from evals.quality.artifacts import copy_case_artifacts
-from evals.quality.judge_client import conversation_from, make_judge_client
-from evals.quality.v3.judge import V3JudgeVerdict, judge_item
+from evals.quality.judge_client import (
+    JudgeClient,
+    conversation_from,
+    make_judge_client,
+)
+from evals.quality.v3.judge import (
+    EXPECTED_KEYS,
+    V3JudgeVerdict,
+    judge_item,
+)
 from evals.quality.v3.pricing import price_for
 from evals.quality.v3.set import QualitySet
 from evals.report import REPORT_VERSION, utc_now
@@ -79,6 +87,9 @@ class ItemRun:
     error: str = ""
     agent_prompt_sha256: str = ""
     skill_index_sha256: str = ""
+    judge_tokens_in: int = 0
+    judge_tokens_out: int = 0
+    judge_prompt_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +180,8 @@ class QualityReport:
     model: str
     started_at: str
     duration_s: float
+    temperature: float = 0.0
+    base_url: str = ""
 
     @property
     def agent_prompt_sha256(self) -> str:
@@ -180,6 +193,11 @@ class QualityReport:
         """The skills index the first usable run received."""
         return _first(run.skill_index_sha256 for run in self.runs)
 
+    @property
+    def judge_prompt_sha256(self) -> str:
+        """The judge instructions the first usable run read."""
+        return _first(run.judge_prompt_sha256 for run in self.runs)
+
     def payload(self) -> dict[str, object]:
         return {
             "version": REPORT_VERSION,
@@ -187,8 +205,11 @@ class QualityReport:
             "contentHash": self.content_hash,
             "k": self.scores.k,
             "model": self.model,
+            "temperature": self.temperature,
+            "baseUrl": self.base_url,
             "agentPromptSha256": self.agent_prompt_sha256,
             "skillIndexSha256": self.skill_index_sha256,
+            "judgePromptSha256": self.judge_prompt_sha256,
             "startedAt": self.started_at,
             "durationSeconds": round(self.duration_s, 3),
             "singleTurn": {
@@ -216,6 +237,9 @@ class QualityReport:
             f"- Model: {self.model}",
             f"- Agent prompt: {_sha_text(self.agent_prompt_sha256)}",
             f"- Skill index: {_sha_text(self.skill_index_sha256)}",
+            f"- Judge prompt: {_sha_text(self.judge_prompt_sha256)}",
+            f"- Temperature: {self.temperature:g}",
+            f"- Base URL: {self.base_url or 'n/a'}",
             f"- k: {self.scores.k}",
             f"- Started: {self.started_at}",
             f"- Duration: {self.duration_s:.1f}s",
@@ -236,7 +260,7 @@ class QualityReport:
                 "",
                 "## Single-turn items",
                 "",
-                "| Item | Type | Pass@k | Pass^k | Tokens in/out | Cost | Latency | Judge |",
+                "| Item | Type | Pass@k | Pass^k | Tokens in/out | Cost | Latency | Judge time |",
                 "|---|---|---|---|---|---|---|---|",
             ]
         )
@@ -261,14 +285,41 @@ class QualityReport:
         lines.extend(
             [
                 "",
+                "## Single-turn run details",
+                "",
+                "| Item | Run | Pass | Grounding | Completeness | Uncertainty | Hallucination | Judge in/out | Judge prompt | Error |",
+                "|---|---|---|---|---|---|---|---|---|---|",
+            ]
+        )
+        for item in self.scores.single:
+            for run in sorted(
+                (
+                    run
+                    for run in self.runs
+                    if run.item_id == item.item_id
+                    and run.kind == SINGLE
+                ),
+                key=lambda run: run.run,
+            ):
+                lines.append(
+                    f"| `{item.item_id}` | {run.run + 1} | "
+                    f"{'PASS' if run.passed else 'FAIL'} | "
+                    f"{_verdict_cells(run)} | "
+                    f"{run.judge_tokens_in}/{run.judge_tokens_out} | "
+                    f"{_sha_text(run.judge_prompt_sha256)} | "
+                    f"{_error_text(run.error)} |"
+                )
+        lines.extend(
+            [
+                "",
                 "## Multi-turn (individual, never pooled)",
                 "",
-                "| Case | Run | Pass | Grounding | Completeness | Uncertainty | Hallucination | Tokens in/out | Cost | Latency | Judge |",
-                "|---|---|---|---|---|---|---|---|---|---|---|",
+                "| Case | Run | Pass | Grounding | Completeness | Uncertainty | Hallucination | Tokens in/out | Judge in/out | Cost | Latency | Judge time |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|",
             ]
         )
         if not self.scores.multi:
-            lines.append("| none | | | | | | | | | | |")
+            lines.append("| none | | | | | | | | | | | |")
         for item in self.scores.multi:
             for run in sorted(
                 (
@@ -279,20 +330,12 @@ class QualityReport:
                 ),
                 key=lambda run: run.run,
             ):
-                verdicts = [
-                    run.verdicts.get(name, "-")
-                    for name in (
-                        "grounding",
-                        "completeness",
-                        "uncertainty",
-                        "hallucination",
-                    )
-                ]
                 lines.append(
                     f"| `{item.item_id}` | {run.run + 1} | "
                     f"{'PASS' if run.passed else 'FAIL'} | "
-                    f"{' | '.join(verdicts)} | "
+                    f"{_verdict_cells(run)} | "
                     f"{run.tokens_in}/{run.tokens_out} | "
+                    f"{run.judge_tokens_in}/{run.judge_tokens_out} | "
                     f"{'n/a' if run.cost is None else f'{run.cost:.4f}'} | "
                     f"{run.latency_s:.1f}s | "
                     f"{run.judge_latency_s:.1f}s |"
@@ -321,7 +364,7 @@ def run_quality_set(
     *,
     k: int = K_DEFAULT,
     model: ModelClient | None = None,
-    judge_client: Any | None = None,
+    judge_client: JudgeClient | None = None,
     run_item: RunItem | None = None,
     input_cost_per_mtok: float | None = None,
     output_cost_per_mtok: float | None = None,
@@ -355,6 +398,8 @@ def run_quality_set(
         model=getattr(config, "model", "") or "",
         started_at=started_at,
         duration_s=time.monotonic() - started,
+        temperature=config.temperature,
+        base_url=config.base_url,
     )
 
 
@@ -414,7 +459,7 @@ def run_item_once(
     artifacts_root: Path,
     *,
     model: ModelClient | None = None,
-    judge_client: Any | None = None,
+    judge_client: JudgeClient | None = None,
     input_cost_per_mtok: float | None = None,
     output_cost_per_mtok: float | None = None,
 ) -> ItemRun:
@@ -520,6 +565,9 @@ def run_item_once(
         error=error or verdict.error,
         agent_prompt_sha256=agent_prompt_sha256,
         skill_index_sha256=skill_index_sha256,
+        judge_tokens_in=verdict.input_tokens,
+        judge_tokens_out=verdict.output_tokens,
+        judge_prompt_sha256=verdict.prompt_sha256,
     )
     (target / "case.json").write_text(
         json.dumps(
@@ -627,6 +675,17 @@ def _sha_text(value: str) -> str:
     return value[:12] if value else "n/a"
 
 
+def _verdict_cells(run: ItemRun) -> str:
+    return " | ".join(
+        run.verdicts.get(name, "-") for name in EXPECTED_KEYS
+    )
+
+
+def _error_text(text: str) -> str:
+    cleaned = " ".join(text.split())
+    return cleaned.replace("|", "\\|") if cleaned else "-"
+
+
 def _first(values: Iterable[str]) -> str:
     """The first value a run actually recorded, or ``""``."""
     return next((value for value in values if value), "")
@@ -667,6 +726,8 @@ def _single_item_payload(
         "passHatK": item.passed_hat_k,
         "tokensIn": sum(run.tokens_in for run in items),
         "tokensOut": sum(run.tokens_out for run in items),
+        "judgeTokensIn": sum(run.judge_tokens_in for run in items),
+        "judgeTokensOut": sum(run.judge_tokens_out for run in items),
         "cost": _sum_cost(items),
         "latencySeconds": round(
             sum(run.latency_s for run in items), 3
@@ -674,6 +735,18 @@ def _single_item_payload(
         "judgeLatencySeconds": round(
             sum(run.judge_latency_s for run in items), 3
         ),
+        "details": [
+            {
+                "run": run.run,
+                "passed": run.passed,
+                "verdicts": dict(run.verdicts),
+                "error": run.error,
+                "judgeTokensIn": run.judge_tokens_in,
+                "judgeTokensOut": run.judge_tokens_out,
+                "judgePromptSha256": run.judge_prompt_sha256,
+            }
+            for run in sorted(items, key=lambda run: run.run)
+        ],
     }
 
 
@@ -689,6 +762,8 @@ def _multi_payload(
         "name": item.item_id,
         "tokensIn": sum(run.tokens_in for run in items),
         "tokensOut": sum(run.tokens_out for run in items),
+        "judgeTokensIn": sum(run.judge_tokens_in for run in items),
+        "judgeTokensOut": sum(run.judge_tokens_out for run in items),
         "cost": _sum_cost(items),
         "latencySeconds": round(
             sum(run.latency_s for run in items), 3
@@ -704,6 +779,9 @@ def _multi_payload(
                 "diagnostics": dict(run.diagnostics),
                 "tokensIn": run.tokens_in,
                 "tokensOut": run.tokens_out,
+                "judgeTokensIn": run.judge_tokens_in,
+                "judgeTokensOut": run.judge_tokens_out,
+                "judgePromptSha256": run.judge_prompt_sha256,
                 "latencySeconds": round(run.latency_s, 3),
                 "judgeLatencySeconds": round(run.judge_latency_s, 3),
                 "cost": run.cost,

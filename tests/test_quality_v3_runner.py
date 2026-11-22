@@ -201,6 +201,49 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Grounding", summary)
         self.assertIn("pass", summary)
 
+    def test_a_single_run_reports_verdicts_error_and_judge_usage(
+        self,
+    ) -> None:
+        run = replace(
+            _run("fact-1", "single", "fact", 0, False),
+            verdicts={
+                "grounding": "fail",
+                "completeness": "pass",
+                "uncertainty": "pass",
+                "hallucination": "pass",
+            },
+            error="judge_error: boom",
+            judge_tokens_in=120,
+            judge_tokens_out=30,
+            judge_prompt_sha256="c" * 64,
+        )
+        report = QualityReport(
+            scores=QualityScores.from_runs([run], k=1),
+            runs=(run,),
+            set_version="v3.0",
+            content_hash="hash",
+            model="test-model",
+            started_at="now",
+            duration_s=1.0,
+            temperature=0.1,
+            base_url="http://127.0.0.1:1/v1",
+        )
+
+        payload = report.payload()
+        item = payload["singleTurn"]["items"][0]
+
+        self.assertEqual(item["details"][0]["verdicts"]["grounding"], "fail")
+        self.assertEqual(item["details"][0]["error"], "judge_error: boom")
+        self.assertEqual(
+            (item["judgeTokensIn"], item["judgeTokensOut"]), (120, 30)
+        )
+        self.assertEqual(payload["judgePromptSha256"], "c" * 64)
+        self.assertEqual(payload["temperature"], 0.1)
+        self.assertEqual(payload["baseUrl"], "http://127.0.0.1:1/v1")
+        summary = report.markdown()
+        self.assertIn("Single-turn run details", summary)
+        self.assertIn("judge_error: boom", summary)
+
 
 class RunSetTests(unittest.TestCase):
     def test_the_frozen_set_runs_k_times_and_reports_both_strata(self) -> None:
@@ -258,6 +301,8 @@ class RunSetTests(unittest.TestCase):
         payload = report.payload()
         self.assertEqual(payload["agentPromptSha256"], agent)
         self.assertEqual(payload["skillIndexSha256"], skill)
+        self.assertEqual(payload["temperature"], _config().temperature)
+        self.assertEqual(payload["baseUrl"], _config().base_url)
         self.assertIn("Agent prompt", report.markdown())
 
 
