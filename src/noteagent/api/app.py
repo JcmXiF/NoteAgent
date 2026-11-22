@@ -129,7 +129,7 @@ from noteagent.api.session_access import (
 from noteagent.agent.store import SessionStore, summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
-from noteagent.prompts.system import ensure_default_sections
+from noteagent.prompts.system import sync_default_sections
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
 from noteagent.ingest.revision_inbox import (
@@ -807,7 +807,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         try:
             store.create(session_id, body.title)
             if deps.seed_system_sections:
-                ensure_default_sections(store, session_id, layout)
+                sync_default_sections(store, session_id, layout)
         except FileExistsError as err:
             raise CodedHTTPException(
                 409,
@@ -894,7 +894,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         if session_busy(deps, session_id):
             raise _session_busy_refusal(session_id)
         if deps.seed_system_sections:
-            ensure_default_sections(store, session_id, layout)
+            sync_default_sections(store, session_id, layout)
         try:
             runtime = session_runtime(deps, store, layout)
         except LlmConfigError as err:

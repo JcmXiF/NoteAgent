@@ -106,7 +106,7 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
                 )
             )
 
-    reset_start = _after_reset(records)
+    reset_start = context_start(records)
     start, summary = _after_compaction(records, reset_start)
 
     sections: dict[str, str] = {}
@@ -252,7 +252,7 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
     )
 
 
-def _after_reset(records: Sequence[Mapping[str, object]]) -> int:
+def context_start(records: Sequence[Mapping[str, object]]) -> int:
     """Where the latest reset says the context starts, or zero."""
     start = 0
     for index, entry in enumerate(records):
