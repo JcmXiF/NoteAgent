@@ -476,6 +476,72 @@ class WritingComposeTests(unittest.TestCase):
         self.assertEqual(section["body"], "一")
         self.assertEqual(section["version"], 1)
 
+    def test_spellings_of_one_page_share_one_draft(self) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        section = {
+            "id": "definition",
+            "heading": "定义",
+            "body": "熵是信息的平均量。",
+            "citations": [frame_id],
+        }
+
+        first = self.compose(tools, [section], wiki="concepts/信息熵")
+        self.assertFalse(first.meta.get("error"), first.content)
+        self.assertEqual(
+            json.loads(first.content)["wikiFile"], WIKI_FILE
+        )
+
+        second = self.compose(
+            tools,
+            [section],
+            base=1,
+            wiki="[[wiki/concepts/信息熵.md]]",
+        )
+        self.assertFalse(second.meta.get("error"), second.content)
+
+        pages = draft_pages(WritingStateStore(self.layout).load().draft)
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["wikiFile"], WIKI_FILE)
+
+    def test_an_old_draft_key_moves_to_the_canonical_key(self) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        section = {
+            "id": "definition",
+            "heading": "定义",
+            "body": "熵是信息的平均量。",
+            "citations": [frame_id],
+        }
+        self.compose(tools, [section])
+        store = WritingStateStore(self.layout)
+        state = store.load()
+        page = dict(draft_pages(state.draft)[0])
+        page["wikiFile"] = "concepts/信息熵"
+        store.save(replace(state, draft={"pages": [page]}))
+
+        result = self.compose(
+            tools, [section], base=1, wiki="concepts/信息熵"
+        )
+
+        self.assertFalse(result.meta.get("error"), result.content)
+        pages = draft_pages(WritingStateStore(self.layout).load().draft)
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["wikiFile"], WIKI_FILE)
+
+    def test_an_invalid_wiki_file_names_the_right_form(self) -> None:
+        tools = self.tools()
+        for wiki in ("../secret", "/etc/passwd", "C:/secret"):
+            with self.subTest(wiki=wiki):
+                result = self.compose(
+                    tools,
+                    [{"id": "definition", "heading": "定义"}],
+                    wiki=wiki,
+                )
+
+                self.assertTrue(result.meta.get("error"))
+                self.assertIn("concepts/信息熵", result.content)
+
 
 if __name__ == "__main__":
     unittest.main()

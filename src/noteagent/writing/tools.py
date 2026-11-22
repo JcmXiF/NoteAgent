@@ -32,6 +32,7 @@ from noteagent.writing.state import (
     WRITING_ID,
     WritingState,
     WritingStateStore,
+    canonical_wiki_file,
     draft_page_for,
     draft_pages,
     draft_section_for,
@@ -795,7 +796,8 @@ def compose_wiki_tool(
 
     def compose_wiki(arguments, context) -> ToolResult:
         _take_lease(layout, context, moment)
-        wiki_file = str(arguments["wikiFile"]).strip()
+        raw_file = str(arguments["wikiFile"]).strip()
+        wiki_file = canonical_wiki_file(raw_file)
         base_version = arguments.get("baseDraftVersion", 0)
         if (
             isinstance(base_version, bool)
@@ -831,7 +833,7 @@ def compose_wiki_tool(
                 }
             )
         _saved, page, changed = store.compose_draft(
-            wiki_file,
+            raw_file,
             sections,
             base_version,
             overwrite=bool(arguments.get("overwrite", False)),
@@ -947,7 +949,8 @@ def write_wiki_tool(
 
     def write_wiki(arguments, context) -> ToolResult:
         _take_lease(layout, context, moment)
-        wiki_file = str(arguments["wikiFile"]).strip()
+        raw_file = str(arguments["wikiFile"]).strip()
+        wiki_file = canonical_wiki_file(raw_file)
         draft_version = arguments["draftVersion"]
         if (
             isinstance(draft_version, bool)
@@ -959,7 +962,7 @@ def write_wiki_tool(
             )
         result = publish_page(
             layout,
-            wiki_file,
+            raw_file,
             draft_version,
             run_id=context.run_id,
             session_id=context.session_id,

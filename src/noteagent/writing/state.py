@@ -18,9 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
+from noteagent.ingest.parse_file_blocks import is_safe_ingest_path
 from noteagent.io.atomic import write_bytes_atomic, write_text_atomic
 from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.project.layout import ProjectLayout
+from noteagent.wiki.links import normalize_wikilink_target
 
 #: The schema version written by this module. A state from another schema is not
 #: read as if it were this one.
@@ -541,9 +543,10 @@ class WritingStateStore:
         from. The page's version moves on by one, and a caller built on an
         older page is refused.
         """
-        key = wiki_file.strip()
-        if not key:
+        raw_key = wiki_file.strip()
+        if not raw_key:
             raise ValueError("a draft page needs a wiki file")
+        key = canonical_wiki_file(raw_key)
         if base_version < 0:
             raise ValueError("baseDraftVersion must be non-negative")
         for attempt in range(2):
@@ -552,7 +555,11 @@ class WritingStateStore:
                 str(frame.get("id")): frame for frame in state.frames
             }
             pages = [dict(page) for page in draft_pages(state.draft)]
-            index = _page_index(pages, key)
+            index = _page_index_for(pages, raw_key)
+            if index is not None and pages[index]["wikiFile"] != key:
+                # An older draft kept the caller's spelling; move it onto the
+                # canonical key instead of making a second draft.
+                pages[index]["wikiFile"] = key
             if index is None:
                 if base_version != 0:
                     raise ValueError(
@@ -806,7 +813,7 @@ class WritingStateStore:
                 state, wiki_file, draft_version
             )
             pages = [dict(item) for item in draft_pages(state.draft)]
-            index = _page_index(pages, wiki_file)
+            index = _page_index_for(pages, wiki_file)
             if index is None:
                 raise ValueError(f"no draft page: {wiki_file}")
             pages[index] = {
@@ -1394,19 +1401,53 @@ def row_version(row: Mapping[str, object]) -> int:
     return max(0, value)
 
 
+def canonical_wiki_file(value: str) -> str:
+    """The one key for a wiki page: ``wiki/<slug>.md``.
+
+    Accepts a slug (``concepts/熵``), a wiki path (``wiki/concepts/熵.md``)
+    or a wikilink (``[[concepts/熵]]``). An input that would not be a safe
+    page under ``wiki/`` is refused with the forms that work.
+    """
+    raw = str(value or "").strip()
+    if raw.startswith("[[") and raw.endswith("]]"):
+        raw = raw[2:-2].strip()
+    raw = raw.replace("\\", "/").strip()
+    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+        raise ValueError(
+            f"{value!r} is not a wiki page; use a slug such as "
+            "'concepts/信息熵' or a path such as 'wiki/concepts/信息熵.md'"
+        )
+    slug = normalize_wikilink_target(raw)
+    candidate = f"wiki/{slug}.md"
+    if not slug or not is_safe_ingest_path(candidate):
+        raise ValueError(
+            f"{value!r} is not a wiki page; use a slug such as "
+            "'concepts/信息熵' or a path such as 'wiki/concepts/信息熵.md'"
+        )
+    return candidate
+
+
 def draft_page_for(
     draft: Mapping[str, object], wiki_file: str
 ) -> Mapping[str, object] | None:
-    """One draft page by its wiki file, if it has been composed."""
-    key = wiki_file.strip()
-    return next(
-        (
-            page
-            for page in draft_pages(draft)
-            if str(page.get("wikiFile")) == key
-        ),
-        None,
-    )
+    """One draft page by its wiki file, if it has been composed.
+
+    A legacy draft composed under a non-canonical key still answers, because
+    the canonical key is tried first and the raw one second.
+    """
+    pages = draft_pages(draft)
+    index = _page_index_for(pages, wiki_file)
+    return None if index is None else pages[index]
+
+
+def _key_candidates(value: str) -> tuple[str, ...]:
+    """The canonical key first, then the caller's own spelling for legacy rows."""
+    raw = str(value or "").strip()
+    try:
+        canonical = canonical_wiki_file(raw)
+    except ValueError:
+        return (raw,) if raw else ()
+    return (canonical,) if canonical == raw else (canonical, raw)
 
 
 def _checked_draft_page(
@@ -1451,6 +1492,17 @@ def _page_index(
         ),
         None,
     )
+
+
+def _page_index_for(
+    pages: Sequence[Mapping[str, object]], wiki_file: str
+) -> int | None:
+    """The index of the page a canonical or legacy spelling addresses."""
+    for key in _key_candidates(wiki_file):
+        index = _page_index(pages, key)
+        if index is not None:
+            return index
+    return None
 
 
 def _section_index(

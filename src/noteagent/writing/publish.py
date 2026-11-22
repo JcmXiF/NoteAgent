@@ -35,6 +35,7 @@ from noteagent.util.run_log import RunLogger
 from noteagent.writing.state import (
     SECTION_STALE_REASONS,
     WritingStateStore,
+    canonical_wiki_file,
     draft_sections,
     section_reason,
 )
@@ -62,9 +63,11 @@ def publish_page(
     """Write one draft page, then mark that version published in the state."""
     moment = clock or SystemClock()
     store = WritingStateStore(layout, clock=moment)
-    state, page = store.checked_draft_page(
-        wiki_file, draft_version
-    )
+    raw_file = str(wiki_file or "").strip()
+    # The disk path is canonical; the state lookup also accepts the caller's
+    # older spelling, so a draft composed before canonicalization still goes out.
+    target_file = canonical_wiki_file(raw_file)
+    state, page = store.checked_draft_page(raw_file, draft_version)
     if str(page.get("status") or "") == "written":
         return PublishResult(
             written_at=str(page.get("writtenAt") or ""),
@@ -75,7 +78,7 @@ def publish_page(
 
     sections = draft_sections(page)
     if not sections:
-        raise ValueError(f"draft {wiki_file} has no sections")
+        raise ValueError(f"draft {target_file} has no sections")
     selected = {
         str(item.get("id")): item for item in state.selected_pages
     }
@@ -153,9 +156,9 @@ def publish_page(
             )
         rendered.append(f"{marker}## {heading}\n\n{body}\n")
 
-    title = str(page.get("title") or Path(wiki_file).stem)
+    title = str(page.get("title") or Path(target_file).stem)
     body = f"# {title}\n\n" + "\n".join(rendered)
-    target = resolve_wiki_write_path(layout, wiki_file)
+    target = resolve_wiki_write_path(layout, target_file)
     if target.is_file():
         existing = target.read_text(encoding="utf-8")
         if parse_page(existing).has_frontmatter:
@@ -185,7 +188,7 @@ def publish_page(
 
     result = write_wiki_page(
         layout,
-        wiki_file,
+        target_file,
         content,
         mode="overwrite" if target.is_file() else "create",
         write_context=WriteContext(
@@ -194,7 +197,7 @@ def publish_page(
             actor="agent",
         ),
         run_logger=RunLogger.for_layout(layout),
-        source_identity=wiki_file,
+        source_identity=target_file,
     )
     hard = [
         warning
@@ -206,7 +209,7 @@ def publish_page(
     effect_ids = (result.effect_id,) if result.effect_id else ()
     written_at = iso_timestamp(moment)
     store.mark_draft_written(
-        wiki_file, draft_version, effect_ids, written_at
+        raw_file, draft_version, effect_ids, written_at
     )
     return PublishResult(
         written_at=written_at,

@@ -249,6 +249,48 @@ class WritingPublishTests(unittest.TestCase):
         self.assertIn("version", result.content)
         self.assertFalse(self.wiki_path().exists())
 
+    def test_a_legacy_draft_key_publishes_to_the_canonical_page(
+        self,
+    ) -> None:
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = self.prepared(tools)
+        store = WritingStateStore(self.layout)
+        state = store.load()
+        page = dict(draft_pages(state.draft)[0])
+        page["wikiFile"] = "concepts/信息熵"
+        store.save(replace(state, draft={"pages": [page]}))
+
+        result = write_draft(
+            tools,
+            wiki_file="concepts/信息熵",
+            draft_version=draft_version,
+        )
+
+        self.assertFalse(result.meta.get("error"), result.content)
+        payload = json.loads(result.content)
+        self.assertEqual(payload["wikiFile"], WIKI_FILE)
+        self.assertTrue(self.wiki_path().is_file())
+
+    def test_a_slug_publishes_to_the_canonical_page(self) -> None:
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = prepare_draft(
+            tools,
+            self.layout,
+            wiki_file="concepts/信息熵",
+            body="熵是信息的平均量。",
+        )
+
+        result = write_draft(
+            tools,
+            wiki_file="concepts/信息熵",
+            draft_version=draft_version,
+        )
+
+        self.assertFalse(result.meta.get("error"), result.content)
+        payload = json.loads(result.content)
+        self.assertEqual(payload["wikiFile"], WIKI_FILE)
+        self.assertTrue(self.wiki_path().is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
