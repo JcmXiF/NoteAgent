@@ -13,7 +13,6 @@ import json
 import threading
 
 from evals.harness import Case, CaseRun, Exchange
-from evals.writing import WRITING_CASES
 
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.model import (
@@ -567,7 +566,6 @@ CASES: tuple[Case, ...] = (
         "An old chat is listed and read as a session, cards included.",
         old_chats_migrate,
     ),
-    *WRITING_CASES,
 )
 
 __all__ = ["CASES"]

@@ -33,7 +33,6 @@ from evals.support import FixedClock, SequentialIds
 
 from noteagent.agent.model import ModelClient
 from noteagent.agent.tools import ToolRegistry
-from noteagent.writing.tools import WebFetchFn, WebSearchFn
 from noteagent.api import projects as projects_api
 from noteagent.api.app import create_app
 from noteagent.api.deps import AppDeps
@@ -202,7 +201,6 @@ class CaseRun:
         self.repo.mkdir(parents=True)
         self.layout = init_project(self.repo / "projects" / "demo")
         self.checks: list[Check] = []
-        self.metrics: list[tuple[str, object]] = []
         self.log: list[str] = []
         self.clock = FixedClock()
         self.ids = SequentialIds()
@@ -250,9 +248,6 @@ class CaseRun:
         tools: ToolRegistry | None = None,
         seed_system_sections: bool = False,
         max_turns: int = 50,
-        web_search: WebSearchFn | None = None,
-        web_fetch: WebFetchFn | None = None,
-        writing_skill: bool | None = None,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -264,9 +259,6 @@ class CaseRun:
             settings={"model": "faux"},
             seed_system_sections=seed_system_sections,
             max_turns=max_turns,
-            web_search=web_search,
-            web_fetch=web_fetch,
-            writing_skill=writing_skill,
         )
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
@@ -294,7 +286,6 @@ class CaseRun:
 
     def metric(self, name: str, value: object) -> None:
         """One reported number for the run's report; never a pass/fail check."""
-        self.metrics.append((name, value))
 
     def note(self, text: str) -> None:
         self.log.append(text)
@@ -332,7 +323,6 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
             time.monotonic() - started,
             tuple(run.api.exchanges) if run is not None and run.api else (),
             tuple(run.log) if run is not None else (),
-            tuple(run.metrics) if run is not None else (),
         )
         if not result.passed:
             try:

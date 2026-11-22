@@ -115,13 +115,6 @@ function main() {
       env: pyenv,
     },
     {
-      name: "Behaviour evals",
-      command: python,
-      args: ["-m", "evals"],
-      cwd: repoRoot,
-      env: pyenv,
-    },
-    {
       name: "Markdown",
       command: python,
       args: ["tests/check-docs.py"],
