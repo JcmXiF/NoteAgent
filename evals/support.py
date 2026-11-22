@@ -8,6 +8,7 @@ when a test helper does.
 
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from datetime import datetime, timezone
@@ -50,4 +51,25 @@ def remove_tree(path: Path) -> None:
             time.sleep(0.1)
 
 
-__all__ = ["FixedClock", "SequentialIds", "remove_tree"]
+def env_flag(name: str) -> bool:
+    """Whether an environment flag is set to a true value, not just present."""
+    return os.environ.get(name, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def in_ci() -> bool:
+    """Whether the run is in CI; the quality eval refuses there."""
+    return env_flag("CI") or env_flag("GITHUB_ACTIONS")
+
+
+__all__ = [
+    "FixedClock",
+    "SequentialIds",
+    "env_flag",
+    "in_ci",
+    "remove_tree",
+]
