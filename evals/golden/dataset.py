@@ -326,7 +326,7 @@ def _query(item: Any, index: int, path: Path) -> GoldenQuery:
     if not 2 <= len(key_points) <= 5:
         raise GoldenError(f"{where} key_points must be 2-5")
     trace = _trace(
-        item.get("expected_trace"), qtype, qid, f"{where} expected_trace"
+        item.get("expected_trace"), f"{where} expected_trace"
     )
     forbidden = _strings(item.get("forbidden"), f"{where} forbidden")
     raw_sources = _strings(
@@ -350,9 +350,7 @@ def _query(item: Any, index: int, path: Path) -> GoldenQuery:
     )
 
 
-def _trace(
-    value: Any, qtype: str, qid: str, where: str
-) -> ExpectedTrace:
+def _trace(value: Any, where: str) -> ExpectedTrace:
     if not isinstance(value, Mapping):
         raise GoldenError(f"{where} must be a mapping")
     _reject_unknown(value, _TRACE_KEYS, where)
@@ -395,26 +393,6 @@ def _trace(
             raise GoldenError(
                 f"{where} propose_interface must be one of "
                 f"{', '.join(allowed)} for {propose_job}"
-            )
-    if qtype == "task":
-        if wait != "proposed":
-            raise GoldenError(f"{where}: a task must expect wait proposed")
-        if propose is not True:
-            raise GoldenError(
-                f"{where}: a task must expect propose_valid true"
-            )
-    else:
-        if wait != "absent":
-            raise GoldenError(
-                f"{where}: a non-task must expect wait absent"
-            )
-        if propose is not None:
-            raise GoldenError(
-                f"{where}: propose_valid is only for tasks"
-            )
-        if propose_job is not None:
-            raise GoldenError(
-                f"{where}: propose_job/interface are only for tasks"
             )
     return ExpectedTrace(
         tools_any=tools,

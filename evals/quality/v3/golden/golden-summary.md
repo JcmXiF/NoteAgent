@@ -1,4 +1,4 @@
-# Golden queries v2 — review sheet
+# Golden queries v3.1 — review sheet
 
 Corpus files: 10 · queries: 24
 
@@ -19,30 +19,23 @@ Corpus files: 10 · queries: 24
 | gap-medium-02 | gap | medium | wiki 里有互信息或条件熵的 source clips 页吗？ |
 | gap-hard-01 | gap | hard | wiki 里有率失真（rate-distortion）或信道容量的页面/定义吗？ |
 | gap-hard-02 | gap | hard | wiki 里有 KL 散度的链式法则或数据处理不等式的页面/完整表述吗？ |
-| task-easy-01 | task | easy | 把 wiki 里的 5 个概念整理成一个对比页。 |
-| task-medium-01 | task | medium | 为这个信息论 wiki 做一个学习路径/章节大纲。 |
-| task-medium-02 | task | medium | 把 KL 散度、互信息、条件熵的关系整理成一页 overview。 |
-| task-hard-01 | task | hard | 对这个 wiki 做一次缺口分析，提议应该补哪些页面。 |
-| task-hard-02 | task | hard | 把 3 个 source clips 页和 5 个 concept 页整理成一个来源对比页。 |
-| propose-plan-source | task | easy | 从资料面发起一次规划：为这个 wiki 出一份整理方案。 |
-| propose-plan-board | task | medium | 在计划板发起一次规划：把这 5 个概念整理成学习路径。 |
-| propose-compile-plan-board | task | medium | 在计划板发起一次编译：把这 5 个概念整理成对比页。 |
-| propose-compile-compile-board | task | hard | 在编译板发起一次编译：把 3 个 source 页和 5 个 concept 页整理成来源对比页。 |
+| task-easy-01 | task | easy | 把 wiki 里的 5 个概念整理成一个对比页，并写入 wiki。 |
+| task-easy-02 | task | easy | 为这个 wiki 出一份主题索引，按主题分组列出对应页面，并写入 wiki。 |
+| task-medium-01 | task | medium | 为这个信息论 wiki 做一份学习路径/章节大纲，并写入 wiki。 |
+| task-medium-02 | task | medium | 把 KL 散度、互信息、条件熵的关系整理成一页 overview，并写入 wiki。 |
+| task-medium-03 | task | medium | 把这 5 个概念设计成一周学习计划，按天安排阅读顺序与练习，并写入 wiki。 |
+| task-medium-04 | task | medium | 把这 5 个概念整理成一张对照表页，每行一个概念、每列一个维度，并写入 wiki。 |
+| task-hard-01 | task | hard | 对这个 wiki 做一次缺口分析，把结论写入 wiki（新建缺口页或补一节）。 |
+| task-hard-02 | task | hard | 把 3 个 source clips 页和 5 个 concept 页整理成一个来源对比页，并写入 wiki。 |
+| task-hard-03 | task | hard | 把 3 个 source 页与 5 个 concept 页整理成来源覆盖矩阵页（source × concept 是否覆盖），并写入 wiki。 |
 
 ## Counts
 
 - by type: {'fact': 5, 'synthesis': 5, 'gap': 5, 'task': 9}
 - by difficulty: {'easy': 5, 'medium': 10, 'hard': 9}
 
-## Propose variants
-
-- propose-plan-source: plan/source
-- propose-plan-board: plan/plan_board
-- propose-compile-plan-board: compile/plan_board
-- propose-compile-compile-board: compile/compile_board
-
 ## Validation
+
 OK
 
-corpus_sha256: `f3fd67bb27ba9afd371a0bdbc90fa3f5fa413a44f42c17d806fb0a9c7d013924`
-queries_sha256: `e7326cf358814ee5b041a1efe47d3c097257a1228122f093d865b48b499d3f69`
+hashes: see manifest.yaml

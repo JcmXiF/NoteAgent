@@ -188,10 +188,24 @@ class WeightedRubricTests(unittest.TestCase):
 
 
 class RealQualitySetTests(unittest.TestCase):
+    def test_every_task_is_a_direct_write(self) -> None:
+        quality = load_quality_set()
+
+        tasks = [
+            query
+            for query in quality.single_turn
+            if query.type == "task"
+        ]
+        self.assertEqual(len(tasks), 9)
+        for query in tasks:
+            with self.subTest(query=query.id):
+                self.assertEqual(query.expected_trace.wait, "absent")
+                self.assertIsNone(query.expected_trace.propose_valid)
+
     def test_the_real_set_is_frozen(self) -> None:
         quality = load_quality_set()
 
-        self.assertEqual(quality.version, "v3.0")
+        self.assertEqual(quality.version, "v3.1")
         self.assertEqual(len(quality.single_turn), 24)
         self.assertEqual(
             dict(quality.golden.counts["by_type"]),

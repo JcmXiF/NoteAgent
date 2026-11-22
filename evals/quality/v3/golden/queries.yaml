@@ -384,248 +384,239 @@
 - id: task-easy-01
   type: task
   difficulty: easy
-  question: "把 wiki 里的 5 个概念整理成一个对比页。"
+  question: "把 wiki 里的 5 个概念整理成一个对比页，并写入 wiki。"
   corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
   reference_answer: |
-    我会把信息熵、联合熵、条件熵、KL 散度、互信息整理成一个对比页，
-    按‘定义/公式、度量对象、关键性质、彼此关系、来源’几列组织。
-    需要你在计划板进入编译后才开始写；现在我还没有写入任何页面。
+    我把信息熵、联合熵、条件熵、KL 散度、互信息整理成一页对比页，
+    按‘定义/公式、度量对象、关键性质、彼此关系、来源’组织；每个 section
+    的引用都来自 seeded wiki 的页面，并用 write_wiki 发布。发布后说明
+    写入了哪一页、各 section 使用的来源，以及任何 stale/missing 警告。
   key_points:
-    - "提议整理成对比页"
-    - "说明对比结构/维度（定义、公式、性质、关系、来源）"
-    - "说明需要人进入作业后才开始写"
-    - "不声称已经写入或完成编译"
+    - "说明写入了哪一页（页面 slug 或标题）"
+    - "对比维度覆盖定义/公式、度量对象、性质、关系、来源"
+    - "引用来自 seeded wiki 的页面/片段"
+    - "报告发布结果与任何警告"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
+    wait: absent
     max_tool_rounds: 4
     no_error: true
   forbidden:
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "使用无效的 propose interface（如 compile 从 source）"
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
   raw_sources: []
-  notes: "对比页任务；只需要 propose，不需要真写。"
+  notes: "v3.1：compose 草稿 + write_wiki 发布；不再 propose。"
+
+- id: task-easy-02
+  type: task
+  difficulty: easy
+  question: "为这个 wiki 出一份主题索引，按主题分组列出对应页面，并写入 wiki。"
+  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
+  reference_answer: |
+    我把主题索引写成页面：按‘基础量、联合与条件、分布差异与共享信息’分组，
+    每组列出对应页面与一句话主题，用 write_wiki 发布，并说明页面与各
+    section 的来源。
+  key_points:
+    - "按主题分组给出现有页面"
+    - "每组说明该主题覆盖的范围"
+    - "说明写入了哪一页与各 section 的来源"
+    - "引用来自 seeded wiki 的页面/片段"
+  expected_trace:
+    tools_any: [search, wiki_read]
+    wait: absent
+    max_tool_rounds: 4
+    no_error: true
+  forbidden:
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
+  raw_sources: []
+  notes: "v3.1：原 propose-plan-source 改为主题索引写页任务。"
 
 - id: task-medium-01
   type: task
   difficulty: medium
-  question: "为这个信息论 wiki 做一个学习路径/章节大纲。"
+  question: "为这个信息论 wiki 做一份学习路径/章节大纲，并写入 wiki。"
   corpus_pages: [concepts/信息熵, concepts/联合熵, concepts/条件熵, concepts/KL散度, concepts/互信息]
   reference_answer: |
-    我会提议一个学习路径：先信息熵与自信息，再联合熵/条件熵，然后
+    我把学习路径写成页面：先信息熵与自信息，再联合熵/条件熵，然后
     KL 散度与互信息，最后用链式法则和关系表串起来；并标出交叉熵、
-    JS 散度、数据处理不等式等缺口。需要你在计划板进入作业后才开始写；
-    现在不会生成页面。
+    JS 散度、数据处理不等式等缺口。用 write_wiki 发布，并说明写入了
+    哪一页、各 section 的来源与任何警告。
   key_points:
     - "给出从熵到联合/条件熵、KL/互信息、关系/链式法则的顺序"
     - "标出缺口主题"
-    - "说明人进入作业后才开始写"
-    - "不声称已写入/完成"
+    - "说明写入了哪一页与各 section"
+    - "引用来自 seeded wiki 的页面/片段"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
+    wait: absent
     max_tool_rounds: 4
     no_error: true
   forbidden:
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "使用无效的 propose interface"
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
   raw_sources: []
-  notes: "学习路径；propose。"
+  notes: "v3.1：学习路径写页任务。"
 
 - id: task-medium-02
   type: task
   difficulty: medium
-  question: "把 KL 散度、互信息、条件熵的关系整理成一页 overview。"
+  question: "把 KL 散度、互信息、条件熵的关系整理成一页 overview，并写入 wiki。"
   corpus_pages: [concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/信息熵, concepts/联合熵]
   reference_answer: |
-    我会把三者的关系整理成一页 overview：互信息是联合分布与边缘分布乘积
+    我把三者的关系写成一页 overview：互信息是联合分布与边缘分布乘积
     之间的 KL 散度，也等于 H(X)-H(X|Y)=H(Y)-H(Y|X)；条件熵是剩余不确定性，
-    KL 是分布差异；再用链式关系 H(X,Y)=H(X)+H(Y|X) 串起来。需要你
-    在计划板进入作业后才开始写。
+    KL 是分布差异；再用链式关系 H(X,Y)=H(X)+H(Y|X) 串起来。用 write_wiki
+    发布，并说明页面与各 section 的来源。
   key_points:
     - "互信息=联合与乘积的 KL"
     - "I=H(X)-H(X|Y)=H(Y)-H(Y|X)"
     - "条件熵=剩余不确定性；KL=分布差异"
-    - "说明人进入作业后才开始写"
+    - "说明写入了哪一页与各 section 的来源"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
+    wait: absent
     max_tool_rounds: 4
     no_error: true
   forbidden:
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "使用无效的 propose interface"
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
   raw_sources: []
-  notes: "关系 overview；propose。"
+  notes: "v3.1：关系 overview 写页任务。"
+
+- id: task-medium-03
+  type: task
+  difficulty: medium
+  question: "把这 5 个概念设计成一周学习计划，按天安排阅读顺序与练习，并写入 wiki。"
+  corpus_pages: [concepts/信息熵, concepts/联合熵, concepts/条件熵, concepts/KL散度, concepts/互信息]
+  reference_answer: |
+    我把一周学习计划写成页面：周一信息熵与自信息，周二联合熵，周三条件熵，
+    周四 KL 散度，周五互信息，周末用关系表与练习串起来；每天给出阅读页面
+    与一个小练习。用 write_wiki 发布，并说明页面与各 section 的来源。
+  key_points:
+    - "给出按天安排的五天阅读顺序"
+    - "每天给出对应页面与练习"
+    - "说明写入了哪一页与各 section 的来源"
+    - "引用来自 seeded wiki 的页面/片段"
+  expected_trace:
+    tools_any: [search, wiki_read]
+    wait: absent
+    max_tool_rounds: 4
+    no_error: true
+  forbidden:
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
+  raw_sources: []
+  notes: "v3.1：原 propose-plan-board 改为一周学习计划写页任务。"
+
+- id: task-medium-04
+  type: task
+  difficulty: medium
+  question: "把这 5 个概念整理成一张对照表页，每行一个概念、每列一个维度，并写入 wiki。"
+  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
+  reference_answer: |
+    我把 5 个概念整理成对照表页：每行一个概念，列包括定义/公式、度量对象、
+    关键性质、与其他概念的关系、来源；表后用短段解释表中最重要的关系。
+    用 write_wiki 发布，并说明页面与各 section 的来源。
+  key_points:
+    - "表每行一个概念、每列一个维度"
+    - "维度覆盖定义/公式、度量对象、性质、关系、来源"
+    - "说明写入了哪一页与各 section 的来源"
+    - "引用来自 seeded wiki 的页面/片段"
+  expected_trace:
+    tools_any: [search, wiki_read]
+    wait: absent
+    max_tool_rounds: 4
+    no_error: true
+  forbidden:
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
+    - "声称写入了不存在的页面"
+  raw_sources: []
+  notes: "v3.1：原 propose-compile-plan-board 改为对照表写页任务。"
 
 - id: task-hard-01
   type: task
   difficulty: hard
-  question: "对这个 wiki 做一次缺口分析，提议应该补哪些页面。"
+  question: "对这个 wiki 做一次缺口分析，把结论写入 wiki（新建缺口页或补一节）。"
   corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵, sources/信息熵-clips, sources/kl散度相对熵-clips, sources/联合熵-clips]
   reference_answer: |
-    我会提议一次缺口分析：现有页面覆盖五个核心概念，但没有交叉熵、
+    我把缺口分析写入 wiki：现有页面覆盖五个核心概念，但没有交叉熵、
     JS 散度、率失真/信道容量、链式法则/数据处理不等式的独立页；
-    此外互信息/条件熵没有独立 source clips 页。需要你在计划板/编译板
-    进入作业后才开始写；现在不会创建页面。
+    此外互信息/条件熵没有独立 source clips 页。发布后说明写入了哪一页
+    或哪一节，以及引用来源与任何警告。
   key_points:
     - "列出缺口：交叉熵、JS、率失真/信道容量、链式/数据处理"
     - "指出互信息/条件熵 source clips 缺失"
-    - "说明人进入作业后才开始写"
-    - "不声称已创建页面"
+    - "说明写入了哪一页或哪一节"
+    - "引用来自 seeded wiki 的页面/片段"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
+    wait: absent
     max_tool_rounds: 6
     no_error: true
   forbidden:
-    - "声称已经创建页面或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "使用无效的 propose interface"
+    - "声称没有写入或仍需人工确认"
+    - "声称写入了不存在的页面"
+    - "编造 wiki 没有的公式、数字或来源"
   raw_sources: []
-  notes: "缺口分析；propose。"
+  notes: "v3.1：缺口分析写页任务。"
 
 - id: task-hard-02
   type: task
   difficulty: hard
-  question: "把 3 个 source clips 页和 5 个 concept 页整理成一个来源对比页。"
-  corpus_pages: [sources/信息熵-clips, sources/kl散度相对熵-clips, sources/联合熵-clips, concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
+  question: "把 3 个 source clips 页和 5 个 concept 页整理成一个来源对比页，并写入 wiki。"
+  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/联合熵, concepts/互信息, concepts/条件熵, sources/信息熵-clips, sources/kl散度相对熵-clips, sources/联合熵-clips]
   reference_answer: |
-    我会把 3 个 clips 页（信息熵、KL/相对熵、联合熵）和 5 个概念页
-    整理成一个来源对比页，按‘source — 覆盖的 concept — 关键 clip/来源’
-    组织，并标出没有独立 clips 页的互信息/条件熵。需要你在计划板
-    进入作业后才开始写；现在不会写入。
+    我把 3 个 clips 页（信息熵、KL/相对熵、联合熵）和 5 个概念页
+    整理成来源对比页，按‘source — 覆盖的 concept — 关键 clip/来源’组织，
+    并标出没有独立 clips 页的互信息/条件熵。用 write_wiki 发布，并说明
+    页面与各 section 的来源。
   key_points:
     - "对比 3 个 source clips 页与 5 个 concept 页"
     - "按 source/概念/关键 clip 组织"
     - "标出互信息/条件熵没有独立 clips 页"
-    - "说明人进入作业后才开始写"
+    - "说明写入了哪一页与各 section 的来源"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
+    wait: absent
     max_tool_rounds: 6
     no_error: true
   forbidden:
     - "把不存在的 clips 页说成存在"
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "使用无效的 propose interface"
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
   raw_sources: []
-  notes: "来源对比；propose。"
+  notes: "v3.1：来源对比写页任务。"
 
-- id: propose-plan-source
-  type: task
-  difficulty: easy
-  question: "从资料面发起一次规划：为这个 wiki 出一份整理方案。"
-  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
-  reference_answer: |
-    我会从资料面发起一次规划：先给出整理方案（页面、主题、覆盖范围），
-    需要你在资料面按原来的按钮进入规划后才开始执行；现在不写页面。
-  key_points:
-    - "提议一次规划（plan）"
-    - "说明从资料面的规划入口进入"
-    - "不声称已经写入或执行"
-  expected_trace:
-    tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
-    propose_job: plan
-    propose_interface: source
-    max_tool_rounds: 4
-    no_error: true
-  forbidden:
-    - "声称已经写入或完成规划"
-    - "自动进入作业、不等人类确认"
-    - "提议 compile 或无效 interface"
-  raw_sources: []
-  notes: "propose 变体：plan/source。"
-
-- id: propose-plan-board
-  type: task
-  difficulty: medium
-  question: "在计划板发起一次规划：把这 5 个概念整理成学习路径。"
-  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
-  reference_answer: |
-    我会在计划板发起一次规划：把这 5 个概念整理成学习路径/章节大纲，
-    需要你在计划板按原来的按钮进入规划后才开始执行；现在不写页面。
-  key_points:
-    - "提议一次规划（plan）"
-    - "说明从计划板的规划入口进入"
-    - "不声称已经写入或执行"
-  expected_trace:
-    tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
-    propose_job: plan
-    propose_interface: plan_board
-    max_tool_rounds: 4
-    no_error: true
-  forbidden:
-    - "声称已经写入或完成规划"
-    - "自动进入作业、不等人类确认"
-    - "提议 compile 或无效 interface"
-  raw_sources: []
-  notes: "propose 变体：plan/plan_board。"
-
-- id: propose-compile-plan-board
-  type: task
-  difficulty: medium
-  question: "在计划板发起一次编译：把这 5 个概念整理成对比页。"
-  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
-  reference_answer: |
-    我会在计划板发起一次编译：把这 5 个概念整理成对比页，需要你在计划板
-    按原来的按钮进入编译后才开始执行；现在不写页面。
-  key_points:
-    - "提议一次编译（compile）"
-    - "说明从计划板的编译入口进入"
-    - "不声称已经写入或执行"
-  expected_trace:
-    tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
-    propose_job: compile
-    propose_interface: plan_board
-    max_tool_rounds: 4
-    no_error: true
-  forbidden:
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "提议 plan 或无效 interface"
-  raw_sources: []
-  notes: "propose 变体：compile/plan_board。"
-
-- id: propose-compile-compile-board
+- id: task-hard-03
   type: task
   difficulty: hard
-  question: "在编译板发起一次编译：把 3 个 source 页和 5 个 concept 页整理成来源对比页。"
-  corpus_pages: [sources/信息熵-clips, sources/kl散度相对熵-clips, sources/联合熵-clips, concepts/信息熵, concepts/KL散度, concepts/互信息, concepts/条件熵, concepts/联合熵]
+  question: "把 3 个 source 页与 5 个 concept 页整理成来源覆盖矩阵页（source × concept 是否覆盖），并写入 wiki。"
+  corpus_pages: [concepts/信息熵, concepts/KL散度, concepts/联合熵, concepts/互信息, concepts/条件熵, sources/信息熵-clips, sources/kl散度相对熵-clips, sources/联合熵-clips]
   reference_answer: |
-    我会在编译板发起一次编译：把 3 个 source clips 页和 5 个 concept 页
-    整理成来源对比页，需要你在编译板按原来的按钮进入编译后才开始执行；
-    现在不写页面。
+    我把来源覆盖矩阵写成页面：行是 3 个 source clips 页、列是 5 个 concept 页，
+    单元格标出该 source 是否覆盖该 concept、覆盖的关键 clip；矩阵后说明
+    互信息/条件熵缺独立 clips 页。用 write_wiki 发布，并说明页面与各
+    section 的来源。
   key_points:
-    - "提议一次编译（compile）"
-    - "说明从编译板的编译入口进入"
-    - "不声称已经写入或执行"
+    - "矩阵行是 source、列是 concept"
+    - "单元格标出覆盖与关键 clip"
+    - "说明互信息/条件熵缺独立 clips 页"
+    - "说明写入了哪一页与各 section 的来源"
   expected_trace:
     tools_any: [search, wiki_read]
-    wait: proposed
-    propose_valid: true
-    propose_job: compile
-    propose_interface: compile_board
+    wait: absent
     max_tool_rounds: 6
     no_error: true
   forbidden:
-    - "声称已经写入或完成编译"
-    - "自动进入作业、不等人类确认"
-    - "提议 plan 或无效 interface"
+    - "把不存在的覆盖说成存在"
+    - "声称没有写入或仍需人工确认"
+    - "编造 wiki 没有的公式、数字或来源"
   raw_sources: []
-  notes: "propose 变体：compile/compile_board。"
+  notes: "v3.1：原 propose-compile-compile-board 改为来源覆盖矩阵写页任务。"
