@@ -236,6 +236,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
     golden_path.write_text(
         yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
+        newline="\n",
     )
 
     corpus_path = corpus_root / "manifest.yaml"
@@ -254,6 +255,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
     corpus_path.write_text(
         yaml.safe_dump(corpus_manifest, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
+        newline="\n",
     )
     return golden_path, corpus_path
 

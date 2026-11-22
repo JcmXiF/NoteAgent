@@ -1,0 +1,32 @@
+version: 1
+created: '2026-11-12'
+corpus_sha256: 01e387718d845e5372eac8072e05c6140c627a0943bb3b6f80dda6676b800cba
+queries_sha256: e7326cf358814ee5b041a1efe47d3c097257a1228122f093d865b48b499d3f69
+counts:
+  total: 24
+  by_type:
+    fact: 5
+    synthesis: 5
+    gap: 5
+    task: 9
+  by_difficulty:
+    easy: 5
+    medium: 10
+    hard: 9
+  matrix:
+    fact:
+      easy: 1
+      medium: 2
+      hard: 2
+    synthesis:
+      easy: 1
+      medium: 2
+      hard: 2
+    gap:
+      easy: 1
+      medium: 2
+      hard: 2
+    task:
+      easy: 2
+      medium: 4
+      hard: 3
