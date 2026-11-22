@@ -211,11 +211,12 @@ def _parse(
             raw=raw,
             prompt_sha256=prompt_sha256,
         )
-    if set(payload) != set(keys):
+    missing = [key for key in keys if key not in payload]
+    if missing:
         return V3JudgeVerdict(
             error=(
-                "judge_error: expected "
-                f"{', '.join(keys)}, got {', '.join(sorted(payload))}"
+                "judge_error: missing "
+                f"{', '.join(missing)}; got {', '.join(sorted(payload))}"
             ),
             raw=raw,
             prompt_sha256=prompt_sha256,

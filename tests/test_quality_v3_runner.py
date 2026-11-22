@@ -765,13 +765,29 @@ class JudgeTests(unittest.TestCase):
         )
         self.assertIn('"alpha":', client.messages[1].content)
 
-    def test_a_payload_with_other_keys_is_a_judge_error(self) -> None:
+    def test_a_payload_missing_a_verdict_is_a_judge_error(self) -> None:
         verdict, _client = self._judge(
             {"grounding": {"verdict": "pass", "reason": "", "evidence": []}}
         )
 
         self.assertFalse(verdict.passed(self.rubric))
-        self.assertIn("judge_error", verdict.error)
+        self.assertIn("missing", verdict.error)
+
+    def test_extra_keys_are_ignored(self) -> None:
+        payload = _payload()
+        payload["completeness_note_placeholder"] = {
+            "verdict": "pass",
+            "reason": "",
+            "evidence": [],
+        }
+
+        verdict, _client = self._judge(payload)
+
+        self.assertTrue(verdict.passed(self.rubric))
+        self.assertEqual(
+            set(verdict.verdicts()),
+            set(self.rubric.verdict_keys()),
+        )
 
     def test_the_hallucination_veto_fails_the_item(self) -> None:
         verdict, _client = self._judge(
