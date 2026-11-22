@@ -1,8 +1,8 @@
-"""Load, validate and refresh the v2 golden set.
+"""Load, validate and refresh the golden set.
 
-The golden data is local: a corpus snapshot, twenty single-turn queries with
-ground truth, and a manifest carrying the hashes and counts. This module is the
-only reader; the runner and the judge depend on the dataclasses here so a
+The V3 quality set carries the corpus snapshot and single-turn queries with
+ground truth; the manifest carries the hashes and counts. This module is the
+only reader; the V3 set and the trace rules depend on the dataclasses here so a
 malformed case fails before a provider is called.
 """
 
@@ -263,7 +263,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m evals.golden.dataset",
-        description="Validate the local v2 golden set.",
+        description="Validate the local golden set.",
     )
     parser.add_argument("command", nargs="?", default="check")
     parser.add_argument("--golden", default=str(DEFAULT_GOLDEN))

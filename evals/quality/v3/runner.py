@@ -25,12 +25,8 @@ from evals.golden.trace import (
 from evals.harness import CaseRun
 from evals.quality.assertions import evaluate, evidence_from
 from evals.quality.artifacts import copy_case_artifacts
-from evals.quality.v3.judge import (
-    V3JudgeVerdict,
-    conversation_from,
-    judge_item,
-    make_judge_client,
-)
+from evals.quality.judge_client import conversation_from, make_judge_client
+from evals.quality.v3.judge import V3JudgeVerdict, judge_item
 from evals.quality.v3.pricing import price_for
 from evals.quality.v3.set import QualitySet
 from evals.report import REPORT_VERSION, utc_now

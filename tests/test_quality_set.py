@@ -8,6 +8,7 @@ from pathlib import Path
 
 from evals.golden.dataset import write_manifest as write_golden_manifest
 from evals.quality.v3.set import (
+    GOLDEN_ROOT,
     RUBRIC_PATH,
     QualitySetError,
     load_quality_set,
@@ -150,6 +151,9 @@ class RealQualitySetTests(unittest.TestCase):
         self.assertTrue(quality.diagnostics.tools)
         self.assertTrue(quality.diagnostics.trace)
         self.assertTrue(quality.content_hash)
+        self.assertEqual(
+            Path(quality.golden.root).resolve(), GOLDEN_ROOT.resolve()
+        )
         for case in quality.multi_turn:
             self.assertTrue(quality.expected_points(case))
             self.assertTrue(quality.diagnostic_assertions(case))

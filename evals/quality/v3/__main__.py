@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from evals.golden.dataset import DEFAULT_GOLDEN
 from evals.quality.v3.set import (
     CASES_ROOT,
+    GOLDEN_ROOT,
     MANIFEST_PATH,
     RUBRIC_PATH,
     write_manifest,
@@ -20,7 +20,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Write the V3 quality set's sha256 manifest.",
     )
     parser.add_argument("--version", required=True)
-    parser.add_argument("--golden", default=str(DEFAULT_GOLDEN))
+    parser.add_argument("--golden", default=str(GOLDEN_ROOT))
     parser.add_argument("--cases", default=str(CASES_ROOT))
     parser.add_argument("--rubric", default=str(RUBRIC_PATH))
     parser.add_argument("--manifest", default=str(MANIFEST_PATH))

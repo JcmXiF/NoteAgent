@@ -13,13 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evals.quality.judge import (
-    DimensionVerdict,
-    JudgeClient,
-    conversation_from,
-    judge_config,
-    make_judge_client,
-)
+from evals.quality.judge_client import DimensionVerdict, JudgeClient
 from evals.quality.v3.set import Rubric
 
 from noteagent.llm.client import ChatMessage, LlmTurn
@@ -194,8 +188,5 @@ __all__ = [
     "EXPECTED_KEYS",
     "PROMPT_PATH",
     "V3JudgeVerdict",
-    "conversation_from",
-    "judge_config",
     "judge_item",
-    "make_judge_client",
 ]

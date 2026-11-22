@@ -30,6 +30,7 @@ from evals.quality.cases import AssertionSpec, CaseSpec, load_cases
 SET_DIR = Path(__file__).resolve().parent
 RUBRIC_PATH = SET_DIR / "rubric.yaml"
 MANIFEST_PATH = SET_DIR / "manifest.yaml"
+GOLDEN_ROOT = SET_DIR / "golden"
 CASES_ROOT = SET_DIR.parent / "cases"
 
 ESSENTIAL = "essential"
@@ -250,7 +251,7 @@ def write_manifest(
     manifest_path: Path = MANIFEST_PATH,
     *,
     version: str,
-    golden_root: Path = DEFAULT_GOLDEN,
+    golden_root: Path = GOLDEN_ROOT,
     cases_root: Path = CASES_ROOT,
     rubric_path: Path = RUBRIC_PATH,
     require_counts: bool = True,
@@ -277,7 +278,7 @@ def write_manifest(
     payload = {
         "version": version,
         "golden": {
-            "root": Path(golden_root).as_posix(),
+            "root": _root_value(Path(golden_root)),
             "queries_sha256": golden.queries_sha256,
             "corpus_sha256": golden.corpus_sha256,
         },
@@ -415,6 +416,14 @@ def _case_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _root_value(path: Path) -> str:
+    """Keep the tracked root relative to the checkout; else keep the path."""
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _content_hash(
     version: str,
     queries_sha256: str,
@@ -442,6 +451,7 @@ __all__ = [
     "CASES_ROOT",
     "Diagnostics",
     "ESSENTIAL",
+    "GOLDEN_ROOT",
     "IMPORTANT",
     "MANIFEST_PATH",
     "QualitySet",
