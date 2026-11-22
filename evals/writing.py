@@ -400,6 +400,116 @@ def writing_full_flow(run: CaseRun) -> None:
     )
 
 
+def writing_skill_flow(run: CaseRun) -> None:
+    """The model sees the skills index, loads the skill, then writes."""
+    model = FauxModelClient(
+        _call("c0", "skill", {"name": "writing"}),
+        _call("c1", "web_search", {"query": "熵"}),
+        _call("c2", "get_state", {"searchId": "search-1"}),
+        _call("c3", "select_page", {"hitId": "hit-1"}),
+        _call(
+            "c4",
+            "select_frame",
+            {"pageId": "page-1", "blockIds": ["b1", "b2"]},
+        ),
+        _call(
+            "c5",
+            "compose_wiki",
+            {
+                "wikiFile": WIKI,
+                "baseDraftVersion": 0,
+                "sections": [
+                    {
+                        "id": "definition",
+                        "heading": "定义",
+                        "body": "熵衡量不确定性。",
+                        "citations": ["frame-1"],
+                    }
+                ],
+            },
+        ),
+        _call(
+            "c6",
+            "write_wiki",
+            {"wikiFile": WIKI, "draftVersion": 1},
+        ),
+        _final("已发布。"),
+    )
+    api = run.start(
+        model,
+        seed_system_sections=True,
+        web_search=search_cards,
+        web_fetch=capture_page,
+    )
+    session = api.create_session()
+    reply = api.query(session, "帮我写一篇关于熵的 wiki")
+
+    run.equal(
+        "the query is answered", reply.status_code, 200, TOOL_CONTRACT
+    )
+    run.equal(
+        "the final answer streams",
+        _tokens(reply).strip(),
+        "已发布。",
+        PUBLISH,
+    )
+    prompt = "\n\n".join(
+        message.content
+        for message in model.requests[0].messages
+        if message.role == "system"
+    )
+    run.check(
+        "the skills index is in the prompt",
+        "<available_skills>" in prompt,
+        "",
+        TOOL_CONTRACT,
+    )
+    run.check(
+        "the writing skill is disclosed",
+        "- writing [bundled]" in prompt,
+        "",
+        TOOL_CONTRACT,
+    )
+
+    skill_results = [
+        entry
+        for entry in api.entries(session)
+        if entry.get("role") == "toolResult"
+        and entry.get("name") == "skill"
+    ]
+    run.equal(
+        "the skill tool ran once", len(skill_results), 1, TOOL_CONTRACT
+    )
+    skill_text = (
+        str(skill_results[0].get("content") or "")
+        if skill_results
+        else ""
+    )
+    run.check(
+        "the skill body was loaded",
+        "The state is the one truth" in skill_text,
+        "",
+        TOOL_CONTRACT,
+    )
+    run.check(
+        "the skill base directory is shown",
+        "Base directory:" in skill_text,
+        "",
+        TOOL_CONTRACT,
+    )
+
+    page = _first_page(_state(api))
+    run.equal("the draft page is published", page["status"], "written", STATE)
+    run.check(
+        "the page reached the wiki",
+        (run.layout.root / WIKI).is_file(),
+        "",
+        PUBLISH,
+    )
+    _wait_for_lease(api)
+    run.equal("the writer lease is released", _state(api)["writer"], None, LOCK)
+
+
 def writing_partial_then_second_run(run: CaseRun) -> None:
     """A first run stops at frames; a second reads the state and publishes."""
     model = FauxModelClient(
@@ -1241,6 +1351,22 @@ WRITING_CASES = (
         writing_full_flow,
         trace=TraceSpec(
             required=(
+                "web_search",
+                "select_page",
+                "select_frame",
+                "compose_wiki",
+                "write_wiki",
+            ),
+            forbidden=("propose",),
+        ),
+    ),
+    Case(
+        "writing_skill_flow",
+        "The model sees the skills index and loads the writing skill",
+        writing_skill_flow,
+        trace=TraceSpec(
+            required=(
+                "skill",
                 "web_search",
                 "select_page",
                 "select_frame",
