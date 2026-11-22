@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from evals.harness import Exchange
 
-REPORT_VERSION = 1
+REPORT_VERSION = 3
+UNCATEGORIZED = "uncategorized"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,46 @@ class Check:
     name: str
     passed: bool
     detail: str = ""
+    #: The failure domain this check belongs to.
+    category: str = UNCATEGORIZED
+    #: Where the failed check lives (a file or state path), when it has one.
+    location: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.category:
+            object.__setattr__(self, "category", UNCATEGORIZED)
+
+
+@dataclass(frozen=True, slots=True)
+class FirstError:
+    """The first place a failed run departed from the expected behaviour."""
+
+    check: str
+    category: str
+    step: int | None
+    kind: str
+    event: str
+    expected: str
+    actual: str
+
+    @property
+    def label(self) -> str:
+        return self.check or self.event or self.kind
+
+    @property
+    def where(self) -> str:
+        return "" if self.step is None else f" at step {self.step}"
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "check": self.check,
+            "category": self.category,
+            "step": self.step,
+            "kind": self.kind,
+            "event": self.event,
+            "expected": self.expected,
+            "actual": self.actual,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +78,8 @@ class CaseResult:
     duration_s: float
     exchanges: tuple["Exchange", ...]
     log: tuple[str, ...]
-    #: Numbers a case reports for the reader and the baseline; not verdicts.
+    #: The first failed check or trace violation, when the case failed.
+    first_error: FirstError | None = None
 
     @property
     def passed(self) -> bool:
@@ -100,9 +142,16 @@ class EvalReport:
                             "name": item.name,
                             "passed": item.passed,
                             "detail": item.detail,
+                            "category": item.category,
+                            "location": item.location,
                         }
                         for item in result.checks
                     ],
+                    "firstError": (
+                        result.first_error.to_payload()
+                        if result.first_error is not None
+                        else None
+                    ),
                     "error": result.error_line,
                 }
                 for result in self.results
@@ -129,15 +178,6 @@ class EvalReport:
                 f"| `{result.name}` | {verdict} | {count} | "
                 f"{result.duration_s:.1f}s |"
             )
-        measured = [
-        ]
-        if measured:
-            lines.extend(["", "## Metrics"])
-            for result in measured:
-                pairs = ", ".join(
-                    f"{name}={value}"
-                )
-                lines.append(f"- `{result.name}`: {pairs}")
         failures = [result for result in self.results if not result.passed]
         if failures:
             lines.extend(["", "## Failures"])
@@ -145,6 +185,12 @@ class EvalReport:
                 lines.extend(["", f"### `{result.name}`", "", result.title])
                 for item in result.failed_checks:
                     lines.append(f"- {item.name}: {item.detail}")
+                if result.first_error is not None:
+                    first = result.first_error
+                    lines.append(
+                        f"- first error: {first.label} [{first.category}]"
+                        f"{first.where}: {first.actual}"
+                    )
                 if result.error:
                     lines.extend(["", "```", result.error_line, "```"])
         return "\n".join(lines) + "\n"

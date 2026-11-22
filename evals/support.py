@@ -8,7 +8,10 @@ when a test helper does.
 
 from __future__ import annotations
 
+import shutil
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 class FixedClock:
@@ -33,4 +36,18 @@ class SequentialIds:
         return f"{prefix}-{number}" if prefix else str(number)
 
 
-__all__ = ["FixedClock", "SequentialIds"]
+def remove_tree(path: Path) -> None:
+    """Remove a temporary project, retrying a handle that is still closing."""
+    for attempt in range(6):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 5:
+                raise
+            time.sleep(0.1)
+
+
+__all__ = ["FixedClock", "SequentialIds", "remove_tree"]

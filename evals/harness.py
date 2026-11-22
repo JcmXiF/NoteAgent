@@ -29,7 +29,8 @@ from fastapi.testclient import TestClient
 
 from evals.report import CaseResult, Check
 from evals.sse import parse_sse
-from evals.support import FixedClock, SequentialIds
+from evals.support import FixedClock, SequentialIds, remove_tree
+from evals.trace import TraceEvidence, TraceSpec, evidence_from_entries, first_error
 
 from noteagent.agent.model import ModelClient
 from noteagent.agent.tools import ToolRegistry
@@ -38,6 +39,7 @@ from noteagent.api.app import create_app
 from noteagent.api.deps import AppDeps
 from noteagent.project.init import init_project
 from noteagent.sessions.jsonl import JsonlSessionStore
+from noteagent.writing.tools import WebFetchFn, WebSearchFn
 
 #: The pages every case starts with. They are ordinary wiki pages: the tools
 #: find them the same way they find a reader's pages.
@@ -84,6 +86,8 @@ class Case:
     name: str
     title: str
     run: Callable[["CaseRun"], None]
+    #: The tool path this story expects; ``None`` keeps the trace as evidence only.
+    trace: TraceSpec | None = None
 
 
 class Api:
@@ -93,6 +97,8 @@ class Api:
         self.case = case
         self.client = client
         self.exchanges: list[Exchange] = []
+        #: The chat session the trace checks; the last query wins unless a case sets it.
+        self.main_session: str | None = None
 
     def request(
         self,
@@ -131,6 +137,7 @@ class Api:
         return str(reply.json()["id"])
 
     def query(self, session_id: str, content: str) -> Exchange:
+        self.main_session = session_id
         return self.request(
             "POST",
             f"/api/v1/sessions/{session_id}/query",
@@ -207,6 +214,7 @@ class CaseRun:
         self.app: FastAPI | None = None
         self.api: Api | None = None
         self._store: JsonlSessionStore | None = None
+        self._deps: AppDeps | None = None
         self._patchers: list[Any] = []
         try:
             self._activate()
@@ -248,6 +256,8 @@ class CaseRun:
         tools: ToolRegistry | None = None,
         seed_system_sections: bool = False,
         max_turns: int = 50,
+        web_search: WebSearchFn | None = None,
+        web_fetch: WebFetchFn | None = None,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -259,10 +269,38 @@ class CaseRun:
             settings={"model": "faux"},
             seed_system_sections=seed_system_sections,
             max_turns=max_turns,
+            web_search=web_search,
+            web_fetch=web_fetch,
         )
+        self._deps = deps
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
         return self.api
+
+    def restart(self) -> Api:
+        """Close the app and open it again on the same temporary project.
+
+        This is an app restart, not a process restart: the temporary project
+        (wiki, state, session store, event logs) persists, while the in-memory
+        app is rebuilt from the same dependencies.
+        """
+        if self.api is None or self._deps is None:
+            raise RuntimeError("a case must start before it can restart")
+        exchanges = list(self.api.exchanges)
+        main_session = self.api.main_session
+        try:
+            self.api.client.close()
+        except Exception:  # noqa: BLE001 - closing is best effort
+            pass
+        self.app = create_app(self._deps)
+        self.api = Api(self, TestClient(self.app))
+        self.api.exchanges.extend(exchanges)
+        self.api.main_session = main_session
+        return self.api
+
+    def evidence(self, session_id: str) -> TraceEvidence:
+        """Read the trace evidence from one finished session."""
+        return evidence_from_entries(self.store.load(session_id).entries)
 
     def write_page(self, slug: str, title: str, body: str) -> None:
         path = self.layout.wiki / f"{slug}.md"
@@ -315,14 +353,26 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
             case.run(run)
         except Exception:
             error = traceback.format_exc()
+        checks = list(run.checks) if run is not None else []
+        evidence: TraceEvidence | None = None
+        if (
+            run is not None
+            and case.trace is not None
+            and run.api is not None
+            and run.api.main_session
+        ):
+            evidence = run.evidence(run.api.main_session)
+            checks.extend(case.trace.checks(evidence))
+        first_failure = first_error(checks, evidence, case.trace, error)
         result = CaseResult(
             case.name,
             case.title,
-            tuple(run.checks) if run is not None else (),
+            tuple(checks),
             error,
             time.monotonic() - started,
             tuple(run.api.exchanges) if run is not None and run.api else (),
             tuple(run.log) if run is not None else (),
+            first_failure,
         )
         if not result.passed:
             try:
@@ -339,25 +389,7 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
     finally:
         if run is not None:
             run.close()
-        _remove_tree(tmp)
-
-
-def _remove_tree(path: Path) -> None:
-    """Remove a case's project: a Windows handle may need a moment to close.
-
-    The documented policy is retry, then raise — never a blanket ignore, so a
-    cleanup that really failed names the case it failed in.
-    """
-    for attempt in range(6):
-        try:
-            shutil.rmtree(path)
-            return
-        except FileNotFoundError:
-            return
-        except OSError:
-            if attempt == 5:
-                raise
-            time.sleep(0.1)
+        remove_tree(tmp)
 
 
 def _preserve(
