@@ -203,10 +203,11 @@ Bug fixes and small corrections are welcome as a pull request; a new feature is 
 first, since this project has a deliberately narrow idea of what it is. The checks to run before
 opening one — `unittest`, the behaviour evals, the Markdown checker,
 `typecheck`/`test`/`lint`/`build` — are listed in
-[`docs/development.md`](docs/development.md); CI runs the same commands. The evals run with
-`python -m evals` from the repository root; every case uses a temporary project and a scripted
-model, so no key or network is needed. The quality eval is local-only and calls a real model:
-`python -m evals.quality.v3.run` (CI refuses).
+[`docs/development.md`](docs/development.md); CI runs the mechanical checks, while the behaviour
+and quality evals are local-only. The behaviour evals run with `python -m evals` from the
+repository root; every case uses a temporary project and a scripted model, so no key or network is
+needed. The quality eval is local-only and calls a real model: `python -m evals.quality.v3.run`
+(CI refuses).
 
 - One concern per change, and do not reformat code you are not changing.
 - Logic that can be reasoned about without a browser gets a test next to it.

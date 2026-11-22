@@ -1,12 +1,8 @@
 name: Nightly
 
-# A pull request runs the deterministic evals once. This workflow runs them
-# again on a schedule beside the full quality pass and a packaging build, so a
-# slower or Windows-only failure cannot hold up a change.
-#
-# Nothing here calls a live provider: there is no judge and no key, so the
-# deterministic suite is the quality signal. A live eval, when one exists,
-# belongs here and never in the pull-request workflow.
+# The scheduled run repeats the mechanical checks beside a packaging build, so
+# a slower or Windows-only failure cannot hold up a change. Evals stay local
+# (ADR-0050); no workflow calls a provider.
 
 on:
   schedule:
@@ -18,27 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  evals:
-    name: Full behaviour evals
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install
-        run: pip install -e ".[api]"
-      - name: Evals
-        shell: bash
-        run: bash scripts/run-evals.sh
-      - name: Keep the report and any failure artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightly-eval-report
-          path: build/evals
-          if-no-files-found: ignore
-
   quality:
     name: Full quality checks
     runs-on: windows-latest
