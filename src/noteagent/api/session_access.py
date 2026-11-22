@@ -15,6 +15,10 @@ from noteagent.agent.kernel import KernelRuntime, RunRegistry
 from noteagent.agent.model import ModelClient
 from noteagent.agent.projection import project
 from noteagent.agent.retry import RetryingModel
+from noteagent.agent.compaction import (
+    DEFAULT_CONTEXT_WINDOW,
+    CompactionLimits,
+)
 from noteagent.agent.runtime import (
     AgentRuntime,
     EventSink,
@@ -31,7 +35,7 @@ from noteagent.agent.tools import ToolRegistry, toolset_name
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
-from noteagent.llm.config import load_llm_config
+from noteagent.llm.config import LlmConfigError, load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
@@ -339,6 +343,14 @@ def kernel_model(deps: AppDeps) -> tuple[ModelClient, str]:
     return model, model_name
 
 
+def _context_window() -> int:
+    """The configured window, or the default when no endpoint is configured."""
+    try:
+        return load_llm_config(require_api_key=False).context_window
+    except LlmConfigError:
+        return DEFAULT_CONTEXT_WINDOW
+
+
 def kernel_runtime(
     deps: AppDeps,
     store: SessionStore,
@@ -361,6 +373,9 @@ def kernel_runtime(
         registry=deps.runs,
         model_name=model_name,
         max_turns=deps.max_turns,
+        compaction=CompactionLimits(
+            context_tokens=_context_window()
+        ),
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.
         trace=SessionTrace(layout, clock=deps.clock)

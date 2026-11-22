@@ -17,23 +17,46 @@ from noteagent.agent.projection import pair_start
 from noteagent.agent.store import Entry
 
 
+#: The conservative window a project gets before it names its own.
+DEFAULT_CONTEXT_WINDOW = 32_000
+
+
 @dataclass(frozen=True, slots=True)
 class CompactionLimits:
     """How much history the prompt may carry, and how it is shed."""
 
-    #: The model's window. v1 has no model catalog, so this is a project default.
-    context_tokens: int = 32_000
+    #: The model's window; the composition root sets it from ``LlmConfig``.
+    context_tokens: int = DEFAULT_CONTEXT_WINDOW
     #: Room for the answer and for the estimate being wrong.
     reserve_tokens: int = 8_000
     #: Recent history that stays verbatim after a summary.
     keep_recent_tokens: int = 12_000
     #: The summary request's own output limit.
     max_summary_tokens: int = 2_000
+    #: A hard cap on the transcript sent to the summarizer, in tokens.
+    summary_input_tokens: int = 24_000
     #: A provider token is roughly this many characters. The estimate only has
-    #: to be close enough to decide *when* to compact, not to bill anyone.
+    #: to be close enough to size the cut and the summary input, not to decide
+    #: compaction: that reads the provider's own prompt count when it exists.
     chars_per_token: int = 4
     #: How much of an old tool result survives deterministic trimming.
     tool_result_chars: int = 800
+
+    def __post_init__(self) -> None:
+        """Keep the recent window and summary output inside the threshold.
+
+        A window configured below the defaults would otherwise leave a tail
+        larger than the threshold and re-summarize the same prefix every turn.
+        """
+        limit = self.threshold_tokens
+        if self.keep_recent_tokens >= limit:
+            object.__setattr__(
+                self, "keep_recent_tokens", max(1, limit // 2)
+            )
+        if self.max_summary_tokens >= limit:
+            object.__setattr__(
+                self, "max_summary_tokens", max(1, limit // 4)
+            )
 
     @property
     def threshold_tokens(self) -> int:

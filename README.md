@@ -74,6 +74,7 @@ without touching the saved settings.
 |---|---|
 | `NOTEAGENT_LLM_BASE_URL`, `NOTEAGENT_LLM_API_KEY`, `NOTEAGENT_LLM_MODEL` | The model connection |
 | `NOTEAGENT_LLM_TEMPERATURE`, `NOTEAGENT_LLM_MAX_TOKENS`, `NOTEAGENT_LLM_TIMEOUT` | Generation parameters |
+| `NOTEAGENT_LLM_CONTEXT_WINDOW` | The model's context window for compaction (default 32000); an advanced environment override, not in the settings document |
 | `NOTEAGENT_SEARCH_PROVIDER`, `NOTEAGENT_SEARCH_API_KEY` | `brave`, `serper`, or `none` |
 | `NOTEAGENT_SEARCH_MODE` | `auto`, `native`, or `external` |
 | `NOTEAGENT_SEARCH_TIMEOUT`, `NOTEAGENT_SEARCH_COUNTRY`, `NOTEAGENT_SEARCH_LANG`, `NOTEAGENT_SEARCH_UI_LANG` | Search locale and limits |

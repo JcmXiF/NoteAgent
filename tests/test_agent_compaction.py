@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds, seed_long_history
 from noteagent.agent.compaction import (
@@ -21,6 +23,7 @@ from noteagent.agent.model import (
     ModelDoneEvent,
     ModelStartEvent,
     ModelStreamError,
+    ModelToolCallEnd,
     TextBlock,
     ToolCall,
     Usage,
@@ -28,6 +31,9 @@ from noteagent.agent.model import (
 from noteagent.agent.projection import project
 from noteagent.agent.runtime import UserInput
 from noteagent.agent.tools import ToolRegistry, ToolResult, ToolSpec
+from noteagent.api.deps import AppDeps
+from noteagent.api.session_access import kernel_runtime
+from noteagent.llm.config import load_llm_config
 from noteagent.project.layout import ProjectLayout
 from noteagent.sessions.jsonl import JsonlSessionStore
 
@@ -56,6 +62,72 @@ def _assistant(ident: str, content: str, calls: list[dict[str, object]] | None =
 
 def _call(call_id: str, name: str = "wiki_read") -> dict[str, object]:
     return {"id": call_id, "name": name, "arguments": "{}"}
+
+
+def _echo_tools() -> ToolRegistry:
+    def echo(_arguments, _context):
+        return ToolResult(content="ok", meta={"title": "ok"})
+
+    return ToolRegistry(
+        [
+            ToolSpec(
+                name="echo",
+                description="Echo.",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                handler=echo,
+            )
+        ]
+    )
+
+
+def _tool_with_usage(call_id: str, input_tokens: int) -> list:
+    call = ToolCall(call_id, "echo", '{"text": "x"}')
+    return [
+        ModelStartEvent("faux"),
+        ModelToolCallEnd(call),
+        ModelDoneEvent(
+            AssistantMessage(
+                stop_reason="tool_calls",
+                usage=Usage(input_tokens=input_tokens, output_tokens=5),
+            )
+        ),
+    ]
+
+
+class ContextWindowTests(unittest.TestCase):
+    def _config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "NOTEAGENT_LLM_BASE_URL": "http://model.test/v1",
+                "NOTEAGENT_LLM_API_KEY": "key",
+                "NOTEAGENT_LLM_MODEL": "model",
+            },
+            clear=False,
+        ):
+            return load_llm_config()
+
+    def test_the_environment_sets_the_window(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"NOTEAGENT_LLM_CONTEXT_WINDOW": "64000"},
+            clear=False,
+        ):
+            self.assertEqual(self._config().context_window, 64_000)
+
+    def test_an_invalid_value_falls_back(self) -> None:
+        for raw in ("", "nope", "0", "-5"):
+            with self.subTest(raw=raw):
+                with patch.dict(
+                    os.environ,
+                    {"NOTEAGENT_LLM_CONTEXT_WINDOW": raw},
+                    clear=False,
+                ):
+                    self.assertEqual(self._config().context_window, 32_000)
 
 
 class TrimTests(unittest.TestCase):
@@ -116,6 +188,16 @@ class EstimateTests(unittest.TestCase):
         self.assertGreaterEqual(
             estimate_tokens(messages, chars_per_token=4), 200
         )
+
+
+class LimitTests(unittest.TestCase):
+    def test_a_small_window_clamps_the_recent_and_summary_budgets(
+        self,
+    ) -> None:
+        limits = CompactionLimits(context_tokens=10_000)
+
+        self.assertLess(limits.keep_recent_tokens, limits.threshold_tokens)
+        self.assertLess(limits.max_summary_tokens, limits.threshold_tokens)
 
 
 class CutTests(unittest.TestCase):
@@ -295,7 +377,7 @@ class KernelCompactionTests(unittest.TestCase):
             clock=FixedClock(),
             ids=SequentialIds(),
             model_name="faux",
-            compaction=limits or CompactionLimits(),
+            compaction=limits,
         )
 
     def test_a_long_prompt_is_summarized_before_the_answer(self) -> None:
@@ -337,6 +419,116 @@ class KernelCompactionTests(unittest.TestCase):
         self.assertIn("You are NoteAgent.", joined)
         self.assertIn("new question", joined)
         self.assertNotIn("old question 0", joined)
+
+    def seed_short_history(self) -> None:
+        self.store.append(
+            "s1",
+            {
+                "type": "message",
+                "role": "user",
+                "content": "old question " * 20,
+            },
+        )
+        self.store.append(
+            "s1",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "old answer " * 20,
+            },
+        )
+
+    def usage_limits(self) -> CompactionLimits:
+        return CompactionLimits(
+            context_tokens=10_000,
+            reserve_tokens=1_000,
+            keep_recent_tokens=20,
+            max_summary_tokens=20,
+            summary_input_tokens=500,
+            chars_per_token=4,
+        )
+
+    def test_the_provider_prompt_count_triggers_compaction(self) -> None:
+        self.seed_short_history()
+        model = FauxModelClient(
+            _tool_with_usage("t1", 9_500),
+            FauxModelClient.text("summary of earlier turns").script,
+            FauxModelClient.text(
+                "answer after usage compaction"
+            ).script,
+        )
+
+        result = self.runtime(
+            model, self.usage_limits(), tools=_echo_tools()
+        ).execute(UserInput("s1", "new question"), lambda _event: None)
+
+        self.assertEqual(result.status, "completed")
+        entries = self.store.load("s1").entries
+        compaction = next(
+            entry for entry in entries if entry["type"] == "compaction"
+        )
+        self.assertGreaterEqual(compaction["tokensBefore"], 9_500)
+        self.assertEqual(
+            compaction["summary"], "summary of earlier turns"
+        )
+
+    def test_a_new_run_starts_from_the_last_calls_usage(self) -> None:
+        self.store.append(
+            "s1",
+            {
+                "type": "message",
+                "role": "user",
+                "content": "old question " * 20,
+            },
+        )
+        self.store.append(
+            "s1",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "old answer " * 20,
+                "usage": {
+                    "inputTokens": 9_500,
+                    "outputTokens": 10,
+                    "cacheReadTokens": 0,
+                },
+            },
+        )
+        model = FauxModelClient(
+            FauxModelClient.text("summary of earlier turns").script,
+            FauxModelClient.text("answer after baseline").script,
+        )
+
+        result = self.runtime(model, self.usage_limits()).execute(
+            UserInput("s1", "new question"), lambda _event: None
+        )
+
+        self.assertEqual(result.status, "completed")
+        entries = self.store.load("s1").entries
+        compaction = next(
+            entry for entry in entries if entry["type"] == "compaction"
+        )
+        self.assertGreaterEqual(compaction["tokensBefore"], 9_500)
+
+    def test_a_small_provider_count_does_not_compact(self) -> None:
+        self.seed_short_history()
+        model = FauxModelClient(
+            _tool_with_usage("t1", 100),
+            FauxModelClient.text("answer without compaction").script,
+        )
+
+        result = self.runtime(
+            model, self.usage_limits(), tools=_echo_tools()
+        ).execute(UserInput("s1", "new question"), lambda _event: None)
+
+        self.assertEqual(result.status, "completed")
+        self.assertFalse(
+            any(
+                entry["type"] == "compaction"
+                for entry in self.store.load("s1").entries
+            )
+        )
+        self.assertEqual(len(model.requests), 2)
 
     def test_old_tool_output_is_trimmed_before_the_prompt(self) -> None:
         self.store.append(
@@ -625,3 +817,37 @@ class KernelCompactionTests(unittest.TestCase):
                 for entry in self.store.load("s1").entries
             )
         )
+
+
+class KernelWiringTests(unittest.TestCase):
+    def test_the_configured_window_reaches_the_kernel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            layout = ProjectLayout(Path(tmp))
+            store = JsonlSessionStore(
+                layout, clock=FixedClock(), ids=SequentialIds()
+            )
+            model = FauxModelClient(FauxModelClient.text("x").script)
+            with patch.dict(
+                os.environ,
+                {
+                    "NOTEAGENT_LLM_BASE_URL": "http://model.test/v1",
+                    "NOTEAGENT_LLM_API_KEY": "key",
+                    "NOTEAGENT_LLM_MODEL": "model",
+                    "NOTEAGENT_LLM_CONTEXT_WINDOW": "64000",
+                },
+                clear=False,
+            ):
+                runtime = kernel_runtime(
+                    AppDeps(model=model, sessions=store),
+                    store,
+                    None,
+                    ToolRegistry(),
+                )
+
+        self.assertEqual(
+            runtime.compaction_limits.context_tokens, 64_000
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

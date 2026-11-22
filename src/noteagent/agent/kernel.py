@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
@@ -39,6 +40,7 @@ from noteagent.agent.model import (
     ModelStreamError,
     ModelTextDelta,
     ToolCall,
+    Usage,
     collect,
 )
 from noteagent.agent.projection import project
@@ -195,6 +197,11 @@ class KernelRuntime:
         self._max_turns = max_turns
         self._compaction = compaction or CompactionLimits()
         self._fingerprint = dict(fingerprint or {})
+
+    @property
+    def compaction_limits(self) -> CompactionLimits:
+        """The window and budgets this runtime compacts with."""
+        return self._compaction
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
         if isinstance(request, Retry):
@@ -410,6 +417,12 @@ class KernelRuntime:
             overflow_retried = False
             leak_retry_used = False
             leak_retry_note = False
+            #: The provider's own prompt count from the last conversation
+            #: call, and the estimate for that same prompt. Their difference
+            #: sizes the messages appended since.
+            last_usage, last_prompt_estimate = self._usage_baseline(
+                session_id
+            )
 
             forced_final = False
             while True:
@@ -427,9 +440,28 @@ class KernelRuntime:
                                 "think",
                             )
                         )
+                current_prompt = self._prompt(session_id)
+                prompt_tokens = None
+                if last_usage is not None and last_usage.input_tokens > 0:
+                    added_estimate = max(
+                        0,
+                        estimate_tokens(
+                            current_prompt,
+                            self._compaction.chars_per_token,
+                        )
+                        - last_prompt_estimate,
+                    )
+                    prompt_tokens = (
+                        last_usage.input_tokens + added_estimate
+                    )
+                compacted = False
                 try:
-                    self._compact_if_needed(
-                        session_id, sink, cancel, pause=pause
+                    compacted = self._compact_if_needed(
+                        session_id,
+                        sink,
+                        cancel,
+                        pause=pause,
+                        prompt_tokens=prompt_tokens,
                     )
                 except ModelStreamError as err:
                     if not forced_final:
@@ -438,7 +470,9 @@ class KernelRuntime:
                         )
                     # A failed summary must not cost the reader the forced
                     # answer; the model call below may still fit.
-                messages = self._prompt(session_id)
+                messages = (
+                    self._prompt(session_id) if compacted else current_prompt
+                )
                 if leak_retry_note:
                     messages = messages + (Message("system", LEAK_RETRY),)
                 if forced_final:
@@ -495,6 +529,7 @@ class KernelRuntime:
                                 cancel,
                                 force=True,
                                 pause=pause,
+                                prompt_tokens=prompt_tokens,
                             )
                         except ModelStreamError as summary_err:
                             return self._compaction_failure(
@@ -530,6 +565,10 @@ class KernelRuntime:
                 # say) gets its own compaction and retry.
                 overflow_retried = False
                 leak_retry_note = False
+                last_usage = assistant.usage
+                last_prompt_estimate = estimate_tokens(
+                    messages, self._compaction.chars_per_token
+                )
                 if assistant.tool_calls:
                     if forced_final:
                         message = (
@@ -619,6 +658,45 @@ class KernelRuntime:
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
         """The tools the model may call."""
         return self._tools.model_tools()
+
+    def _usage_baseline(
+        self, session_id: str
+    ) -> tuple[Usage | None, int]:
+        """The last assistant call's usage, and the estimate for its prompt.
+
+        A run continued after a pause starts from the previous run's last
+        call, so the first compaction check still reads a real count.
+        """
+        snapshot = self._sessions.load(session_id)
+        entries = list(snapshot.entries)
+        for index in range(len(entries) - 1, -1, -1):
+            entry = entries[index]
+            if (
+                entry.get("type") != "message"
+                or entry.get("role") != "assistant"
+            ):
+                continue
+            raw = entry.get("usage")
+            if not isinstance(raw, Mapping):
+                continue
+            usage = Usage(
+                input_tokens=_token_count(raw.get("inputTokens")),
+                output_tokens=_token_count(raw.get("outputTokens")),
+                cache_read_tokens=_token_count(
+                    raw.get("cacheReadTokens")
+                ),
+            )
+            if usage.input_tokens <= 0:
+                continue
+            prefix = replace(
+                snapshot, entries=tuple(entries[: index + 1])
+            )
+            estimate = estimate_tokens(
+                self._prompt_from(prefix),
+                self._compaction.chars_per_token,
+            )
+            return usage, estimate
+        return None, 0
 
     def _mark(
         self,
@@ -855,14 +933,20 @@ class KernelRuntime:
         force: bool = False,
         instructions: str = "",
         pause: Event | None = None,
+        prompt_tokens: int | None = None,
     ) -> bool:
         _check_pause(pause)
         snapshot = self._sessions.load(session_id)
         cut_id = choose_cut(snapshot.entries, self._compaction)
         if cut_id is None:
             return False
-        prompt = self._prompt_from(snapshot)
-        tokens_before = estimate_tokens(prompt, self._compaction.chars_per_token)
+        if prompt_tokens is not None and prompt_tokens > 0:
+            tokens_before = prompt_tokens
+        else:
+            tokens_before = estimate_tokens(
+                self._prompt_from(snapshot),
+                self._compaction.chars_per_token,
+            )
         if not force and tokens_before < self._compaction.threshold_tokens:
             return False
         cut_index = next(
@@ -883,11 +967,14 @@ class KernelRuntime:
         if old.summary.strip():
             context += "Earlier summary:\n" + old.summary.strip() + "\n\n"
         context += transcript
-        # The summary request has to fit the same window. Keep the opening
-        # (goals, constraints) and the end (the turns nearest the cut).
-        max_chars = (
-            self._compaction.threshold_tokens
-            * self._compaction.chars_per_token
+        # The summary input has its own cap, never above the compaction
+        # threshold. Keep the opening (goals, constraints) and the end.
+        summary_tokens = min(
+            self._compaction.summary_input_tokens,
+            self._compaction.threshold_tokens,
+        )
+        max_chars = max(1, summary_tokens) * (
+            self._compaction.chars_per_token
         )
         if len(context) > max_chars:
             head = max_chars // 4
@@ -962,6 +1049,11 @@ class KernelRuntime:
         if parts:
             messages.insert(0, Message("system", "\n\n".join(parts)))
         return tuple(messages)
+
+
+def _token_count(value: object) -> int:
+    """A token count a marker may carry, or zero when it is not one."""
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _tap(
