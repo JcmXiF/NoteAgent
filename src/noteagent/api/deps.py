@@ -43,5 +43,6 @@ class AppDeps:
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.
     seed_system_sections: bool = True
-    #: One safety bound for a run: model turns, not tool rounds.
+    #: One safety bound for a run: model turns, not tool rounds. Spending it
+    #: forces one extra answer without tools.
     max_turns: int = 50

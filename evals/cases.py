@@ -161,13 +161,15 @@ def search_and_answer(run: CaseRun) -> None:
 
 
 def turn_budget(run: CaseRun) -> None:
-    """One coding-agent-style turn bound, not a tool-round budget."""
+    """The model-turn bound forces one final answer without tools."""
+    answer = "已到轮次上限，基于已有材料回答。"
     scripts = [
         FauxModelClient.tool_call(
             f"t{index}", "wiki_read", '{"slug": "concepts/entropy"}'
         ).script
-        for index in range(3)
+        for index in range(2)
     ]
+    scripts.append(FauxModelClient.text(answer).script)
     model = FauxModelClient(*scripts)
     api = run.start(model, max_turns=2)
     session = api.create_session()
@@ -179,38 +181,51 @@ def turn_budget(run: CaseRun) -> None:
         2, TOOL_CONTRACT,
     )
     run.equal(
-        "the model was called twice",
+        "the model was called three times",
         len(model.requests),
-        2, TOOL_CONTRACT,
+        3, TOOL_CONTRACT,
     )
-    errors = reply.events_of("error")
-    run.equal("the turn bound is an error", len(errors), 1, TOOL_CONTRACT)
-    if errors:
-        run.equal(
-            "the error code",
-            errors[0].get("code"),
-            "max_turns_exceeded",
-            TOOL_CONTRACT,
-        )
-    entries = api.entries(session)
     run.equal(
-        "the partial log is kept",
-        [
-            entry.get("role")
-            for entry in entries
-            if entry.get("type") == "message"
-        ],
-        ["user", "assistant", "toolResult", "assistant", "toolResult"], STATE,
+        "the forced call offers no tools",
+        model.requests[-1].tools,
+        (), TOOL_CONTRACT,
+    )
+    run.equal(
+        "no error ends the run",
+        len(reply.events_of("error")),
+        0, TOOL_CONTRACT,
     )
     run.check(
-        "no final answer was written",
-        not any(
-            entry.get("role") == "assistant"
-            and not entry.get("toolCalls")
-            and entry.get("content")
-            for entry in entries
+        "the cap is reported",
+        any(
+            "max_turns_exceeded" in str(event.get("message") or "")
+            for event in reply.events_of("status")
         ),
-        "a final assistant message was written", STATE,
+        "no status event mentioned the turn cap",
+        TOOL_CONTRACT,
+    )
+    entries = api.entries(session)
+    messages = [
+        entry for entry in entries if entry.get("type") == "message"
+    ]
+    run.equal(
+        "the answer is kept",
+        [entry.get("role") for entry in messages],
+        [
+            "user",
+            "assistant",
+            "toolResult",
+            "assistant",
+            "toolResult",
+            "assistant",
+        ],
+        STATE,
+    )
+    run.equal(
+        "the forced answer is written",
+        messages[-1].get("content"),
+        answer,
+        STATE,
     )
 
 
@@ -563,7 +578,7 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         "turn_budget",
-        "A run stops at its single turn bound, not a tool-round budget.",
+        "The turn bound forces one final answer without tools.",
         turn_budget,
     ),
     Case(

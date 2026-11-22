@@ -112,6 +112,14 @@ LEAK_RETRY = (
     "if a read tool is still needed, say that the tool budget is exhausted "
     "and what is missing."
 )
+#: The one no-tools turn a run gets after spending its model-turn budget.
+MAX_TURNS_FINAL = (
+    "You have reached this run's model-turn limit. Answer the reader now "
+    "from the conversation and the tool results you already have. Do not "
+    "call tools."
+)
+#: The marker note and status code for that forced answer.
+MAX_TURNS_NOTE = "max_turns_exceeded"
 
 
 class RunRegistry:
@@ -168,8 +176,8 @@ class KernelRuntime:
         trace: TraceSink | None = None,
         model_name: str = "",
         #: One safety bound for the whole run: model calls, not tool rounds.
-        #: Coding agents usually expose one turn budget and let the loop end on
-        #: a final answer or a control action.
+        #: Spending it forces one extra answer without tools, so the reader
+        #: still gets what the run has.
         max_turns: int = 50,
         compaction: CompactionLimits | None = None,
         #: Non-secret project/config digests a run marker records. The kernel
@@ -403,37 +411,43 @@ class KernelRuntime:
             leak_retry_used = False
             leak_retry_note = False
 
+            forced_final = False
             while True:
                 _check_cancel(cancel)
                 _check_pause(pause)
-                model_calls += 1
-                if model_calls > self._max_turns:
-                    message = (
-                        "the run exceeded "
-                        f"{self._max_turns} model turns"
-                    )
-                    self._mark(
-                        session_id,
-                        run_id,
-                        FAILED,
-                        note="max_turns_exceeded",
-                    )
-                    sink(ErrorEvent("max_turns_exceeded", message))
-                    return RunResult(
-                        session_id, run_id, "failed", error=message
-                    )
+                if not forced_final:
+                    model_calls += 1
+                    if model_calls > self._max_turns:
+                        # Spend the one extra call without tools: the reader
+                        # gets an answer from what the run already gathered.
+                        forced_final = True
+                        sink(
+                            StatusEvent(
+                                f"{MAX_TURNS_NOTE}: answering without tools",
+                                "think",
+                            )
+                        )
                 try:
                     self._compact_if_needed(
                         session_id, sink, cancel, pause=pause
                     )
                 except ModelStreamError as err:
-                    return self._compaction_failure(
-                        session_id, run_id, sink, err
-                    )
+                    if not forced_final:
+                        return self._compaction_failure(
+                            session_id, run_id, sink, err
+                        )
+                    # A failed summary must not cost the reader the forced
+                    # answer; the model call below may still fit.
                 messages = self._prompt(session_id)
                 if leak_retry_note:
                     messages = messages + (Message("system", LEAK_RETRY),)
-                offered = self._offered_tools()
+                if forced_final:
+                    messages = messages + (
+                        Message("system", MAX_TURNS_FINAL),
+                    )
+                    offered: tuple[dict[str, object], ...] = ()
+                else:
+                    offered = self._offered_tools()
                 model_request = ModelRequest(
                     model=self._model_name,
                     messages=messages,
@@ -456,7 +470,11 @@ class KernelRuntime:
                     if err.code == "cancelled":
                         # One cancellation path, whichever layer noticed first.
                         raise RunCancelled("run cancelled") from err
-                    if err.code == "tool_call_leak" and not leak_retry_used:
+                    if (
+                        err.code == "tool_call_leak"
+                        and not leak_retry_used
+                        and not forced_final
+                    ):
                         # The adapter could not recover a leaked tool call.
                         # Ask once more, in prose, with the failure named.
                         leak_retry_used = True
@@ -464,7 +482,11 @@ class KernelRuntime:
                         sink(TokenEvent("", reset=True))
                         partial.clear()
                         continue
-                    if err.code == "context_overflow" and not overflow_retried:
+                    if (
+                        err.code == "context_overflow"
+                        and not overflow_retried
+                        and not forced_final
+                    ):
                         overflow_retried = True
                         try:
                             compacted = self._compact_if_needed(
@@ -491,7 +513,9 @@ class KernelRuntime:
                         session_id,
                         run_id,
                         FAILED,
-                        note=err.code,
+                        note=(
+                            MAX_TURNS_NOTE if forced_final else err.code
+                        ),
                     )
                     sink(
                         ErrorEvent(
@@ -507,6 +531,21 @@ class KernelRuntime:
                 overflow_retried = False
                 leak_retry_note = False
                 if assistant.tool_calls:
+                    if forced_final:
+                        message = (
+                            "the model tried to call tools after the "
+                            "turn limit"
+                        )
+                        self._mark(
+                            session_id,
+                            run_id,
+                            FAILED,
+                            note=MAX_TURNS_NOTE,
+                        )
+                        sink(ErrorEvent("model_error", message))
+                        return RunResult(
+                            session_id, run_id, "failed", error=message
+                        )
                     calls = assistant.tool_calls
                     # The preamble becomes a step, every call gets its result,
                     # and the next round reads the log.
@@ -529,7 +568,11 @@ class KernelRuntime:
                         session_id,
                         run_id,
                         FAILED,
-                        note="model_error",
+                        note=(
+                            MAX_TURNS_NOTE
+                            if forced_final
+                            else "model_error"
+                        ),
                     )
                     sink(ErrorEvent("model_error", message))
                     return RunResult(session_id, run_id, "failed", error=message)
@@ -546,7 +589,12 @@ class KernelRuntime:
                         "cacheReadTokens": assistant.usage.cache_read_tokens,
                     }
                 self._sessions.append(session_id, entry)
-                self._mark(session_id, run_id, FINISHED)
+                self._mark(
+                    session_id,
+                    run_id,
+                    FINISHED,
+                    note=MAX_TURNS_NOTE if forced_final else "",
+                )
                 sink(
                     DoneEvent(
                         {"id": session_id}, {"id": run_id, "status": "completed"}
