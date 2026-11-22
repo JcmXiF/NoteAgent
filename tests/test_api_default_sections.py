@@ -76,6 +76,15 @@ class DefaultSectionTests(unittest.TestCase):
         self.assertIn("Answer only from this project's wiki", prompt)
         self.assertIn("<available_skills>", prompt)
 
+    def test_a_writing_request_keeps_the_index(self) -> None:
+        session = self.api.create_session(title="写")
+
+        self.api.query(session, "帮我写一篇关于熵的 wiki")
+        sections = self.sections(session)
+
+        self.assertIn("<available_skills>", sections["skills"])
+        self.assertNotIn("## Recipe", sections["skills"])
+
     def test_repeated_queries_do_not_duplicate_the_section(self) -> None:
         session = self.api.create_session(title="默认")
         self.api.query(session, "第一问")

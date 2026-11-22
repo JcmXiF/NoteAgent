@@ -39,9 +39,6 @@ class AppDeps:
     #: The web fetch the page selection tool calls. ``None`` uses the project's
     #: own acquire fetch; a test hands in a callable that returns a capture.
     web_fetch: WebFetchFn | None = None
-    #: The writing skill as a context source: ``None`` follows the message's
-    #: intent, ``True``/``False`` force it on or off (the A/B experiment).
-    writing_skill: bool | None = None
     settings: Mapping[str, object] | None = None
     #: A product session starts with the default role/tools/grounding sections.
     #: The eval harness turns this off; its cases bring their own sections.

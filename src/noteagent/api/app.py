@@ -130,7 +130,6 @@ from noteagent.agent.store import SessionStore, summary_dict
 from noteagent.api.sessions import session_payload
 from noteagent.sessions.recovery import abandon_run, interrupted_run
 from noteagent.prompts.system import ensure_default_sections
-from noteagent.prompts.writing_skill import sync_writing_skill
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
 from noteagent.ingest.revision_inbox import (
@@ -896,15 +895,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise _session_busy_refusal(session_id)
         if deps.seed_system_sections:
             ensure_default_sections(store, session_id, layout)
-        if deps.seed_system_sections or deps.writing_skill is not None:
-            # The product sees the skill when the request asks for a page; an
-            # eval harness keeps its case-owned prompt unless it forces one.
-            sync_writing_skill(
-                store,
-                session_id,
-                body.content,
-                enabled=deps.writing_skill,
-            )
         try:
             runtime = session_runtime(deps, store, layout)
         except LlmConfigError as err:
