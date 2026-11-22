@@ -113,7 +113,7 @@ class WritingSkillQueryTests(unittest.TestCase):
         )
         self.assertNotIn(WRITING_SECTION, _sections(store, "s1"))
 
-    def test_a_question_does_not_add_the_skill(self) -> None:
+    def test_a_question_does_not_add_the_recipe(self) -> None:
         store = FakeSessionStore()
         store.create("s1")
         client = self.client(
@@ -125,7 +125,10 @@ class WritingSkillQueryTests(unittest.TestCase):
             json={"content": "熵是什么？"},
         )
 
-        self.assertNotIn(WRITING_SECTION, _sections(store, "s1"))
+        sections = _sections(store, "s1")
+        self.assertNotIn(
+            "write_wiki", sections.get(WRITING_SECTION, "")
+        )
 
     def test_an_eval_harness_session_is_not_touched(self) -> None:
         store = FakeSessionStore()

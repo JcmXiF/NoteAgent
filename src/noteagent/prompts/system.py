@@ -2,7 +2,8 @@
 
 The agent prompt is a projection of its log: a session with no
 ``system_section`` entry has no role, no tool policy, and no grounding rule.
-These defaults give a new session that baseline. The eval harness disables
+These defaults give a new session that baseline, plus the project's brief when
+it has one and the skill index when any skill exists. The eval harness disables
 them because its cases bring their own sections.
 """
 
@@ -11,6 +12,10 @@ from __future__ import annotations
 from noteagent.agent.projection import project as read_projection
 from noteagent.agent.store import SessionStore
 from noteagent.project.layout import ProjectLayout
+from noteagent.skills import default_registry
+from noteagent.skills.index import render_index
+
+SKILLS_SECTION = "skills"
 
 DEFAULT_IDENTITY = (
     "You are NoteAgent, a notes assistant working on one project wiki. "
@@ -24,20 +29,26 @@ DEFAULT_TOOLS = (
     "results are locators, not quotes.\n"
     "- `wiki_read(slug)`: open one wiki page by slug; read a page before "
     "quoting or summarizing it.\n"
-    "Rules: you cannot write or edit pages. Answer questions that ask you "
-    "to explain, compare, analyze, or state what is missing directly in "
-    "prose. If the wiki lacks a page, say exactly what is missing. When the "
-    "reader asks you to write, use the writing tools offered to you; the "
-    "writing state is where the work is handed over. Never claim a job ran "
-    "or a page was written."
+    "- `get_state(...)`: read the writing state: search hits, selected "
+    "pages and the draft.\n"
+    "- `web_search(query)`, `select_page({hitId})`, "
+    "`select_frame({pageId, blockIds})`: gather material into the state.\n"
+    "- `compose_wiki({wikiFile, baseDraftVersion, sections})`: compose or "
+    "revise a draft page.\n"
+    "- `write_wiki({wikiFile, draftVersion})`: publish the draft into the "
+    "wiki.\n"
+    "- `skill(name)` / `skill_read_file(name, path)`: load a skill's "
+    "instructions and a file it references.\n"
+    "Rules: answer questions that ask you to explain, compare, analyze, or "
+    "state what is missing directly in prose. When the reader asks you to "
+    "write, update, plan or compile a page, load the `writing` skill and "
+    "follow its recipe. Never claim work you did not do."
 )
 DEFAULT_GROUNDING = (
-    "Prefer the wiki. You may add general knowledge only when it is "
-    "necessary, and only as a clearly marked aside such as "
-    "`（wiki 未覆盖，以下为一般知识：…）`. Never present outside knowledge as "
-    "if a wiki page said it. When the wiki does not contain what the question "
-    "asks, say what is missing rather than inventing it. Never invent "
-    "formulas, definitions, pages or sources."
+    "Answer only from this project's wiki. Do not add general knowledge, "
+    "even when you mark it as an aside. When the wiki does not contain what "
+    "the question asks, say exactly what is missing. Never invent formulas, "
+    "definitions, pages or sources."
 )
 _PROJECT_LIMIT = 4_000
 
@@ -55,7 +66,11 @@ def project_text(layout: ProjectLayout) -> str:
 
 
 def default_sections(layout: ProjectLayout) -> dict[str, str]:
-    """The role, tools and grounding a product session starts with."""
+    """The role, tools, project, grounding and skill index to start with.
+
+    The project section appears when the wiki has a brief; the skills section
+    appears when a skill is discoverable.
+    """
     sections = {
         "identity": DEFAULT_IDENTITY,
         "tools": DEFAULT_TOOLS,
@@ -64,6 +79,9 @@ def default_sections(layout: ProjectLayout) -> dict[str, str]:
     if project:
         sections["project"] = project
     sections["grounding"] = DEFAULT_GROUNDING
+    index = render_index(default_registry(layout.root))
+    if index:
+        sections[SKILLS_SECTION] = index
     return sections
 
 
@@ -75,7 +93,8 @@ def ensure_default_sections(
     """Add the sections an old or new session is missing; keep custom ones.
 
     A session that already carries a section keeps it: the eval runner writes
-    its own identity/tools/project/grounding and must not be overwritten.
+    its own identity/tools/project/grounding/skills and must not be
+    overwritten.
     """
     if layout is None:
         return False

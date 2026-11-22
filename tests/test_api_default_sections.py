@@ -1,4 +1,4 @@
-"""A product session starts with the role, tools, project and grounding."""
+"""A product session starts with role, tools, project, grounding and skills."""
 
 from __future__ import annotations
 
@@ -47,12 +47,22 @@ class DefaultSectionTests(unittest.TestCase):
         self.assertIn("Available tools:", sections["tools"])
         self.assertIn("- `search(query)`", sections["tools"])
         self.assertIn("- `wiki_read(slug)`", sections["tools"])
-        self.assertIn("use the writing tools offered to you", sections["tools"])
-        self.assertIn(
-            "the writing state is where the work is handed over", sections["tools"]
-        )
+        for tool in (
+            "web_search",
+            "select_page",
+            "select_frame",
+            "compose_wiki",
+            "write_wiki",
+            "get_state",
+            "skill(name)",
+            "skill_read_file",
+        ):
+            self.assertIn(tool, sections["tools"])
+        self.assertNotIn("cannot write", sections["tools"])
         self.assertIn("grounding", sections)
         self.assertIn("信息论 wiki", sections["project"])
+        self.assertIn("<available_skills>", sections["skills"])
+        self.assertIn("- writing [", sections["skills"])
 
     def test_the_prompt_reads_the_defaults(self) -> None:
         session = self.api.create_session(title="默认")
@@ -63,7 +73,8 @@ class DefaultSectionTests(unittest.TestCase):
         self.assertIn("NoteAgent", prompt)
         self.assertIn("search", prompt)
         self.assertIn("信息论 wiki", prompt)
-        self.assertIn("Prefer the wiki", prompt)
+        self.assertIn("Answer only from this project's wiki", prompt)
+        self.assertIn("<available_skills>", prompt)
 
     def test_repeated_queries_do_not_duplicate_the_section(self) -> None:
         session = self.api.create_session(title="默认")

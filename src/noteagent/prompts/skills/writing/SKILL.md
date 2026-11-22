@@ -1,3 +1,8 @@
+---
+name: writing
+description: Use when the reader asks to write, update, plan, compile or reorganize wiki pages — 写一页、整理成一页、对比页、学习路径、发起规划、编译、改写、补一节.
+---
+
 # Writing a wiki page
 
 The state is the one truth. A tool's answer tells you what happened; read the

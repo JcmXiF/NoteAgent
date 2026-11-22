@@ -42,7 +42,7 @@ from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
 from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
-from noteagent.skills import SkillRegistry, default_roots
+from noteagent.skills import default_registry
 from noteagent.skills.tools import skill_tools
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
@@ -226,8 +226,7 @@ def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
     )
     tools.register(compose_wiki_tool(layout, clock=deps.clock))
     tools.register(write_wiki_tool(layout, clock=deps.clock))
-    registry = SkillRegistry(default_roots(layout.root))
-    for tool in skill_tools(registry):
+    for tool in skill_tools(default_registry(layout.root)):
         tools.register(tool)
     return tools
 

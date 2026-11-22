@@ -110,6 +110,11 @@ class SkillRegistry:
         )
 
 
+def default_registry(project_root: Path | None) -> SkillRegistry:
+    """The product's three-root registry for one project."""
+    return SkillRegistry(default_roots(project_root))
+
+
 def default_roots(
     project_root: Path | None,
     *,

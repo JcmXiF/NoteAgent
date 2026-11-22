@@ -8,12 +8,12 @@ evals and the node's short instruction do not need it.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from noteagent.agent.projection import project
 from noteagent.agent.store import SessionStore
+from noteagent.ingest.frontmatter import parse_page
+from noteagent.skills import BUNDLED_ROOT
 
-SKILL_PATH = Path(__file__).with_name("writing_skill.md")
+SKILL_PATH = BUNDLED_ROOT / "writing" / "SKILL.md"
 WRITING_SECTION = "skills"
 
 #: A person naming the skill outright always gets it.
@@ -52,8 +52,10 @@ _INTENT = (
 
 
 def writing_skill_text() -> str:
-    """The bundled skill's instructions, verbatim."""
-    return SKILL_PATH.read_text(encoding="utf-8").strip()
+    """The bundled skill's instructions, without the frontmatter."""
+    return parse_page(
+        SKILL_PATH.read_text(encoding="utf-8")
+    ).body.strip()
 
 
 def select_writing_skill(message: str) -> bool:
