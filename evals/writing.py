@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
@@ -29,6 +30,7 @@ from noteagent.agent.model import (
 )
 from noteagent.agent.projection import project
 from noteagent.agent.run_marker import (
+    ABANDONED,
     FINISHED,
     RUNNING,
     RunFingerprint,
@@ -48,6 +50,7 @@ from noteagent.effects.journal import (
 from noteagent.ingest.frontmatter import parse_inline_list, parse_page
 from noteagent.ingest.page_history import page_snapshots
 from noteagent.ingest.source_citations import list_source_citations
+from noteagent.pipeline.materials import Materials
 from noteagent.pipeline.run import PipelineRun
 from noteagent.pipeline.run import run_to_dict
 from noteagent.project.run_fingerprint import project_fingerprint
@@ -139,6 +142,12 @@ def _tokens(reply: Exchange) -> str:
     return "".join(
         str(data.get("text") or "") for data in reply.events_of("token")
     )
+
+
+def _offered_tools(model) -> list[str]:
+    return [
+        str(tool["function"]["name"]) for tool in model.requests[0].tools
+    ]
 
 
 def _state(api) -> dict[str, object]:
@@ -448,6 +457,144 @@ def writing_partial_then_second_run(run: CaseRun) -> None:
     run.check("the wiki page exists", (run.layout.root / WIKI).is_file(), "", PUBLISH)
 
 
+def writing_multi_search(run: CaseRun) -> None:
+    """Two searches are kept, and the first round's hit is still selectable."""
+    store = WritingStateStore(run.layout, clock=run.clock)
+    store.save(WritingState(draft={"pages": []}))
+    model = FauxModelClient(
+        _call("c1", "web_search", {"query": "熵"}),
+        _call("c2", "web_search", {"query": "贝叶斯"}),
+        _call("c3", "get_state", {}),
+        _call("c4", "get_state", {"searchId": "search-1"}),
+        _call("c5", "select_page", {"hitId": "hit-1"}),
+        _final("两轮都搜到了。"),
+    )
+    api = run.start(
+        model, web_search=search_cards, web_fetch=capture_page
+    )
+    session = api.create_session()
+    reply = api.query(session, "先搜熵，再搜贝叶斯，从第一轮选页")
+
+    run.equal("the query is answered", reply.status_code, 200, TOOL_CONTRACT)
+    run.equal(
+        "the final answer streams",
+        _tokens(reply).strip(),
+        "两轮都搜到了。",
+        PUBLISH,
+    )
+    state = _state(api)
+    run.equal(
+        "both search rounds are kept",
+        [row["query"] for row in state["searches"]],
+        ["熵", "贝叶斯"],
+        STATE,
+    )
+    first_hits = state["searches"][0]["hits"]
+    run.equal(
+        "the first round keeps its hit", first_hits[0]["id"], "hit-1", STATE
+    )
+    run.equal(
+        "the page came from the first round",
+        state["selectedPages"][0]["hitId"],
+        "hit-1",
+        STATE,
+    )
+    entries = api.entries(session)
+    get_state_ids = [
+        str(call.get("id"))
+        for entry in entries
+        if entry.get("role") == "assistant"
+        for call in entry.get("toolCalls") or []
+        if call.get("name") == "get_state"
+    ]
+
+    def tool_result(call_id: str) -> str:
+        return next(
+            str(entry.get("content") or "")
+            for entry in entries
+            if entry.get("role") == "toolResult"
+            and entry.get("toolCallId") == call_id
+        )
+
+    summary = json.loads(tool_result(get_state_ids[0]))
+    searches = (summary.get("areas") or {}).get("searches") or {}
+    run.equal("the summary counts both rounds", searches.get("count"), 2, STATE)
+    run.equal(
+        "the summary names the latest round",
+        (searches.get("latest") or {}).get("query"),
+        "贝叶斯",
+        STATE,
+    )
+    first_round = json.loads(tool_result(get_state_ids[1]))
+    run.check(
+        "the first round's hits are readable through get_state",
+        any(str(hit.get("id")) == "hit-1" for hit in first_round),
+        "",
+        STATE,
+    )
+
+
+def writing_state_restart(run: CaseRun) -> None:
+    """The state survives an app restart, and an expired lease is taken over."""
+    _seed(run)
+    model = FauxModelClient(
+        _call("c1", "web_search", {"query": "熵"}),
+        _final("搜到了。"),
+        _call(
+            "c2",
+            "select_frame",
+            {"pageId": "page-1", "blockIds": ["b3"]},
+        ),
+        _final("画好了。"),
+    )
+    api = run.start(
+        model, web_search=search_cards, web_fetch=capture_page
+    )
+    session = api.create_session()
+    first = api.query(session, "先搜一下")
+
+    run.equal("the first run answers", first.status_code, 200, TOOL_CONTRACT)
+    run.equal("the first answer streams", _tokens(first).strip(), "搜到了。", PUBLISH)
+    _wait_for_lease(api)
+    state = _state(api)
+    run.equal("the search is in the state", state["searches"][0]["query"], "熵", STATE)
+    run.equal("the first run released its lease", state["writer"], None, LOCK)
+
+    store = WritingStateStore(run.layout, clock=run.clock)
+    current = store.load()
+    expired = {
+        "kind": "agent",
+        "id": "expired",
+        "since": "2020-01-01T00:00:00Z",
+    }
+    # A writer that stopped heartbeating for longer than WRITER_TTL_S expires;
+    # the next writing tool takes the lease over.
+    store.save(replace(current, writer=expired))
+
+    api = run.restart()
+    state = _state(api)
+    run.equal("the search survives the restart", state["searches"][0]["query"], "熵", STATE)
+    run.equal("the page survives the restart", state["selectedPages"][0]["id"], "page-1", STATE)
+    run.equal("the frame survives the restart", state["frames"][0]["id"], "frame-1", STATE)
+    run.equal("the draft survives the restart", len(state["draft"]["pages"]), 1, STATE)
+
+    session = api.create_session()
+    second = api.query(session, "再画一个框")
+
+    run.equal("the second run answers", second.status_code, 200, TOOL_CONTRACT)
+    run.equal("the second answer streams", _tokens(second).strip(), "画好了。", PUBLISH)
+    _wait_for_lease(api)
+    state = _state(api)
+    run.equal("the expired lease was taken over", len(state["frames"]), 2, LOCK)
+    run.equal(
+        "the taken-over frame is the new one",
+        state["frames"][1]["blockIds"],
+        ["b3"],
+        STATE,
+    )
+    run.equal("the second run released its lease", state["writer"], None, LOCK)
+
+
 def writing_node_run(run: CaseRun) -> None:
     """The auto-frame node writes frames with only its two tools."""
     _seed(run, frame=False, page=_page(sections=[]))
@@ -472,9 +619,7 @@ def writing_node_run(run: CaseRun) -> None:
     payload = reply.json()
     run.equal("the node completed", payload["status"], "completed", NODE_RUN)
     run.equal("one frame is the node's result", len(payload["frames"]), 1, STATE)
-    offered = sorted(
-        tool["function"]["name"] for tool in model.requests[0].tools
-    )
+    offered = sorted(_offered_tools(model))
     run.equal("the node sees only two tools", offered, ["get_state", "select_frame"], TOOL_CONTRACT)
     sessions = api.request("GET", "/api/v1/sessions").json()["sessions"]
     run.equal("the node session stays out of the chat list", sessions, [], NODE_RUN)
@@ -574,18 +719,52 @@ def writing_save_lock(run: CaseRun) -> None:
 def writing_human_edit_and_conflict(run: CaseRun) -> None:
     """A person edits, loses a stale save, stales a frame, publishes and is refused."""
     _seed(run)
+    section_args = {
+        "id": "definition",
+        "heading": "定义",
+        "citations": ["frame-1"],
+        "baseVersion": 2,
+    }
+    next_call = iter(range(1, 7))
+
+    def compose(body: str, *, overwrite: bool = False) -> list[ModelEvent]:
+        arguments = {
+            "wikiFile": WIKI,
+            "baseDraftVersion": 2,
+            "sections": [{**section_args, "body": body}],
+        }
+        if overwrite:
+            arguments["overwrite"] = True
+        return _call(f"c{next(next_call)}", "compose_wiki", arguments)
+
+    def read_section() -> list[ModelEvent]:
+        return _call(
+            f"c{next(next_call)}",
+            "get_state",
+            {
+                "section": "section",
+                "wikiFile": WIKI,
+                "sectionId": "definition",
+            },
+        )
+
     api = run.start(
         FauxModelClient(
+            compose("agent 想覆盖。"),
+            read_section(),
+            compose("agent 覆盖。", overwrite=True),
+            read_section(),
+            _final("改好了。"),
             _call(
-                "c1",
+                "c5",
                 "write_wiki",
-                {"wikiFile": WIKI, "draftVersion": 2},
+                {"wikiFile": WIKI, "draftVersion": 3},
             ),
             _final("已发布。"),
             _call(
-                "c2",
+                "c6",
                 "write_wiki",
-                {"wikiFile": WIKI, "draftVersion": 3},
+                {"wikiFile": WIKI, "draftVersion": 4},
             ),
             _final("缺目标，拒绝。"),
         )
@@ -615,6 +794,42 @@ def writing_human_edit_and_conflict(run: CaseRun) -> None:
         conflict.json()["params"]["stateVersion"],
         str(state["stateVersion"]), LOCK,
     )
+
+    guard_session = api.create_session()
+    guard = api.query(guard_session, "改一下草稿")
+    run.equal("the guard query answers", guard.status_code, 200, TOOL_CONTRACT)
+    run.equal("the guard answer streams", _tokens(guard).strip(), "改好了。", PUBLISH)
+    refused = next(
+        (card for card in guard.events_of("observation") if card.get("error")),
+        None,
+    )
+    run.check(
+        "the humanEdited section refuses the compose",
+        refused is not None, "", STATE,
+    )
+    diagnostics = (refused or {}).get("diagnostics") or []
+    run.check(
+        "the refusal names the overwrite",
+        any(
+            "overwrite" in str(item.get("message") or "")
+            for item in diagnostics
+        ),
+        "",
+        STATE,
+    )
+    run.check(
+        "the refused compose leaves the human body",
+        "人工改过。" in json.dumps(api.entries(guard_session), ensure_ascii=False),
+        "",
+        STATE,
+    )
+    _wait_for_lease(api)
+    state = _state(api)
+    page = _first_page(state)
+    section = _first_section(page)
+    run.equal("the overwrite replaces the body", section["body"], "agent 覆盖。", STATE)
+    run.equal("the overwrite clears humanEdited", section["humanEdited"], False, STATE)
+    run.equal("the overwrite bumps the draft", page["version"], 3, STATE)
 
     state = _state(api)
     base = int(state["stateVersion"])
@@ -777,6 +992,67 @@ def writing_failure_matrix(run: CaseRun) -> None:
     run.check("the empty draft is refused", "has no sections" in entries, "", PUBLISH)
 
 
+def _seed_node_run(
+    run: CaseRun, node_id: str, run_id: str, page_id: str
+) -> None:
+    """A node session an interrupted run left behind."""
+    store = run.store
+    store.create(node_id, "Auto-frame")
+    store.append(
+        node_id,
+        {"type": "node", "node": "auto-frame", "pageId": page_id},
+    )
+    store.append(
+        node_id,
+        {
+            "type": "message",
+            "role": "user",
+            "content": auto_frame_instruction(page_id),
+        },
+    )
+    deps = AppDeps(
+        clock=run.clock,
+        ids=run.ids,
+        settings={"model": "faux"},
+    )
+    fingerprint = project_fingerprint(
+        run.layout, config={"model": "faux"}
+    )
+    store.append(
+        node_id,
+        marker_entry(
+            RunMarker(
+                run_id,
+                RUNNING,
+                fingerprint=RunFingerprint.from_mapping(
+                    fingerprint,
+                    model="faux",
+                    toolset=toolset_name(node_tools(deps, run.layout)),
+                    config_hash=config_digest(
+                        fingerprint.get("configHash", ""),
+                        project(store.load(node_id).entries).sections,
+                    ),
+                ),
+            )
+        ),
+    )
+    store.append(
+        node_id,
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": "",
+            "toolCalls": [
+                {
+                    "id": "c0",
+                    "name": "get_state",
+                    "arguments": json.dumps({"pageId": page_id}),
+                }
+            ],
+        },
+    )
+
+
 def writing_node_recovery(run: CaseRun) -> None:
     """A crashed node continues from its own marker and writes its frames."""
     _seed(run, frame=False, page=_page(sections=[]))
@@ -790,60 +1066,8 @@ def writing_node_recovery(run: CaseRun) -> None:
     )
     api = run.start(model)
     store = run.store
-    store.create("node-1", "Auto-frame")
-    store.append(
-        "node-1",
-        {"type": "node", "node": "auto-frame", "pageId": "page-1"},
-    )
-    store.append(
-        "node-1",
-        {
-            "type": "message",
-            "role": "user",
-            "content": auto_frame_instruction("page-1"),
-        },
-    )
-    deps = AppDeps(
-        clock=run.clock,
-        ids=run.ids,
-        settings={"model": "faux"},
-    )
-    fingerprint = project_fingerprint(
-        run.layout, config={"model": "faux"}
-    )
-    store.append(
-        "node-1",
-        marker_entry(
-            RunMarker(
-                "run-1",
-                RUNNING,
-                fingerprint=RunFingerprint.from_mapping(
-                    fingerprint,
-                    model="faux",
-                    toolset=toolset_name(node_tools(deps, run.layout)),
-                    config_hash=config_digest(
-                        fingerprint.get("configHash", ""),
-                        project(store.load("node-1").entries).sections,
-                    ),
-                ),
-            )
-        ),
-    )
-    store.append(
-        "node-1",
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": "",
-            "toolCalls": [
-                {
-                    "id": "c0",
-                    "name": "get_state",
-                    "arguments": '{"pageId": "page-1"}',
-                }
-            ],
-        },
-    )
+    _seed_node_run(run, "node-1", "run-1", "page-1")
+    _seed_node_run(run, "node-2", "run-2", "page-1")
     recover_store(store, clock=run.clock)
 
     reply = api.request(
@@ -863,6 +1087,35 @@ def writing_node_recovery(run: CaseRun) -> None:
     run.check(
         "the resumed run's marker is finished",
         marker is not None and marker.state == FINISHED, "", RECOVERY,
+    )
+
+    abandoned = api.request(
+        "POST",
+        "/api/v1/sessions/node-2/abandon",
+        json={"runId": "run-2"},
+    )
+    run.equal("the node abandons", abandoned.status_code, 200, RECOVERY)
+    run.equal(
+        "the abandon is recorded",
+        abandoned.json().get("abandoned"),
+        True,
+        RECOVERY,
+    )
+    run.equal(
+        "the abandoned session is idle",
+        abandoned.json()["session"]["state"]["busy"],
+        False,
+        STATE,
+    )
+    state = _state(api)
+    run.check(
+        "the abandoned state is readable",
+        state.get("stateVersion") is not None, "", STATE,
+    )
+    marker = last_marker(store.load("node-2").entries)
+    run.check(
+        "the abandoned run's marker is terminal",
+        marker is not None and marker.state == ABANDONED, "", RECOVERY,
     )
 
 
@@ -891,7 +1144,50 @@ def writing_old_run_and_archive_readable(run: CaseRun) -> None:
         encoding="utf-8",
     )
     store = _seed(run)
-    api = run.start(FauxModelClient())
+    Materials(run.layout, clock=run.clock).stage(
+        capture_page("https://example.com/entropy"), run_id="pr-old"
+    )
+    model = FauxModelClient(_final("好的"))
+    api = run.start(model)
+    session = api.create_session()
+    api.query(session, "你好")
+
+    start_reply = api.request(
+        "POST", "/api/v1/pipeline/runs", json={"intent": "熵"}
+    )
+    run.check(
+        "the old start is gone",
+        start_reply.status_code in (404, 405),
+        f"status was {start_reply.status_code}",
+        STATE,
+    )
+    names = _offered_tools(model)
+    run.check("the tool list is not empty", bool(names), "", TOOL_CONTRACT)
+    run.check(
+        "the six writing tools are offered",
+        {
+            "web_search",
+            "select_page",
+            "select_frame",
+            "compose_wiki",
+            "write_wiki",
+            "get_state",
+        }.issubset(names),
+        "",
+        TOOL_CONTRACT,
+    )
+    run.check(
+        "the new tool list has no propose",
+        "propose" not in names,
+        "",
+        TOOL_CONTRACT,
+    )
+    materials = api.request("GET", "/api/v1/pipeline/runs/pr-old/materials")
+    run.equal("the old materials are readable", materials.status_code, 200, STATE)
+    listed = materials.json()["materials"]
+    run.equal("the old run's material is listed", len(listed), 1, STATE)
+    run.equal("the old material is staged", listed[0]["state"], "staged", STATE)
+    run.equal("the old material names its run", listed[0]["runId"], "pr-old", STATE)
 
     old = api.request("GET", "/api/v1/pipeline/runs/pr-old")
     run.equal("the old run is readable", old.status_code, 200, STATE)
@@ -964,6 +1260,24 @@ WRITING_CASES = (
         ),
     ),
     Case(
+        "writing_multi_search",
+        "Two searches are kept and the first round's hit is selectable",
+        writing_multi_search,
+        trace=TraceSpec(
+            required=("web_search", "select_page"),
+            forbidden=("propose",),
+        ),
+    ),
+    Case(
+        "writing_state_restart",
+        "The state survives an app restart and an expired lease is taken over",
+        writing_state_restart,
+        trace=TraceSpec(
+            required=("select_frame",),
+            forbidden=("propose",),
+        ),
+    ),
+    Case(
         "writing_node_auto_frame",
         "The auto-frame node writes frames with its two tools",
         writing_node_run,
@@ -994,6 +1308,7 @@ WRITING_CASES = (
         "writing_old_run_and_archive",
         "An old run and an archived state stay readable",
         writing_old_run_and_archive_readable,
+        trace=TraceSpec(forbidden=("propose",)),
     ),
 )
 
