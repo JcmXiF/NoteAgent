@@ -5,8 +5,9 @@ The agent prompt is a projection of its log: a session with no
 These defaults give a new session that baseline, plus the project's brief when
 it has one and the skill index when any skill exists. A session records the
 ``PROMPT_VERSION`` it read; an older one has its product sections replaced on
-the next query, while its custom sections stay. The eval harness disables the
-defaults because its cases bring their own sections.
+the next query, while its custom sections stay. The behavior harness disables
+the defaults because its cases bring their own sections; the quality arm
+enables them because it measures the product.
 """
 
 from __future__ import annotations

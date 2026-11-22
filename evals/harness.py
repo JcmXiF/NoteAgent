@@ -203,6 +203,7 @@ class CaseRun:
         workdir: Path,
         *,
         pages: Iterable[tuple[str, str, str]] | None = None,
+        brief: str | None = None,
     ) -> None:
         self.repo = workdir / "repo"
         self.repo.mkdir(parents=True)
@@ -220,6 +221,13 @@ class CaseRun:
             self._activate()
             for slug, title, body in (_PAGES if pages is None else pages):
                 self.write_page(slug, title, body)
+            if brief is not None and brief.strip():
+                self.layout.brief.parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                self.layout.brief.write_text(
+                    brief.strip() + "\n", encoding="utf-8"
+                )
         except Exception:
             # The patches point at this case's temporary folder. A case that
             # cannot finish starting must not leave the next one looking there.
@@ -235,6 +243,8 @@ class CaseRun:
             {
                 "NOTEAGENT_PROJECT": str(self.layout.root),
                 "NOTEAGENT_HOME": "",
+                # Keep the user's own skills and settings out of every case.
+                "NOTEAGENT_CONFIG_DIR": str(self.repo / "config"),
             },
         )
         env.start()

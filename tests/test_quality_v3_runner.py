@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from evals.harness import CaseRun
 from evals.quality.v3.judge import EXPECTED_KEYS, judge_item
 from evals.quality.v3.run import main as run_main
 from evals.quality.v3.runner import (
@@ -22,8 +25,12 @@ from evals.quality.v3.runner import (
 from evals.quality.v3.set import load_quality_set
 
 from noteagent.agent.faux import FauxModelClient
+from noteagent.agent.projection import project as read_projection
+from noteagent.agent.run_marker import sections_digest
 from noteagent.llm.client import LlmTurn
 from noteagent.llm.config import LlmConfig
+from noteagent.skills import SkillRootKind, default_registry
+from noteagent.skills.index import render_index
 
 _KEYS = EXPECTED_KEYS
 
@@ -226,6 +233,33 @@ class RunSetTests(unittest.TestCase):
         payload = report.payload()
         self.assertEqual(len(payload["multiTurn"]), 2)
 
+    def test_the_report_carries_the_agent_and_skill_hashes(self) -> None:
+        quality = load_quality_set()
+        agent = "a" * 64
+        skill = "b" * 64
+
+        def runner(spec, index):
+            run = _run(spec.item_id, spec.kind, spec.type, index, True)
+            return replace(
+                run,
+                agent_prompt_sha256=agent,
+                skill_index_sha256=skill,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_quality_set(
+                quality,
+                _config(),
+                Path(tmp),
+                k=1,
+                run_item=runner,
+            )
+
+        payload = report.payload()
+        self.assertEqual(payload["agentPromptSha256"], agent)
+        self.assertEqual(payload["skillIndexSha256"], skill)
+        self.assertIn("Agent prompt", report.markdown())
+
 
 class RunItemTests(unittest.TestCase):
     def test_content_passes_even_when_the_trace_diagnostic_fails(self) -> None:
@@ -293,6 +327,71 @@ class RunItemTests(unittest.TestCase):
             )
 
         self.assertEqual(item.cost, 0.0)
+
+    def test_a_run_seeds_the_product_prompt_and_records_its_hashes(
+        self,
+    ) -> None:
+        quality = load_quality_set()
+        spec = next(
+            item for item in item_specs(quality) if item.type == "fact"
+        )
+        model = FauxModelClient(FauxModelClient.text("答案。").script)
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            item = run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+            case = json.loads(
+                (
+                    Path(tmp) / spec.item_id / "run-1" / "case.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        sections = read_projection(case["entries"]).sections
+        for key in ("identity", "tools", "project", "grounding", "skills"):
+            self.assertIn(key, sections)
+        self.assertIn("<available_skills>", sections["skills"])
+        self.assertIn("- writing [bundled]", sections["skills"])
+        self.assertNotIn("[user]", sections["skills"])
+        self.assertEqual(
+            item.agent_prompt_sha256, sections_digest(sections)
+        )
+        self.assertEqual(
+            item.skill_index_sha256,
+            hashlib.sha256(
+                sections["skills"].encode("utf-8")
+            ).hexdigest(),
+        )
+
+
+class SkillRootTests(unittest.TestCase):
+    def test_a_case_keeps_the_users_skills_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = CaseRun(Path(tmp))
+            try:
+                run.start(FauxModelClient.text("answer"))
+                registry = default_registry(run.layout.root)
+                text = render_index(registry)
+                user = next(
+                    root.folder
+                    for root in registry.roots
+                    if root.kind == SkillRootKind.USER
+                )
+            finally:
+                run.close()
+
+        self.assertTrue(
+            str(user).startswith(str(Path(tmp).resolve()))
+        )
+        self.assertIn("- writing [bundled]", text)
+        self.assertNotIn("[user]", text)
 
 
 class JudgeTests(unittest.TestCase):

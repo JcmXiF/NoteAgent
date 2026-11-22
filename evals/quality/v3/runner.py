@@ -13,7 +13,7 @@ import json
 import tempfile
 import time
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,8 +33,11 @@ from evals.report import REPORT_VERSION, utc_now
 from evals.support import remove_tree
 
 from noteagent.agent.model import ModelClient, ModelUsageEvent
+from noteagent.agent.projection import project as read_projection
+from noteagent.agent.run_marker import sections_digest
 from noteagent.llm.config import LlmConfig
 from noteagent.llm.model_gateway import OpenAIModelClient
+from noteagent.prompts.system import prompt_state
 
 K_DEFAULT = 3
 TYPES = ("fact", "synthesis", "gap", "task")
@@ -74,6 +77,8 @@ class ItemRun:
     judge_latency_s: float = 0.0
     cost: float | None = None
     error: str = ""
+    agent_prompt_sha256: str = ""
+    skill_index_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +170,16 @@ class QualityReport:
     started_at: str
     duration_s: float
 
+    @property
+    def agent_prompt_sha256(self) -> str:
+        """The prompt sections the first usable run received."""
+        return _first(run.agent_prompt_sha256 for run in self.runs)
+
+    @property
+    def skill_index_sha256(self) -> str:
+        """The skills index the first usable run received."""
+        return _first(run.skill_index_sha256 for run in self.runs)
+
     def payload(self) -> dict[str, object]:
         return {
             "version": REPORT_VERSION,
@@ -172,6 +187,8 @@ class QualityReport:
             "contentHash": self.content_hash,
             "k": self.scores.k,
             "model": self.model,
+            "agentPromptSha256": self.agent_prompt_sha256,
+            "skillIndexSha256": self.skill_index_sha256,
             "startedAt": self.started_at,
             "durationSeconds": round(self.duration_s, 3),
             "singleTurn": {
@@ -197,6 +214,8 @@ class QualityReport:
             "",
             f"- Set: {self.set_version} ({self.content_hash[:12]})",
             f"- Model: {self.model}",
+            f"- Agent prompt: {_sha_text(self.agent_prompt_sha256)}",
+            f"- Skill index: {_sha_text(self.skill_index_sha256)}",
             f"- k: {self.scores.k}",
             f"- Started: {self.started_at}",
             f"- Duration: {self.duration_s:.1f}s",
@@ -415,12 +434,26 @@ def run_item_once(
     verdict = V3JudgeVerdict(error="the run did not reach the judge")
     diagnostics: Mapping[str, object] = {}
     error = ""
+    agent_prompt_sha256 = ""
+    skill_index_sha256 = ""
     agent_latency = 0.0
     judge_latency = 0.0
     tmp = Path(tempfile.mkdtemp(prefix=f"noteagent-quality-v3-{spec.item_id}-"))
     try:
-        run = CaseRun(tmp, pages=list(spec.pages))
-        api = run.start(recording, model_name=config.model)
+        # The corpus purpose is the golden corpus's brief, so it belongs to
+        # the single-turn items. A multi-turn case seeds its own wiki, and the
+        # corpus purpose would describe topics that wiki does not hold.
+        brief = (
+            quality.golden.corpus.purpose
+            if spec.kind == SINGLE
+            else None
+        )
+        run = CaseRun(tmp, pages=list(spec.pages), brief=brief)
+        api = run.start(
+            recording,
+            model_name=config.model,
+            seed_system_sections=True,
+        )
         session_id = api.create_session(title=spec.item_id)
         for content in spec.turns:
             reply = api.query(session_id, content)
@@ -437,6 +470,7 @@ def run_item_once(
         entries = api.entries(session_id)
         trace = api.trace(session_id)
         diagnostics = _diagnostics(spec, entries, trace, turns)
+        agent_prompt_sha256, skill_index_sha256 = _prompt_hashes(entries)
         agent_latency = time.monotonic() - started
         judge_started = time.monotonic()
         verdict = judge_item(
@@ -484,6 +518,8 @@ def run_item_once(
             output_price,
         ),
         error=error or verdict.error,
+        agent_prompt_sha256=agent_prompt_sha256,
+        skill_index_sha256=skill_index_sha256,
     )
     (target / "case.json").write_text(
         json.dumps(
@@ -499,6 +535,8 @@ def run_item_once(
                 "judgeLatencySeconds": round(item.judge_latency_s, 3),
                 "cost": item.cost,
                 "error": item.error,
+                "agentPromptSha256": item.agent_prompt_sha256,
+                "skillIndexSha256": item.skill_index_sha256,
                 "judge": verdict.to_payload(),
                 "turns": turns,
                 "entries": entries,
@@ -575,6 +613,23 @@ def _diagnostics(
             for check in checks
         ],
     }
+
+
+def _prompt_hashes(
+    entries: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """The prompt sections the run started with, and its skill index."""
+    _version, index_sha = prompt_state(entries)
+    return sections_digest(read_projection(entries).sections), index_sha
+
+
+def _sha_text(value: str) -> str:
+    return value[:12] if value else "n/a"
+
+
+def _first(values: Iterable[str]) -> str:
+    """The first value a run actually recorded, or ``""``."""
+    return next((value for value in values if value), "")
 
 
 def _type_scores(type_: str, items: list[ItemScores]) -> TypeScores:
