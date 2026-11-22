@@ -203,6 +203,7 @@ class CaseRun:
         workdir: Path,
         *,
         pages: Iterable[tuple[str, str, str]] | None = None,
+        raw_pages: Iterable[tuple[str, bytes]] | None = None,
         brief: str | None = None,
     ) -> None:
         self.repo = workdir / "repo"
@@ -219,8 +220,16 @@ class CaseRun:
         self._patchers: list[Any] = []
         try:
             self._activate()
-            for slug, title, body in (_PAGES if pages is None else pages):
-                self.write_page(slug, title, body)
+            # Raw pages, when given, are the seed; ``pages`` then only feeds
+            # the judge, because the original bytes already hold a title.
+            if raw_pages is not None:
+                for slug, text in raw_pages:
+                    self.write_raw_page(slug, text)
+            else:
+                for slug, title, body in (
+                    _PAGES if pages is None else pages
+                ):
+                    self.write_page(slug, title, body)
             if brief is not None and brief.strip():
                 self.layout.brief.parent.mkdir(
                     parents=True, exist_ok=True
@@ -316,12 +325,19 @@ class CaseRun:
         return evidence_from_entries(self.store.load(session_id).entries)
 
     def write_page(self, slug: str, title: str, body: str) -> None:
-        path = self.layout.wiki / f"{slug}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        self._page_path(slug).write_text(
             f'---\ntitle: "{title}"\n---\n\n{body}\n',
             encoding="utf-8",
         )
+
+    def write_raw_page(self, slug: str, text: bytes) -> None:
+        """Seed a page byte for byte, its own frontmatter included."""
+        self._page_path(slug).write_bytes(text)
+
+    def _page_path(self, slug: str) -> Path:
+        path = self.layout.wiki / f"{slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     def check(
         self,

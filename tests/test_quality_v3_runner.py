@@ -16,6 +16,8 @@ from evals.quality.v3.judge import EXPECTED_KEYS, judge_item
 from evals.quality.v3.run import main as run_main
 from evals.quality.v3.judge import V3JudgeVerdict
 from evals.quality.v3.runner import (
+    AGENT_TEMPERATURE,
+    ARTIFACTS_MARKER,
     ItemRun,
     ItemSpec,
     QualityReport,
@@ -317,9 +319,78 @@ class RunSetTests(unittest.TestCase):
         payload = report.payload()
         self.assertEqual(payload["agentPromptSha256"], agent)
         self.assertEqual(payload["skillIndexSha256"], skill)
-        self.assertEqual(payload["temperature"], _config().temperature)
+        self.assertEqual(payload["temperature"], AGENT_TEMPERATURE)
         self.assertEqual(payload["baseUrl"], _config().base_url)
         self.assertIn("Agent prompt", report.markdown())
+
+    def test_a_known_model_fills_only_the_missing_price_side(self) -> None:
+        quality = load_quality_set()
+        config = LlmConfig(
+            base_url="http://127.0.0.1:1/v1",
+            api_key="test-key",
+            model="gpt-4o-mini",
+        )
+
+        def runner(spec, index):
+            return _run(spec.item_id, spec.kind, spec.type, index, True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_quality_set(
+                quality,
+                config,
+                Path(tmp),
+                k=1,
+                run_item=runner,
+                input_cost_per_mtok=1.0,
+            )
+
+        payload = report.payload()
+        self.assertEqual(payload["inputCostPerMtok"], 1.0)
+        self.assertEqual(payload["outputCostPerMtok"], 0.6)
+
+    def test_a_rerun_clears_stale_artifacts(self) -> None:
+        quality = load_quality_set()
+
+        def runner(spec, index):
+            return _run(spec.item_id, spec.kind, spec.type, index, True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ARTIFACTS_MARKER).write_text("", encoding="utf-8")
+            stale = root / "stale.json"
+            stale.write_text("old", encoding="utf-8")
+
+            run_quality_set(
+                quality, _config(), root, k=1, run_item=runner
+            )
+
+            self.assertFalse(stale.exists())
+            self.assertTrue((root / ARTIFACTS_MARKER).is_file())
+
+    def test_an_unmarked_directory_is_not_cleared(self) -> None:
+        quality = load_quality_set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            precious = root / "notes.md"
+            precious.write_text("keep", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                run_quality_set(
+                    quality,
+                    _config(),
+                    root,
+                    k=1,
+                    run_item=lambda spec, index: _run(
+                        spec.item_id,
+                        spec.kind,
+                        spec.type,
+                        index,
+                        True,
+                    ),
+                )
+
+            self.assertTrue(precious.is_file())
 
 
 class RunItemTests(unittest.TestCase):
@@ -493,6 +564,96 @@ class RunItemTests(unittest.TestCase):
             _dimension(quality.rubric, "grounding").must_not[0],
             judge.messages[1].content,
         )
+
+    def test_the_seeded_wiki_matches_the_corpus_bytes(self) -> None:
+        quality = load_quality_set()
+        spec = self._spec(quality, "fact")
+        slug = spec.pages[0][0]
+        model = FauxModelClient(FauxModelClient.text("答案。").script)
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+            seeded = (
+                Path(tmp)
+                / spec.item_id
+                / "run-1"
+                / "project"
+                / "wiki"
+                / f"{slug}.md"
+            ).read_bytes()
+
+        original = quality.golden.corpus.page(slug).path.read_bytes()
+        self.assertEqual(seeded, original)
+
+    def test_a_multi_turn_case_seeds_its_original_bytes(self) -> None:
+        quality = load_quality_set()
+        spec = next(
+            item for item in item_specs(quality) if item.kind == "multi"
+        )
+        slug = spec.raw_pages[0][0]
+        model = FauxModelClient(
+            *[
+                FauxModelClient.text(f"答案 {index}。").script
+                for index in range(len(spec.turns))
+            ]
+        )
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            item = run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+            seeded = (
+                Path(tmp)
+                / spec.item_id
+                / "run-1"
+                / "project"
+                / "wiki"
+                / f"{slug}.md"
+            ).read_bytes()
+
+        self.assertEqual(seeded, spec.raw_pages[0][1])
+        names = {
+            check["name"] for check in item.diagnostics["assertions"]
+        }
+        self.assertTrue(names <= {"tools_any", "no_error"})
+
+    def test_retired_trace_checks_stay_out_of_the_report(self) -> None:
+        quality = load_quality_set()
+        spec = self._spec(quality, "fact")
+        model = FauxModelClient(FauxModelClient.text("答案。").script)
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            item = run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+
+        names = {
+            check["name"] for check in item.diagnostics["checks"]
+        }
+        self.assertTrue(names <= {"tools_any", "no_error"})
 
 
 class SkillRootTests(unittest.TestCase):

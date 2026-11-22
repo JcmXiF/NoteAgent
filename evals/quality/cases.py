@@ -39,6 +39,7 @@ class WikiPage:
     slug: str
     title: str
     body: str
+    path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +285,7 @@ def _wiki(directory: Path) -> tuple[WikiPage, ...]:
                 slug=slug,
                 title=title or slug.rsplit("/", 1)[-1],
                 body=parsed.body.strip(),
+                path=path,
             )
         )
     if not pages:

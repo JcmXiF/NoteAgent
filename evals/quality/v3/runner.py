@@ -14,7 +14,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,13 @@ K_DEFAULT = 3
 TYPES = ("fact", "synthesis", "gap", "task")
 SINGLE = "single"
 MULTI = "multi"
+#: The quality arm pins the agent cold; the product keeps its own setting.
+AGENT_TEMPERATURE = 0.0
+#: Marks a directory as this runner's own; a rerun may clear only that kind.
+ARTIFACTS_MARKER = ".quality-runs"
+#: The diagnostics the quality arm still reports; the retired wait/proposal
+#: checks stay out of the content verdict and the report.
+_TRACE_CHECKS = frozenset({"tools_any", "no_error"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +76,7 @@ class ItemSpec:
     diagnostics: object
     wiki_index: tuple[str, ...] = ()
     purpose: str = ""
+    raw_pages: tuple[tuple[str, bytes], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +193,8 @@ class QualityReport:
     duration_s: float
     temperature: float = 0.0
     base_url: str = ""
+    input_cost_per_mtok: float | None = None
+    output_cost_per_mtok: float | None = None
 
     @property
     def agent_prompt_sha256(self) -> str:
@@ -210,6 +220,8 @@ class QualityReport:
             "model": self.model,
             "temperature": self.temperature,
             "baseUrl": self.base_url,
+            "inputCostPerMtok": self.input_cost_per_mtok,
+            "outputCostPerMtok": self.output_cost_per_mtok,
             "agentPromptSha256": self.agent_prompt_sha256,
             "skillIndexSha256": self.skill_index_sha256,
             "judgePromptSha256": self.judge_prompt_sha256,
@@ -243,6 +255,9 @@ class QualityReport:
             f"- Judge prompt: {_sha_text(self.judge_prompt_sha256)}",
             f"- Temperature: {self.temperature:g}",
             f"- Base URL: {self.base_url or 'n/a'}",
+            "- Price USD/Mtok in/out: "
+            f"{_price_text(self.input_cost_per_mtok)}/"
+            f"{_price_text(self.output_cost_per_mtok)}",
             f"- k: {self.scores.k}",
             f"- Started: {self.started_at}",
             f"- Duration: {self.duration_s:.1f}s",
@@ -357,6 +372,21 @@ class QualityReport:
         return path
 
 
+def _clear_artifacts(root: Path) -> None:
+    """Clear a dedicated runs root; refuse a directory holding anything else."""
+    marker = root / ARTIFACTS_MARKER
+    if root.exists():
+        entries = list(root.iterdir())
+        if entries and not marker.is_file():
+            raise ValueError(
+                f"{root}: not a quality artifacts directory; point "
+                "--artifacts at a dedicated runs folder"
+            )
+        remove_tree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    marker.write_text("", encoding="utf-8")
+
+
 RunItem = Callable[[ItemSpec, int], ItemRun]
 
 
@@ -372,9 +402,17 @@ def run_quality_set(
     input_cost_per_mtok: float | None = None,
     output_cost_per_mtok: float | None = None,
 ) -> QualityReport:
-    """Run every item k times; *run_item* is the test seam."""
+    """Run every item k times; *run_item* is the test seam.
+
+    The artifacts root is cleared first, so a rerun never reads or reports
+    files an older run left behind.
+    """
     if k < 1:
         raise ValueError("k must be at least 1")
+    _clear_artifacts(Path(artifacts_root))
+    input_price, output_price = _prices(
+        config, input_cost_per_mtok, output_cost_per_mtok
+    )
     specs = item_specs(quality)
     runner: RunItem = run_item or (
         lambda spec, index: run_item_once(
@@ -385,8 +423,8 @@ def run_quality_set(
             artifacts_root,
             model=model,
             judge_client=judge_client,
-            input_cost_per_mtok=input_cost_per_mtok,
-            output_cost_per_mtok=output_cost_per_mtok,
+            input_cost_per_mtok=input_price,
+            output_cost_per_mtok=output_price,
         )
     )
     started_at = utc_now()
@@ -401,8 +439,10 @@ def run_quality_set(
         model=getattr(config, "model", "") or "",
         started_at=started_at,
         duration_s=time.monotonic() - started,
-        temperature=config.temperature,
+        temperature=AGENT_TEMPERATURE,
         base_url=config.base_url,
+        input_cost_per_mtok=input_price,
+        output_cost_per_mtok=output_price,
     )
 
 
@@ -410,16 +450,9 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
     """The 24 single-turn queries then the 2 multi-turn cases."""
     specs: list[ItemSpec] = []
     for query in quality.single_turn:
-        pages = tuple(
-            (
-                page.slug,
-                page.title,
-                page.body,
-            )
-            for page in (
-                quality.golden.corpus.page(slug)
-                for slug in query.corpus_pages
-            )
+        selected = tuple(
+            quality.golden.corpus.page(slug)
+            for slug in query.corpus_pages
         )
         specs.append(
             ItemSpec(
@@ -428,7 +461,8 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
                 type=query.type,
                 question=query.question,
                 turns=(query.question,),
-                pages=pages,
+                pages=_pages(selected),
+                raw_pages=_raw_pages(selected),
                 expected_points=query.key_points,
                 pitfalls=query.forbidden,
                 diagnostics=query,
@@ -444,10 +478,8 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
                 type=MULTI,
                 question=" / ".join(case.turns),
                 turns=case.turns,
-                pages=tuple(
-                    (page.slug, page.title, page.body)
-                    for page in case.wiki
-                ),
+                pages=_pages(case.wiki),
+                raw_pages=_raw_pages(case.wiki),
                 expected_points=quality.expected_points(case),
                 pitfalls=quality.pitfalls(case),
                 diagnostics=case.assertions,
@@ -455,6 +487,17 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
             )
         )
     return tuple(specs)
+
+
+def _pages(pages: Iterable[Any]) -> tuple[tuple[str, str, str], ...]:
+    return tuple((page.slug, page.title, page.body) for page in pages)
+
+
+def _raw_pages(pages: Iterable[Any]) -> tuple[tuple[str, bytes], ...]:
+    """The original bytes, frontmatter included, for a faithful seed."""
+    return tuple(
+        (page.slug, page.path.read_bytes()) for page in pages
+    )
 
 
 def _wiki_index(pages: Iterable[Any]) -> tuple[str, ...]:
@@ -480,7 +523,8 @@ def run_item_once(
         Path(artifacts_root) / spec.item_id / f"run-{index + 1}"
     )
     target.mkdir(parents=True, exist_ok=True)
-    raw_model = model or OpenAIModelClient(config)
+    agent_config = replace(config, temperature=AGENT_TEMPERATURE)
+    raw_model = model or OpenAIModelClient(agent_config)
     recording = _RecordingModel(raw_model)
     run: CaseRun | None = None
     session_id: str | None = None
@@ -499,11 +543,14 @@ def run_item_once(
         # The item's purpose is its wiki's brief: the corpus purpose for a
         # single-turn item, none for a case that seeds its own wiki.
         run = CaseRun(
-            tmp, pages=list(spec.pages), brief=spec.purpose or None
+            tmp,
+            pages=list(spec.pages),
+            raw_pages=list(spec.raw_pages) or None,
+            brief=spec.purpose or None,
         )
         api = run.start(
             recording,
-            model_name=config.model,
+            model_name=agent_config.model,
             seed_system_sections=True,
         )
         session_id = api.create_session(title=spec.item_id)
@@ -551,12 +598,9 @@ def run_item_once(
             run.close()
         remove_tree(tmp)
 
-    input_price = input_cost_per_mtok
-    output_price = output_cost_per_mtok
-    if input_price is None or output_price is None:
-        price = price_for(config.model)
-        if price is not None:
-            input_price, output_price = price
+    input_price, output_price = _prices(
+        config, input_cost_per_mtok, output_cost_per_mtok
+    )
     passed = bool(verdict.passed(quality.rubric)) and not error
     item = ItemRun(
         item_id=spec.item_id,
@@ -571,8 +615,8 @@ def run_item_once(
         latency_s=agent_latency,
         judge_latency_s=judge_latency,
         cost=_cost(
-            recording.input_tokens,
-            recording.output_tokens,
+            recording.input_tokens + verdict.input_tokens,
+            recording.output_tokens + verdict.output_tokens,
             input_price,
             output_price,
         ),
@@ -662,13 +706,21 @@ def _diagnostics(
         evidence = evidence_from(
             entries=entries, trace=trace, events=_events(turns)
         )
-        results = evaluate(spec.diagnostics, evidence)
+        results = tuple(
+            item
+            for item in evaluate(spec.diagnostics, evidence)
+            if item.name in _TRACE_CHECKS
+        )
         return {
             "kind": "tools",
             "passed": all(item.passed for item in results),
             "assertions": [item.to_payload() for item in results],
         }
-    checks = trace_checks(spec.diagnostics, run_evidence)
+    checks = tuple(
+        check
+        for check in trace_checks(spec.diagnostics, run_evidence)
+        if check.name in _TRACE_CHECKS
+    )
     return {
         "kind": "trace",
         "passed": all(check.passed for check in checks),
@@ -695,6 +747,10 @@ def _prompt_hashes(
 
 def _sha_text(value: str) -> str:
     return value[:12] if value else "n/a"
+
+
+def _price_text(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:g}"
 
 
 def _verdict_cells(run: ItemRun) -> str:
@@ -828,6 +884,21 @@ def _sum_cost(items: list[ItemRun]) -> float | None:
     return round(sum(value for value in values if value is not None), 6)
 
 
+def _prices(
+    config: LlmConfig,
+    input_cost: float | None,
+    output_cost: float | None,
+) -> tuple[float | None, float | None]:
+    """The explicit flag wins per side; the table fills what is missing."""
+    price = price_for(config.model)
+    if price is None:
+        return input_cost, output_cost
+    return (
+        input_cost if input_cost is not None else price[0],
+        output_cost if output_cost is not None else price[1],
+    )
+
+
 def _cost(
     tokens_in: int,
     tokens_out: int,
@@ -857,6 +928,7 @@ def _last_line(text: str) -> str:
 
 
 __all__ = [
+    "AGENT_TEMPERATURE",
     "ItemRun",
     "ItemScores",
     "ItemSpec",

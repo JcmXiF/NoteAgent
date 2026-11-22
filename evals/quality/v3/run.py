@@ -36,7 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--artifacts",
         default="build/evals/quality/v3/runs",
-        help="where each item run keeps its evidence",
+        help=(
+            "where each item run keeps its evidence; a dedicated folder "
+            "this command clears on every run"
+        ),
     )
     parser.add_argument("--input-cost-per-mtok", type=float, default=None)
     parser.add_argument("--output-cost-per-mtok", type=float, default=None)
