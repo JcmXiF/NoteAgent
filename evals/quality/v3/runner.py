@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.golden.trace import (
+    Evidence,
     evaluate as trace_checks,
     evidence_from as trace_evidence,
 )
@@ -66,6 +67,8 @@ class ItemSpec:
     expected_points: tuple[str, ...]
     pitfalls: tuple[str, ...]
     diagnostics: object
+    wiki_index: tuple[str, ...] = ()
+    purpose: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,6 +432,8 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
                 expected_points=query.key_points,
                 pitfalls=query.forbidden,
                 diagnostics=query,
+                wiki_index=_wiki_index(quality.golden.corpus.pages),
+                purpose=quality.golden.corpus.purpose,
             )
         )
     for case in quality.multi_turn:
@@ -446,9 +451,15 @@ def item_specs(quality: QualitySet) -> tuple[ItemSpec, ...]:
                 expected_points=quality.expected_points(case),
                 pitfalls=quality.pitfalls(case),
                 diagnostics=case.assertions,
+                wiki_index=_wiki_index(case.wiki),
             )
         )
     return tuple(specs)
+
+
+def _wiki_index(pages: Iterable[Any]) -> tuple[str, ...]:
+    """The index the judge sees: one ``slug — title`` line per page."""
+    return tuple(f"{page.slug} — {page.title}" for page in pages)
 
 
 def run_item_once(
@@ -485,15 +496,11 @@ def run_item_once(
     judge_latency = 0.0
     tmp = Path(tempfile.mkdtemp(prefix=f"noteagent-quality-v3-{spec.item_id}-"))
     try:
-        # The corpus purpose is the golden corpus's brief, so it belongs to
-        # the single-turn items. A multi-turn case seeds its own wiki, and the
-        # corpus purpose would describe topics that wiki does not hold.
-        brief = (
-            quality.golden.corpus.purpose
-            if spec.kind == SINGLE
-            else None
+        # The item's purpose is its wiki's brief: the corpus purpose for a
+        # single-turn item, none for a case that seeds its own wiki.
+        run = CaseRun(
+            tmp, pages=list(spec.pages), brief=spec.purpose or None
         )
-        run = CaseRun(tmp, pages=list(spec.pages), brief=brief)
         api = run.start(
             recording,
             model_name=config.model,
@@ -514,17 +521,24 @@ def run_item_once(
             )
         entries = api.entries(session_id)
         trace = api.trace(session_id)
-        diagnostics = _diagnostics(spec, entries, trace, turns)
+        run_evidence = _evidence_for(entries, trace, turns)
+        diagnostics = _diagnostics(
+            spec, entries, trace, turns, run_evidence
+        )
+        read_pages = run_evidence.read_pages
         agent_prompt_sha256, skill_index_sha256 = _prompt_hashes(entries)
         agent_latency = time.monotonic() - started
         judge_started = time.monotonic()
         verdict = judge_item(
             quality.rubric,
             question=spec.question,
-            wiki=tuple((title, body) for _slug, title, body in spec.pages),
+            wiki=spec.pages,
             conversation=conversation_from(entries),
             expected_points=spec.expected_points,
             pitfalls=spec.pitfalls,
+            read_pages=read_pages,
+            wiki_index=spec.wiki_index,
+            purpose=spec.purpose,
             client=judge_client or make_judge_client(config),
             secret=config.api_key,
         )
@@ -615,21 +629,38 @@ class _RecordingModel:
             yield event
 
 
+def _events(
+    turns: list[dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    """The SSE events of every turn, flattened for the evidence readers."""
+    return [
+        (str(item["event"]), item["data"])
+        for turn in turns
+        for item in turn["events"]
+    ]
+
+
+def _evidence_for(
+    entries: list[dict[str, Any]],
+    trace: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+) -> Evidence:
+    """The trace evidence every item keeps, read once."""
+    return trace_evidence(
+        entries=entries, trace=trace, events=_events(turns)
+    )
+
+
 def _diagnostics(
     spec: ItemSpec,
     entries: list[dict[str, Any]],
     trace: list[dict[str, Any]],
     turns: list[dict[str, Any]],
+    run_evidence: Evidence,
 ) -> Mapping[str, object]:
     if spec.kind == MULTI:
         evidence = evidence_from(
-            entries=entries,
-            trace=trace,
-            events=[
-                (str(item["event"]), item["data"])
-                for turn in turns
-                for item in turn["events"]
-            ],
+            entries=entries, trace=trace, events=_events(turns)
         )
         results = evaluate(spec.diagnostics, evidence)
         return {
@@ -637,16 +668,7 @@ def _diagnostics(
             "passed": all(item.passed for item in results),
             "assertions": [item.to_payload() for item in results],
         }
-    evidence = trace_evidence(
-        entries=entries,
-        trace=trace,
-        events=[
-            (str(item["event"]), item["data"])
-            for turn in turns
-            for item in turn["events"]
-        ],
-    )
-    checks = trace_checks(spec.diagnostics, evidence)
+    checks = trace_checks(spec.diagnostics, run_evidence)
     return {
         "kind": "trace",
         "passed": all(check.passed for check in checks),

@@ -8,9 +8,14 @@ from pathlib import Path
 
 from evals.golden.dataset import write_manifest as write_golden_manifest
 from evals.quality.v3.set import (
+    ESSENTIAL,
     GOLDEN_ROOT,
+    IMPORTANT,
     RUBRIC_PATH,
+    VETO,
     QualitySetError,
+    Rubric,
+    RubricDimension,
     load_quality_set,
     load_rubric,
     write_manifest,
@@ -130,6 +135,56 @@ class RubricTests(unittest.TestCase):
 
             with self.assertRaises(QualitySetError):
                 load_rubric(path)
+
+
+class WeightedRubricTests(unittest.TestCase):
+    """The pass rule follows each weight, whatever the dimension is called."""
+
+    def setUp(self) -> None:
+        self.rubric = Rubric(
+            "v-test",
+            (
+                RubricDimension("alpha", ESSENTIAL, ("a",), ("b",)),
+                RubricDimension("beta", IMPORTANT, ("c",), ("d",)),
+            ),
+            RubricDimension("gamma", VETO, ("e",), ("f",)),
+        )
+
+    def _verdicts(self, **overrides: str) -> dict[str, str]:
+        verdicts = {name: "pass" for name in self.rubric.verdict_keys()}
+        verdicts.update(overrides)
+        return verdicts
+
+    def test_the_keys_follow_the_rubric(self) -> None:
+        self.assertEqual(
+            self.rubric.verdict_keys(), ("alpha", "beta", "gamma")
+        )
+
+    def test_every_gate_passes(self) -> None:
+        self.assertTrue(self.rubric.passes(self._verdicts()))
+
+    def test_an_essential_gate_fails_the_item(self) -> None:
+        self.assertFalse(self.rubric.passes(self._verdicts(alpha="fail")))
+
+    def test_an_important_gate_fails_the_item(self) -> None:
+        self.assertFalse(self.rubric.passes(self._verdicts(beta="fail")))
+
+    def test_the_veto_fails_the_item(self) -> None:
+        self.assertFalse(self.rubric.passes(self._verdicts(gamma="fail")))
+
+    def test_a_missing_verdict_fails(self) -> None:
+        verdicts = self._verdicts()
+        del verdicts["beta"]
+
+        self.assertFalse(self.rubric.passes(verdicts))
+
+    def test_a_direct_rubric_refuses_a_weight_that_cannot_gate(self) -> None:
+        with self.assertRaises(QualitySetError):
+            Rubric(
+                "v-test",
+                (RubricDimension("alpha", "optional"),),
+                RubricDimension("gamma", VETO),
+            )
 
 
 class RealQualitySetTests(unittest.TestCase):

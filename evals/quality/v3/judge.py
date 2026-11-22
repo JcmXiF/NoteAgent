@@ -1,7 +1,9 @@
 """Grade one V3 quality item with the shared rubric, content only.
 
-The judge sees the seeded wiki, the conversation, the shared rubric and the
-question's expected points and pitfalls. It never sees the tool trace: the
+The judge sees the seeded wiki, the wiki's purpose and index when the item has
+them, the pages the agent actually read, the conversation, and the shared
+rubric's rules. The dimension rules live in ``rubric.yaml`` only; the prompt
+carries the grading protocol. The judge never sees the tool trace: the
 tool/trace assertions are diagnostics, not part of the verdict.
 """
 
@@ -16,8 +18,7 @@ from typing import Any
 from evals.quality.judge_client import DimensionVerdict, JudgeClient
 from evals.quality.v3.set import Rubric
 
-from noteagent.llm.client import ChatMessage, LlmTurn
-from noteagent.llm.config import LlmConfig
+from noteagent.llm.client import ChatMessage
 from noteagent.util.redact import redact
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "judge.md"
@@ -26,7 +27,7 @@ EXPECTED_KEYS = ("grounding", "completeness", "uncertainty", "hallucination")
 
 @dataclass(frozen=True, slots=True)
 class V3JudgeVerdict:
-    """The judge's four verdicts, or the reason it could not be used."""
+    """One verdict per dimension, or why the judge was unusable."""
 
     dimensions: tuple[DimensionVerdict, ...] = ()
     error: str = ""
@@ -70,22 +71,29 @@ def judge_item(
     rubric: Rubric,
     *,
     question: str,
-    wiki: tuple[tuple[str, str], ...],
+    wiki: tuple[tuple[str, str, str], ...],
     conversation: tuple[tuple[str, str], ...],
     expected_points: tuple[str, ...],
     pitfalls: tuple[str, ...],
     client: JudgeClient,
+    read_pages: tuple[str, ...] = (),
+    wiki_index: tuple[str, ...] = (),
+    purpose: str = "",
     secret: str = "",
 ) -> V3JudgeVerdict:
-    """Ask the judge for the four content verdicts of one item."""
+    """Ask the judge for one verdict per rubric dimension of one item."""
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     message = _user_message(
+        rubric,
         question=question,
         wiki=wiki,
         conversation=conversation,
         expected_points=expected_points,
         pitfalls=pitfalls,
+        read_pages=read_pages,
+        wiki_index=wiki_index,
+        purpose=purpose,
     )
     try:
         response = client.complete(
@@ -107,7 +115,9 @@ def judge_item(
     raw = redact(
         response.content or "", (secret,) if secret else ()
     )
-    verdict = _parse(raw, prompt_sha256=prompt_sha256)
+    verdict = _parse(
+        raw, keys=rubric.verdict_keys(), prompt_sha256=prompt_sha256
+    )
     return replace(
         verdict,
         input_tokens=response.input_tokens,
@@ -116,29 +126,77 @@ def judge_item(
 
 
 def _user_message(
+    rubric: Rubric,
     *,
     question: str,
-    wiki: tuple[tuple[str, str], ...],
+    wiki: tuple[tuple[str, str, str], ...],
     conversation: tuple[tuple[str, str], ...],
     expected_points: tuple[str, ...],
     pitfalls: tuple[str, ...],
+    read_pages: tuple[str, ...],
+    wiki_index: tuple[str, ...],
+    purpose: str,
 ) -> str:
-    lines = ["## Wiki"]
-    for title, body in wiki:
-        lines.extend(["", f"### {title}", body])
+    lines = ["## Question", question]
+    if purpose.strip():
+        lines.extend(["", "## Wiki purpose", purpose.strip()])
+    if wiki_index:
+        lines.extend(["", "## Wiki index"])
+        lines.extend(f"- {item}" for item in wiki_index)
+    lines.extend(["", "## Wiki pages"])
+    for slug, title, body in wiki:
+        lines.extend(["", f"### {slug} — {title}", body])
+    lines.extend(["", "## Pages the agent read"])
+    read = tuple(dict.fromkeys(read_pages))
+    if read:
+        lines.extend(f"- {slug}" for slug in read)
+    else:
+        lines.append("- none")
     lines.extend(["", "## Conversation"])
     for role, text in conversation:
         lines.extend(["", f"### {role}", text])
-    lines.extend(["", "## Question", question])
     lines.extend(["", "## Expected points"])
     lines.extend(f"- {point}" for point in expected_points)
     if pitfalls:
         lines.extend(["", "## Pitfalls"])
         lines.extend(f"- {pitfall}" for pitfall in pitfalls)
+    lines.extend(["", "## Rubric"])
+    for dimension in rubric.graded_dimensions():
+        lines.extend(["", f"### {dimension.name} ({dimension.weight})"])
+        lines.extend(_rules("Must", dimension.must))
+        lines.extend(_rules("Must not", dimension.must_not))
+    lines.extend(
+        [
+            "",
+            "## Verdict format",
+            "",
+            "Return only the JSON object below, with no code fences and no "
+            "extra keys:",
+            "",
+            _verdict_shape(rubric),
+        ]
+    )
     return "\n".join(lines)
 
 
-def _parse(raw: str, *, prompt_sha256: str) -> V3JudgeVerdict:
+def _rules(label: str, rules: tuple[str, ...]) -> list[str]:
+    if not rules:
+        return []
+    return [f"{label}:", *(f"- {rule}" for rule in rules)]
+
+
+def _verdict_shape(rubric: Rubric) -> str:
+    body = ",\n".join(
+        f'  "{key}": {{"verdict": "pass", "reason": "...", '
+        '"evidence": ["..."]}'
+        for key in rubric.verdict_keys()
+    )
+    return "{\n" + body + "\n}"
+
+
+def _parse(
+    raw: str, *, keys: tuple[str, ...], prompt_sha256: str
+) -> V3JudgeVerdict:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as err:
@@ -153,17 +211,17 @@ def _parse(raw: str, *, prompt_sha256: str) -> V3JudgeVerdict:
             raw=raw,
             prompt_sha256=prompt_sha256,
         )
-    if set(payload) != set(EXPECTED_KEYS):
+    if set(payload) != set(keys):
         return V3JudgeVerdict(
             error=(
                 "judge_error: expected "
-                f"{', '.join(EXPECTED_KEYS)}, got {', '.join(sorted(payload))}"
+                f"{', '.join(keys)}, got {', '.join(sorted(payload))}"
             ),
             raw=raw,
             prompt_sha256=prompt_sha256,
         )
     dimensions: list[DimensionVerdict] = []
-    for name in EXPECTED_KEYS:
+    for name in keys:
         item = payload.get(name)
         if not isinstance(item, dict):
             return V3JudgeVerdict(

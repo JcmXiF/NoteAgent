@@ -14,15 +14,25 @@ from unittest.mock import patch
 from evals.harness import CaseRun
 from evals.quality.v3.judge import EXPECTED_KEYS, judge_item
 from evals.quality.v3.run import main as run_main
+from evals.quality.v3.judge import V3JudgeVerdict
 from evals.quality.v3.runner import (
     ItemRun,
+    ItemSpec,
     QualityReport,
     QualityScores,
     item_specs,
     run_item_once,
     run_quality_set,
 )
-from evals.quality.v3.set import load_quality_set
+from evals.quality.v3.set import (
+    ESSENTIAL,
+    IMPORTANT,
+    VETO,
+    QualitySet,
+    Rubric,
+    RubricDimension,
+    load_quality_set,
+)
 
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.projection import project as read_projection
@@ -51,6 +61,12 @@ def _payload(**overrides: str) -> dict[str, object]:
     for name, verdict in overrides.items():
         payload[name] = {"verdict": verdict, "reason": "", "evidence": []}
     return payload
+
+
+def _dimension(rubric: Rubric, name: str) -> RubricDimension:
+    return next(
+        item for item in rubric.graded_dimensions() if item.name == name
+    )
 
 
 class _Judge:
@@ -415,6 +431,69 @@ class RunItemTests(unittest.TestCase):
             ).hexdigest(),
         )
 
+    def _spec(self, quality: QualitySet, type_: str) -> ItemSpec:
+        return next(
+            spec for spec in item_specs(quality) if spec.type == type_
+        )
+
+    def test_a_gap_item_gets_the_index_purpose_and_the_pages_it_read(
+        self,
+    ) -> None:
+        quality = load_quality_set()
+        spec = self._spec(quality, "gap")
+        slug, title, _body = spec.pages[0]
+        model = FauxModelClient(
+            FauxModelClient.tool_call(
+                "call-1", "wiki_read", json.dumps({"slug": slug})
+            ).script,
+            FauxModelClient.text("答案。").script,
+        )
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+
+        message = judge.messages[1].content
+        self.assertIn("## Wiki purpose", message)
+        self.assertIn(quality.golden.corpus.purpose.strip(), message)
+        self.assertIn(f"- {slug} — {title}", message)
+        self.assertIn(f"## Pages the agent read\n- {slug}\n", message)
+        self.assertIn(
+            _dimension(quality.rubric, "grounding").must[0], message
+        )
+
+    def test_a_grounding_failure_fails_the_item(self) -> None:
+        quality = load_quality_set()
+        spec = self._spec(quality, "fact")
+        model = FauxModelClient(FauxModelClient.text("答案。").script)
+        judge = _Judge(_payload(grounding="fail"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            item = run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+
+        self.assertFalse(item.passed)
+        self.assertEqual(item.verdicts["grounding"], "fail")
+        self.assertIn(
+            _dimension(quality.rubric, "grounding").must_not[0],
+            judge.messages[1].content,
+        )
+
 
 class SkillRootTests(unittest.TestCase):
     def test_a_case_keeps_the_users_skills_out(self) -> None:
@@ -443,15 +522,27 @@ class JudgeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.rubric = load_quality_set().rubric
 
-    def _judge(self, payload=None, *, text=None):
+    def _judge(
+        self,
+        payload=None,
+        *,
+        text: str | None = None,
+        rubric: Rubric | None = None,
+    ) -> tuple[V3JudgeVerdict, _Judge]:
         client = _Judge(payload, text=text)
         verdict = judge_item(
-            self.rubric,
+            rubric or self.rubric,
             question="X 是什么？",
-            wiki=(("X", "X body."),),
-            conversation=(("user", "X 是什么？"), ("assistant", "X。")),
+            wiki=(("concepts/x", "X", "X body."),),
+            conversation=(
+                ("user", "X 是什么？"),
+                ("assistant", "X。"),
+            ),
             expected_points=("要点一",),
             pitfalls=("编造",),
+            read_pages=("concepts/x",),
+            wiki_index=("concepts/x — X",),
+            purpose="Fixture corpus.",
             client=client,
             secret="key",
         )
@@ -463,6 +554,63 @@ class JudgeTests(unittest.TestCase):
         self.assertTrue(verdict.passed(self.rubric))
         self.assertIn("要点一", client.messages[1].content)
         self.assertIn("编造", client.messages[1].content)
+
+    def test_the_message_carries_the_purpose_index_and_read_pages(
+        self,
+    ) -> None:
+        _verdict, client = self._judge(_payload())
+        message = client.messages[1].content
+
+        self.assertIn("## Wiki purpose", message)
+        self.assertIn("Fixture corpus.", message)
+        self.assertIn("## Wiki index", message)
+        self.assertIn("- concepts/x — X", message)
+        self.assertIn(
+            "## Pages the agent read\n- concepts/x\n", message
+        )
+
+    def test_the_message_carries_every_rubric_rule(self) -> None:
+        _verdict, client = self._judge(_payload())
+        message = client.messages[1].content
+
+        for dimension in self.rubric.graded_dimensions():
+            self.assertIn(
+                f"### {dimension.name} ({dimension.weight})", message
+            )
+            for rule in (*dimension.must, *dimension.must_not):
+                self.assertIn(rule, message)
+        for key in self.rubric.verdict_keys():
+            self.assertIn(f'"{key}":', message)
+
+    def test_the_verdict_keys_come_from_the_rubric(self) -> None:
+        rubric = Rubric(
+            "v-test",
+            (
+                RubricDimension("alpha", ESSENTIAL),
+                RubricDimension("beta", IMPORTANT),
+            ),
+            RubricDimension("gamma", VETO),
+        )
+        payload = {
+            name: {"verdict": "pass", "reason": "", "evidence": []}
+            for name in rubric.verdict_keys()
+        }
+
+        verdict, client = self._judge(payload, rubric=rubric)
+
+        self.assertTrue(verdict.passed(rubric))
+        self.assertEqual(
+            verdict.verdicts(), dict.fromkeys(rubric.verdict_keys(), "pass")
+        )
+        self.assertIn('"alpha":', client.messages[1].content)
+
+    def test_a_payload_with_other_keys_is_a_judge_error(self) -> None:
+        verdict, _client = self._judge(
+            {"grounding": {"verdict": "pass", "reason": "", "evidence": []}}
+        )
+
+        self.assertFalse(verdict.passed(self.rubric))
+        self.assertIn("judge_error", verdict.error)
 
     def test_the_hallucination_veto_fails_the_item(self) -> None:
         verdict, _client = self._judge(

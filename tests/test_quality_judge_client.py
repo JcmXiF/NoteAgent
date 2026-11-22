@@ -114,7 +114,7 @@ class JudgeRetryTests(unittest.TestCase):
         return judge_item(
             self.rubric,
             question="X 是什么？",
-            wiki=(("X", "X body."),),
+            wiki=(("concepts/x", "X", "X body."),),
             conversation=(("user", "X 是什么？"), ("assistant", "X。")),
             expected_points=("要点一",),
             pitfalls=(),

@@ -63,8 +63,30 @@ class Rubric:
     dimensions: tuple[RubricDimension, ...]
     veto: RubricDimension
 
+    def __post_init__(self) -> None:
+        """Refuse a dimension whose weight cannot gate the item."""
+        for dimension in self.dimensions:
+            if dimension.weight not in _REQUIRED_WEIGHTS:
+                raise QualitySetError(
+                    f"{dimension.name}: weight must be essential or important"
+                )
+
+    def graded_dimensions(self) -> tuple[RubricDimension, ...]:
+        """Every graded dimension, the veto last."""
+        return (*self.dimensions, self.veto)
+
+    def verdict_keys(self) -> tuple[str, ...]:
+        """The verdict names, in the order the judge must return them."""
+        return tuple(item.name for item in self.graded_dimensions())
+
     def passes(self, verdicts: Mapping[str, str]) -> bool:
-        """Every dimension passes and the hallucination veto passes."""
+        """Every graded dimension passes and the veto passes.
+
+        ``essential`` and ``important`` dimensions both gate the item; the
+        constructor refuses any other weight. The ``veto`` dimension fails
+        the item whatever the other verdicts say, so no combination of
+        passes can average it away. A missing verdict fails.
+        """
         for dimension in self.dimensions:
             if verdicts.get(dimension.name) != "pass":
                 return False
