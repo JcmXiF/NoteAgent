@@ -58,5 +58,6 @@ where = ["src"]
 noteagent = [
     "templates/default/**/*.md",
     "acquire/skills/*.md",
+    "prompts/skills/**/*.md",
     "web/**/*",
 ]

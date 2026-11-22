@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from noteagent.acquire.search_config import SearchConfig
 from noteagent.acquire.skills import list_skills, load_skill
 from noteagent.acquire.tools import tool_catalog
-from noteagent.acquire.types import SearchBudget, Skill, SkillCatalogEntry, ToolSpec
+from noteagent.acquire.types import SearchBudget, ToolSpec
+from noteagent.skills.types import Skill, SkillCatalogEntry
 
 
 @dataclass(frozen=True, slots=True)
