@@ -72,15 +72,10 @@ from noteagent.api.pages import (
     page_view_payload,
     project_search_payload,
 )
-from noteagent.api.pipeline import (
-    pipeline_service,
-    pipeline_service_for,
-    prepare_active_project,
-)
-from noteagent.api.pipeline_events import iter_pipeline_events
-from noteagent.pipeline.lock import ProjectBusy
+from noteagent.api.pipeline import pipeline_materials, pipeline_store
+from noteagent.pipeline.captures import CaptureInbox
+from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.run import run_to_dict
-from noteagent.pipeline.service import PipelineService
 from noteagent.api.projects import (
     create_project,
     delete_project,
@@ -639,11 +634,6 @@ async def _app_lifespan(_app: FastAPI):
     # A crash leaves a run's last marker at running; recover its terminal state
     # before the list and the session view can be read.
     recover_active_project_runs(_app.state.deps)
-    # A pipeline run a previous core left open is not still running, and
-    # originals that predate the material log get a record; both before any
-    # route can read them.
-    prepare_active_project(_app.state.deps)
-
     stop = asyncio.Event()
 
     async def _poll_inbox() -> None:
@@ -665,6 +655,25 @@ async def _app_lifespan(_app: FastAPI):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _legacy_layout(deps: AppDeps) -> ProjectLayout:
+    """The legacy run files live in the active project; a test store has none."""
+    layout = active_layout(deps)
+    if layout is None:
+        raise CodedHTTPException(
+            409,
+            "old pipeline runs need the active project",
+            code="project.notConfigured",
+        )
+    return layout
+
+
+def _legacy_run_or_404(deps: AppDeps, run_id: str) -> ProjectLayout:
+    layout = _legacy_layout(deps)
+    if pipeline_store(layout).get(run_id) is None:
+        raise _pipeline_not_found(run_id)
+    return layout
 
 
 def _pipeline_not_found(run_id: str) -> CodedHTTPException:
@@ -708,41 +717,27 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.get("/api/v1/pipeline/runs")
     def pipeline_runs() -> dict[str, object]:
-        """Every run of the active project, newest first."""
-        return {"runs": [run_to_dict(run) for run in pipeline_service(deps).list()]}
+        """Every old run of the active project, newest first; read only."""
+        layout = _legacy_layout(deps)
+        return {
+            "runs": [
+                run_to_dict(run) for run in pipeline_store(layout).list()
+            ]
+        }
 
     @app.get("/api/v1/pipeline/runs/{run_id}")
     def pipeline_run(run_id: str) -> dict[str, object]:
-        run = pipeline_service(deps).get(run_id)
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
-
-    @app.get("/api/v1/pipeline/runs/{run_id}/events")
-    def pipeline_run_events(run_id: str) -> StreamingResponse:
-        """The run's stage, plan, material and result events as they happen."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        return StreamingResponse(
-            iter_pipeline_events(service, run_id),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        layout = _legacy_run_or_404(deps, run_id)
+        return run_to_dict(pipeline_store(layout).get(run_id))
 
     @app.get("/api/v1/pipeline/runs/{run_id}/materials")
     def pipeline_run_materials(run_id: str) -> dict[str, object]:
         """The materials this run collected, with their current state."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
         return {
             "materials": [
-                state.payload() for state in service.materials_for_run(run_id)
+                state.payload()
+                for state in pipeline_materials(layout, clock=deps.clock).for_run(run_id)
             ]
         }
 
@@ -752,10 +747,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         material: str = Query(..., min_length=1, max_length=500),
     ) -> dict[str, object]:
         """The staged blocks behind one material, for the source view."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        blocks = service.material_blocks(material, run_id=run_id)
+        layout = _legacy_run_or_404(deps, run_id)
+        blocks = pipeline_materials(layout, clock=deps.clock).blocks(material, run_id=run_id)
         if blocks is None:
             raise CodedHTTPException(
                 404,
@@ -764,42 +757,26 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             )
         return {"material": material, "blocks": blocks}
 
-    @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
-    def pipeline_cancel(run_id: str) -> dict[str, object]:
-        """Stop a run between its stages; a finished run comes back unchanged."""
-        try:
-            run = pipeline_service(deps).cancel(run_id)
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
-
     @app.get("/api/v1/pipeline/runs/{run_id}/restore/preview")
     def pipeline_restore_preview(run_id: str) -> dict[str, object]:
         """How the pages this run wrote stand now, before undoing them."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        return service.restore_preview(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
+        return preview_restore(layout, run_id)
 
     @app.post("/api/v1/pipeline/runs/{run_id}/restore")
     def pipeline_restore(
         run_id: str, body: RunRestoreBody
     ) -> dict[str, object]:
         """Undo the selected pages of a finished run."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
         if body.runId != run_id:
             raise CodedHTTPException(
                 400,
                 f"run id in body does not match the path: {body.runId}",
                 code="pipeline.invalid",
             )
-        return service.restore(
+        return restore_run(
+            layout,
             run_id,
             [page.model_dump() for page in body.pages],
         )
@@ -1163,9 +1140,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             result = use_project(body.name)
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
-        # An older project's originals predate the material log; give them their
-        # records when the project is opened, not only when the core starts.
-        prepare_active_project(deps)
         return result
 
     @app.post("/api/projects")
@@ -1186,7 +1160,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             result = open_existing_folder(body.path, name=body.name, mode=body.mode)
         except Exception as err:
             raise _project_http_error(err) from err
-        prepare_active_project(deps)
         return result
 
     @app.post("/api/projects/{name}/init")
@@ -1695,26 +1668,14 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     ) -> dict[str, object]:
         """Put one sign-in page away; it comes back only if it is met again."""
         layout = require_project_layout(name)
-        service = PipelineService(
-            layout,
-            clock=deps.clock,
-            ids=deps.ids,
-            registry=deps.pipeline_registry,
-            keep_runs=deps.pipeline_keep_runs,
-        )
-        try:
-            changed = service.dismiss_capture(body.id)
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        if not changed:
+        inbox = CaptureInbox(layout.capture_inbox)
+        if not inbox.dismiss(body.id):
             raise CodedHTTPException(
                 404,
                 f"no capture inbox item: {body.id}",
                 code="capture.notFound",
             )
-        return service.capture_payload()
+        return inbox.payload()
 
     @app.post("/api/projects/{name}/acquire/search")
     def project_acquire_search(name: str, body: AcquireSearchBody) -> dict[str, object]:
@@ -1843,22 +1804,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.put("/api/projects/{name}/clips")
     def project_clips_put(name: str, body: ClipsPutBody) -> dict[str, object]:
         layout = require_project_layout(name)
+        lock = ProjectLock(layout.project_lock, clock=deps.clock)
         # Selections are project state too: the write takes the one writer's
-        # place, so it cannot land in the middle of a pipeline run.
-        service = pipeline_service_for(deps, layout)
+        # place, so it cannot land in the middle of a page write.
         try:
-            payload = service.write_clips(
-                lambda: put_clips_payload(
-                    layout, body.model_dump(), clock=deps.clock
-                )
-            )
-            return payload
+            lock.acquire("clips")
         except ProjectBusy as err:
             raise CodedHTTPException(
                 409, str(err), code="pipeline.projectBusy"
             ) from err
+        try:
+            return put_clips_payload(
+                layout, body.model_dump(), clock=deps.clock
+            )
         except ValueError as err:
             raise http_error(err, 400) from err
+        finally:
+            lock.release("clips")
 
     @app.get("/api/projects/{name}/brief")
     def project_brief_get(name: str) -> dict[str, object]:

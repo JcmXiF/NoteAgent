@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, RotateCcw, Square } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api/client";
 import {
-  cancelPipelineRun,
   fetchPipelineMaterials,
   fetchPipelineRestorePreview,
   fetchPipelineRuns,
@@ -13,26 +12,16 @@ import {
   type PipelineRestoreChoice,
   type PipelineRestorePreview,
   type PipelineRun,
-  type PipelineRunStatus,
 } from "@/lib/api/pipeline";
-import { usePoll } from "@/lib/use-poll";
 import { useLayoutStore } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
-import { useSectionCount } from "@/stores/right-sections";
 
 /**
- * The old pipeline's runs: read, stop and restore them.
+ * The old pipeline's runs: read and restore them.
  *
  * New runs are closed: the write path is the writing state, and the panel
- * points there. A run that is still moving is polled; one that has settled is
- * left alone.
+ * points there. The run engine is gone, so every run here is settled.
  */
-const ACTIVE: ReadonlySet<PipelineRunStatus> = new Set([
-  "running",
-  "awaiting_confirmation",
-  "compiling",
-]);
-
 type RestoreChoice = { action: "restore" | "skip"; force: boolean };
 
 export function PipelineRunPanel() {
@@ -41,7 +30,6 @@ export function PipelineRunPanel() {
   const go = useNavStore((state) => state.go);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [materials, setMaterials] = useState<PipelineMaterial[]>([]);
-  const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PipelineRestorePreview | null>(null);
@@ -51,7 +39,6 @@ export function PipelineRunPanel() {
   const [restoreNotice, setRestoreNotice] = useState("");
 
   const latest = runs[0] ?? null;
-  const active = latest !== null && ACTIVE.has(latest.status);
 
   useEffect(() => {
     setPreview(null);
@@ -86,25 +73,6 @@ export function PipelineRunPanel() {
     void load();
   }, [load]);
 
-  // A moving run is worth watching; a settled one is not.
-  usePoll(load, active, 1000);
-  useSectionCount("pipeline", active ? 1 : 0);
-
-  const stop = async () => {
-    if (!latest || !active || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const run = await cancelPipelineRun(latest.id);
-      setRuns((current) =>
-        current.map((item) => (item.id === run.id ? run : item)),
-      );
-    } catch (err) {
-      setError(errorMessage(err, t("pipeline.cancelFailed")));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const openRestore = async () => {
     if (!latest || restoreBusy) return;
@@ -406,18 +374,6 @@ export function PipelineRunPanel() {
                 </p>
               ) : null}
             </div>
-          ) : null}
-          {active ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mt-1 self-start"
-              disabled={busy}
-              onClick={() => void stop()}
-            >
-              <Square />
-              {t("pipeline.cancel")}
-            </Button>
           ) : null}
         </div>
       ) : (

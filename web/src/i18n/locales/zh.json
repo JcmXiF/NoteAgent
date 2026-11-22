@@ -363,10 +363,8 @@
   "pipeline": {
     "retired": "旧流水线不再启动新运行，请从写作状态开始。",
     "goWriting": "打开写作状态",
-    "cancel": "停止",
     "empty": "还没有旧的流水线运行。",
     "loadFailed": "读不到流水线的状态。",
-    "cancelFailed": "没能停止这次运行。",
     "status": {
       "running": "运行中",
       "awaiting_confirmation": "等确认",

@@ -49,7 +49,7 @@ from noteagent.ingest.frontmatter import parse_inline_list, parse_page
 from noteagent.ingest.page_history import page_snapshots
 from noteagent.ingest.source_citations import list_source_citations
 from noteagent.pipeline.run import PipelineRun
-from noteagent.pipeline.store import PipelineRunStore
+from noteagent.pipeline.run import run_to_dict
 from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.sessions.recovery import recover_store
 from noteagent.writing.state import WritingState, WritingStateStore
@@ -915,16 +915,26 @@ def writing_node_recovery(run: CaseRun) -> None:
 def writing_old_run_and_archive_readable(run: CaseRun) -> None:
     """Retiring the pipeline leaves its runs and an archived state readable."""
     stamp = iso_timestamp(run.clock)
-    PipelineRunStore(run.layout).create(
-        PipelineRun(
-            id="pr-old",
-            intent="旧主题",
-            started_by="human",
-            started_at=stamp,
-            updated_at=stamp,
-            status="succeeded",
-            stage="done",
+    old_run_path = run.layout.pipeline_runs / "pr-old.json"
+    old_run_path.parent.mkdir(parents=True, exist_ok=True)
+    old_run_path.write_text(
+        json.dumps(
+            run_to_dict(
+                PipelineRun(
+                    id="pr-old",
+                    intent="旧主题",
+                    started_by="human",
+                    started_at=stamp,
+                    updated_at=stamp,
+                    status="succeeded",
+                    stage="done",
+                )
+            ),
+            ensure_ascii=False,
+            indent=2,
         )
+        + chr(10),
+        encoding="utf-8",
     )
     store = _seed(run)
     api = run.start(FauxModelClient())

@@ -13,7 +13,7 @@ from noteagent.ingest.write_file_blocks import (
     WriteContext,
     write_wiki_page,
 )
-from noteagent.pipeline.run import PipelineRun
+from noteagent.pipeline.run import PipelineRun, run_to_dict
 from noteagent.pipeline.store import PipelineRunStore
 from noteagent.project.init import init_project
 
@@ -30,6 +30,18 @@ except ImportError:  # pragma: no cover
     AppDeps = None  # type: ignore[misc, assignment]
 
 
+def _write_run(layout, run: PipelineRun) -> None:
+    """Write an old run file directly: the store is read-only now."""
+    import json
+
+    path = layout.pipeline_runs / f"{run.id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(run_to_dict(run), ensure_ascii=False, indent=2) + chr(10),
+        encoding="utf-8",
+    )
+
+
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class PipelineRetiredTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -41,7 +53,8 @@ class PipelineRetiredTests(unittest.TestCase):
         patched.start()
         self.addCleanup(patched.stop)
         projects_mod.use_project("demo")
-        PipelineRunStore(self.layout).create(
+        _write_run(
+            self.layout,
             PipelineRun(
                 id="pr-old",
                 intent="旧主题",
@@ -99,6 +112,27 @@ class PipelineRetiredTests(unittest.TestCase):
         self.assertEqual(one.status_code, 200, one.text)
         self.assertEqual(one.json()["intent"], "旧主题")
 
+    def test_the_run_events_and_cancel_are_gone(self) -> None:
+        events = self.client.get("/api/v1/pipeline/runs/pr-old/events")
+        cancel = self.client.post("/api/v1/pipeline/runs/pr-old/cancel")
+        self.assertIn(events.status_code, (404, 405), events.text)
+        self.assertIn(cancel.status_code, (404, 405), cancel.text)
+
+    def test_an_unknown_material_has_no_blocks(self) -> None:
+        response = self.client.get(
+            "/api/v1/pipeline/runs/pr-old/materials/blocks",
+            params={"material": "raw/web/example.com/missing.html"},
+        )
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["code"], "material.blocksMissing")
+
+    def test_the_old_run_materials_read(self) -> None:
+        materials = self.client.get(
+            "/api/v1/pipeline/runs/pr-old/materials"
+        )
+        self.assertEqual(materials.status_code, 200, materials.text)
+        self.assertEqual(materials.json()["materials"], [])
+
     def test_the_old_run_can_restore_a_written_page(self) -> None:
         relative = "wiki/concepts/entropy.md"
         old = (
@@ -123,7 +157,8 @@ class PipelineRetiredTests(unittest.TestCase):
                 actor="agent",
             ),
         )
-        PipelineRunStore(self.layout).create(
+        _write_run(
+            self.layout,
             PipelineRun(
                 id="pr-written",
                 intent="旧主题",

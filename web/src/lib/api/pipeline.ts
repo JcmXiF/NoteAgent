@@ -128,12 +128,6 @@ export function fetchPipelineMaterials(
   );
 }
 
-export function cancelPipelineRun(id: string): Promise<PipelineRun> {
-  return postJson<PipelineRun>(
-    `/v1/pipeline/runs/${encodeURIComponent(id)}/cancel`,
-    {},
-  );
-}
 
 
 export function fetchPipelineRestorePreview(

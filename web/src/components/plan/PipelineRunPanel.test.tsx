@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import { PipelineRunPanel } from "@/components/plan/PipelineRunPanel";
 import {
-  cancelPipelineRun,
   fetchPipelineMaterials,
   fetchPipelineRestorePreview,
   fetchPipelineRuns,
@@ -19,7 +18,6 @@ vi.mock("@/lib/api/pipeline", () => ({
   fetchPipelineMaterials: vi.fn(),
   fetchPipelineRestorePreview: vi.fn(),
   restorePipelineRun: vi.fn(),
-  cancelPipelineRun: vi.fn(),
 }));
 
 const running: PipelineRun = {
@@ -193,18 +191,4 @@ describe("PipelineRunPanel", () => {
     expect(container.textContent).toContain(i18n.t("pipeline.material.staged"));
   });
 
-  it("cancels the active run", async () => {
-    vi.mocked(fetchPipelineRuns).mockResolvedValue({ runs: [running] });
-    vi.mocked(cancelPipelineRun).mockResolvedValue({
-      ...running,
-      status: "cancelled",
-    });
-    await render();
-
-    await act(async () => {
-      button(i18n.t("pipeline.cancel")).click();
-    });
-
-    expect(cancelPipelineRun).toHaveBeenCalledWith("pr-1");
-  });
 });

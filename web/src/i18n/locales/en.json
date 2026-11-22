@@ -363,10 +363,8 @@
   "pipeline": {
     "retired": "The old pipeline no longer starts new runs. Write from the writing state.",
     "goWriting": "Open the writing state",
-    "cancel": "Stop",
     "empty": "No old pipeline run yet.",
     "loadFailed": "The pipeline's state could not be read.",
-    "cancelFailed": "The run could not be stopped.",
     "status": {
       "running": "Running",
       "awaiting_confirmation": "Waiting for your confirmation",
