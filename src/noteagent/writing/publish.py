@@ -12,9 +12,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from threading import Event
 
 from noteagent.acquire.write_raw import resolve_raw_write_path
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
+from noteagent.agent.tools import check_cancelled
 from noteagent.ingest.frontmatter import (
     format_inline_list,
     format_scalar,
@@ -59,10 +61,12 @@ def publish_page(
     run_id: str = "",
     session_id: str = "",
     clock: Clock | None = None,
+    cancel: Event | None = None,
 ) -> PublishResult:
     """Write one draft page, then mark that version published in the state."""
     moment = clock or SystemClock()
     store = WritingStateStore(layout, clock=moment)
+    check_cancelled(cancel)
     raw_file = str(wiki_file or "").strip()
     # The disk path is canonical; the state lookup also accepts the caller's
     # older spelling, so a draft composed before canonicalization still goes out.
@@ -175,6 +179,7 @@ def publish_page(
         content = _new_page(title, sources) + body
 
     for page_id, material in materials.items():
+        check_cancelled(cancel)
         raw_path = resolve_raw_write_path(layout, material)
         if not raw_path.is_file():
             source = store.page_material(page_id, material)
@@ -186,6 +191,7 @@ def publish_page(
             write_bytes_atomic(raw_path, source.read_bytes())
         store.remove_page_material(page_id, material)
 
+    check_cancelled(cancel)
     result = write_wiki_page(
         layout,
         target_file,
@@ -216,6 +222,7 @@ def publish_page(
         effect_ids=effect_ids,
         warnings=tuple(warnings),
     )
+
 
 
 def _new_page(title: str, sources: list[str]) -> str:

@@ -47,6 +47,9 @@ class UserInput:
     session_id: str
     content: str
     on_busy: OnBusy = OnBusy.REJECT
+    #: A caller may name the run before the kernel starts it, so a wrapper can
+    #: release the writing lease it took; empty means the kernel generates one.
+    run_id: str = ""
     #: Set by the stream that owns this run when its reader disconnects. The
     #: kernel stops at the next committed boundary and leaves an interrupted
     #: marker; a stream that never owns the run never reads it.
@@ -63,6 +66,8 @@ class RunResume:
 
     session_id: str
     run_id: str
+    #: The continuation's own identity; empty means the kernel generates one.
+    new_run_id: str = ""
     pause: Event | None = field(default=None, repr=False, compare=False)
     #: A run slot the route already claimed; the kernel must not claim twice.
     claim: Event | None = field(default=None, repr=False, compare=False)

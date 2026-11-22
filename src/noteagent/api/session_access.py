@@ -9,21 +9,25 @@ would have refused, and a cancel reaches the same registry the query claimed.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from noteagent.agent.kernel import KernelRuntime, RunRegistry
-from noteagent.agent.model import ModelClient
-from noteagent.agent.projection import project
-from noteagent.agent.retry import RetryingModel
+from noteagent.agent.clock import Ids, UuidIds
 from noteagent.agent.compaction import (
     DEFAULT_CONTEXT_WINDOW,
     CompactionLimits,
 )
+from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.model import ModelClient
+from noteagent.agent.projection import project
+from noteagent.agent.retry import RetryingModel
 from noteagent.agent.runtime import (
     AgentRuntime,
     EventSink,
     RunRequest,
     RunResult,
+    RunResume,
+    UserInput,
 )
 from noteagent.agent.run_marker import (
     RunFingerprint,
@@ -306,18 +310,41 @@ class WritingLeaseRuntime:
     """
 
     def __init__(
-        self, inner: AgentRuntime, store: WritingStateStore
+        self,
+        inner: AgentRuntime,
+        store: WritingStateStore,
+        ids: Ids | None = None,
     ) -> None:
         self._inner = inner
         self._store = store
+        self._ids = ids or UuidIds()
 
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
-        session_id = str(getattr(request, "session_id", "") or "")
+        if isinstance(request, RunResume):
+            # ``run_id`` is the interrupted run; the continuation gets its own.
+            # Its lease was stranded by the crash, so release it first; the
+            # release refuses a different holder, so a live run is untouched.
+            try:
+                self._store.release_writer(request.run_id)
+            except ProjectBusy:
+                pass
+            run_id = str(request.new_run_id or "")
+            if not run_id:
+                run_id = self._ids.new_id("run")
+                request = replace(request, new_run_id=run_id)
+        else:
+            run_id = str(getattr(request, "run_id", "") or "")
+            if not run_id:
+                # The wrapper names the run before the kernel sees it, so the
+                # lease the tools take is exactly the one this block releases.
+                run_id = self._ids.new_id("run")
+                if isinstance(request, UserInput):
+                    request = replace(request, run_id=run_id)
         try:
             return self._inner.execute(request, sink)
         finally:
             try:
-                self._store.release_writer(session_id)
+                self._store.release_writer(run_id)
             except ProjectBusy:
                 # A holder we cannot reach leaves only the stale lease behind.
                 pass
@@ -404,7 +431,9 @@ def session_runtime(
     )
     if layout is not None:
         runtime = WritingLeaseRuntime(
-            runtime, WritingStateStore(layout, clock=deps.clock)
+            runtime,
+            WritingStateStore(layout, clock=deps.clock),
+            ids=deps.ids,
         )
     return runtime
 

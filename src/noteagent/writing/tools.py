@@ -23,6 +23,7 @@ from noteagent.agent.tools import (
     ToolContext,
     ToolResult,
     ToolSpec,
+    check_cancelled,
 )
 from noteagent.ingest.clips import MAX_BLOCKS_PER_COLLECTION
 from noteagent.pipeline.captures import CaptureInbox
@@ -116,10 +117,17 @@ def _take_lease(
     moment: Clock,
     kind: str = "agent",
 ) -> None:
-    """A run's first state write takes the lease; its runtime releases it."""
-    WritingStateStore(layout, clock=moment).ensure_writer(
-        kind, context.session_id
-    )
+    """A run's first state write takes the lease; its runtime releases it.
+
+    An agent run's identity is the run, not the session: two runs in one chat
+    must not share (or release) each other's lease. A node's lease belongs to
+    its node, whose session is the node id, and its route releases that id.
+    """
+    ident = context.session_id
+    if kind == "agent":
+        ident = context.run_id or context.session_id
+    WritingStateStore(layout, clock=moment).ensure_writer(kind, ident)
+
 
 
 def get_state_tool(layout: ProjectLayout) -> ToolSpec:
@@ -795,6 +803,7 @@ def compose_wiki_tool(
     store = WritingStateStore(layout, clock=moment)
 
     def compose_wiki(arguments, context) -> ToolResult:
+        check_cancelled(context.cancel)
         _take_lease(layout, context, moment)
         raw_file = str(arguments["wikiFile"]).strip()
         wiki_file = canonical_wiki_file(raw_file)
@@ -832,6 +841,7 @@ def compose_wiki_tool(
                     "baseVersion": raw.get("baseVersion"),
                 }
             )
+        check_cancelled(context.cancel)
         _saved, page, changed = store.compose_draft(
             raw_file,
             sections,
@@ -948,6 +958,7 @@ def write_wiki_tool(
     moment = clock or SystemClock()
 
     def write_wiki(arguments, context) -> ToolResult:
+        check_cancelled(context.cancel)
         _take_lease(layout, context, moment)
         raw_file = str(arguments["wikiFile"]).strip()
         wiki_file = canonical_wiki_file(raw_file)
@@ -960,6 +971,7 @@ def write_wiki_tool(
             raise ValueError(
                 "draftVersion must be a non-negative integer"
             )
+        check_cancelled(context.cancel)
         result = publish_page(
             layout,
             raw_file,
@@ -967,6 +979,7 @@ def write_wiki_tool(
             run_id=context.run_id,
             session_id=context.session_id,
             clock=moment,
+            cancel=context.cancel,
         )
         return ToolResult(
             content=json.dumps(

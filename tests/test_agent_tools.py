@@ -141,6 +141,48 @@ class DispatchTests(unittest.TestCase):
         self.assertTrue(result.meta["timeout"])
         self.assertIn("timed out", result.content)
 
+    def test_a_timed_out_handler_sees_its_call_stopped(self) -> None:
+        release = threading.Event()
+        effects: list[str] = []
+
+        def slow(arguments, context):
+            release.wait(2)
+            if context.cancel is not None and context.cancel.is_set():
+                return ToolResult(content="stopped")
+            effects.append(str(arguments["text"]))
+            return ToolResult(content="late")
+
+        registry = ToolRegistry([_spec(slow, timeout_s=0.05)])
+
+        result = registry.dispatch(
+            "echo", '{"text": "write"}', ToolContext("s1")
+        )
+        release.set()
+        time.sleep(0.1)
+
+        self.assertTrue(result.meta["timeout"])
+        self.assertEqual(effects, [])
+
+    def test_a_cancelled_run_never_starts_the_handler(self) -> None:
+        ran: list[bool] = []
+
+        def handler(_arguments, _context):
+            ran.append(True)
+            return ToolResult(content="ran")
+
+        cancel = threading.Event()
+        cancel.set()
+        registry = ToolRegistry([_spec(handler)])
+
+        with self.assertRaises(RunCancelled):
+            registry.dispatch(
+                "echo",
+                '{"text": "hi"}',
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertEqual(ran, [])
+
     def test_a_cancelled_call_is_not_turned_into_an_error_observation(self) -> None:
         def stopped(_arguments, _context):
             raise RunCancelled("stopped")
@@ -187,6 +229,47 @@ class ObservationTests(unittest.TestCase):
 
 
 class ParallelDispatchTests(unittest.TestCase):
+    def test_a_cancelled_batch_stops_every_handler(self) -> None:
+        cancel = threading.Event()
+        started = threading.Event()
+        wrote: list[str] = []
+
+        def trigger(_arguments, _context):
+            cancel.set()
+            started.set()
+            return ToolResult(content="trigger")
+
+        def writer(_arguments, context):
+            started.wait(1)
+            for _ in range(100):
+                time.sleep(0.01)
+                if (
+                    context.cancel is not None
+                    and context.cancel.is_set()
+                ):
+                    return ToolResult(content="stopped")
+            wrote.append("wrote")
+            return ToolResult(content="late")
+
+        registry = ToolRegistry(
+            [
+                _spec(trigger, name="trigger"),
+                _spec(writer, name="writer"),
+            ]
+        )
+
+        with self.assertRaises(RunCancelled):
+            registry.dispatch_many(
+                [
+                    ToolCall("1", "trigger", '{"text": "x"}'),
+                    ToolCall("2", "writer", '{"text": "x"}'),
+                ],
+                ToolContext("s1", cancel=cancel),
+            )
+        time.sleep(0.1)
+
+        self.assertEqual(wrote, [])
+
     def test_calls_in_one_batch_run_at_the_same_time_and_keep_their_order(self) -> None:
         together = threading.Barrier(2, timeout=2)
 

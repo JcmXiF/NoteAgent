@@ -216,7 +216,14 @@ class KernelRuntime:
             else self._registry.claim(session_id)
         )
         pause = request.pause
-        run_id = self._ids.new_id("run")
+        if isinstance(request, RunResume):
+            # ``run_id`` names the interrupted run; the continuation is its own.
+            run_id = (
+                str(request.new_run_id or "")
+                or self._ids.new_id("run")
+            )
+        else:
+            run_id = str(request.run_id or "") or self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
             if isinstance(request, RunResume):

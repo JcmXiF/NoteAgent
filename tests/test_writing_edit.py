@@ -115,11 +115,13 @@ class _InnerRuntime:
     def __init__(self, store: WritingStateStore) -> None:
         self.store = store
         self.seen = []
+        self.requests = []
         self.calls = 0
 
     def execute(self, request, sink):
         self.calls += 1
-        state = self.store.ensure_writer("agent", "s1")
+        self.requests.append(request)
+        state = self.store.ensure_writer("agent", request.run_id)
         self.seen.append(state.writer)
         return "done"
 
@@ -428,7 +430,11 @@ class WritingEditTests(unittest.TestCase):
         self.assertEqual(result, "done")
         self.assertEqual(inner.calls, 1)
         self.assertEqual(inner.seen[0]["kind"], "agent")
-        self.assertEqual(inner.seen[0]["id"], "s1")
+        self.assertTrue(inner.requests[0].run_id)
+        self.assertNotEqual(inner.requests[0].run_id, "s1")
+        self.assertEqual(
+            inner.seen[0]["id"], inner.requests[0].run_id
+        )
         self.assertIsNone(self.store.load().writer)
 
     def test_a_second_run_cannot_hold_the_lease_beside_a_node(self) -> None:

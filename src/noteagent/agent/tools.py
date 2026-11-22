@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Event
 from typing import Literal, TypeAlias
 
@@ -202,13 +202,15 @@ class ToolRegistry:
         the model decides whether to correct it. A cancellation is the one thing
         that is not an observation, because the run must end rather than read it.
         """
+        check_cancelled(context.cancel)
         prepared = self._prepare(name, arguments)
         if isinstance(prepared, ToolResult):
             return prepared
         spec, values = prepared
-        call = _PendingCall(spec)
-        call.start(values, context)
-        return self._finish(spec, call.outcome(spec.timeout_s, context.cancel))
+        call, stop = self._start(spec, values, context)
+        return self._finish(
+            spec, call.outcome(spec.timeout_s, context.cancel, stop)
+        )
 
     def dispatch_many(
         self, calls: Sequence[ToolCall], context: ToolContext
@@ -224,6 +226,7 @@ class ToolRegistry:
         """
         if not calls:
             return ()
+        check_cancelled(context.cancel)
         prepared = [self._prepare(call.name, call.arguments) for call in calls]
         if any(
             isinstance(item, tuple)
@@ -236,32 +239,58 @@ class ToolRegistry:
                     results.append(item)
                     continue
                 spec, values = item
-                call = _PendingCall(spec)
-                call.start(values, context)
+                call, stop = self._start(spec, values, context)
                 results.append(
                     self._finish(
-                        spec, call.outcome(spec.timeout_s, context.cancel)
+                        spec,
+                        call.outcome(
+                            spec.timeout_s, context.cancel, stop
+                        ),
                     )
                 )
             return tuple(results)
-        pending: dict[int, tuple[_PendingCall, ToolSpec]] = {}
+        pending: dict[int, tuple[_PendingCall, ToolSpec, Event]] = {}
         results: list[ToolResult | None] = [None] * len(calls)
         for index, item in enumerate(prepared):
             if isinstance(item, ToolResult):
                 results[index] = item
                 continue
             spec, values = item
-            call = _PendingCall(spec)
-            call.start(values, context)
-            pending[index] = (call, spec)
-        for index, (call, spec) in pending.items():
-            results[index] = self._finish(
-                spec, call.outcome(spec.timeout_s, context.cancel)
-            )
+            call, stop = self._start(spec, values, context)
+            pending[index] = (call, spec, stop)
+        for index, (call, spec, stop) in pending.items():
+            try:
+                results[index] = self._finish(
+                    spec,
+                    call.outcome(spec.timeout_s, context.cancel, stop),
+                )
+            except RunCancelled:
+                # A sibling that has not finished must stop too, or it could
+                # still commit after the round was abandoned.
+                for _call, _spec, other in pending.values():
+                    other.set()
+                raise
         finished = [result for result in results if result is not None]
         if len(finished) != len(calls):  # pragma: no cover - defensive
             raise RuntimeError("a tool call produced no result")
         return tuple(finished)
+
+    def _start(
+        self,
+        spec: ToolSpec,
+        values: Mapping[str, object],
+        context: ToolContext,
+    ) -> tuple["_PendingCall", Event]:
+        """Start one call with an event that stops this call only.
+
+        The run's own event ends the whole run; this per-call event also stops
+        the handler thread on a timeout, so a call that already reported a
+        timeout cannot go on to write.
+        """
+        stop = Event()
+        call = _PendingCall(spec)
+        call.start(values, replace(context, cancel=stop))
+        return call, stop
 
     def _prepare(
         self, name: str, arguments: str | Mapping[str, object]
@@ -330,13 +359,20 @@ class _PendingCall:
         self._started_at = time.monotonic()
         self._thread.start()
 
-    def outcome(self, timeout_s: float, cancel: Event | None = None) -> ToolResult:
+    def outcome(
+        self,
+        timeout_s: float,
+        cancel: Event | None = None,
+        stop: Event | None = None,
+    ) -> ToolResult:
         # The budget starts when the call does, not when its turn in the batch
         # comes up: a fast tool behind a slow sibling must still be bounded.
         deadline = self._started_at + timeout_s
         while self._thread.is_alive():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if stop is not None:
+                    stop.set()
                 return _error(
                     self._spec.name,
                     f"tool {self._spec.name} timed out after {timeout_s:g}s",
@@ -347,6 +383,8 @@ class _PendingCall:
             # rest of its timeout; the stop is checked between short waits.
             self._thread.join(min(0.05, remaining))
             if self._thread.is_alive() and cancel is not None and cancel.is_set():
+                if stop is not None:
+                    stop.set()
                 raise RunCancelled("the run was cancelled")
         failure = self._failure
         if failure is not None:
@@ -398,6 +436,12 @@ def _arguments(
             code="invalid_arguments",
         )
     return dict(data)
+
+
+def check_cancelled(cancel: Event | None) -> None:
+    """A call whose run was cancelled, or whose time ran out, never runs."""
+    if cancel is not None and cancel.is_set():
+        raise RunCancelled("the run was cancelled")
 
 
 def _error(

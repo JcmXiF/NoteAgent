@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
+from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import ToolContext
 from noteagent.effects.journal import (
     COMMITTED,
@@ -270,6 +272,49 @@ class WritingPublishTests(unittest.TestCase):
         payload = json.loads(result.content)
         self.assertEqual(payload["wikiFile"], WIKI_FILE)
         self.assertTrue(self.wiki_path().is_file())
+
+    def test_the_write_handler_checks_cancel_before_the_page_write(
+        self,
+    ) -> None:
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = self.prepared(tools)
+        cancel = Event()
+        cancel.set()
+        spec = tools.get("write_wiki")
+
+        with self.assertRaises(RunCancelled):
+            spec.handler(
+                {
+                    "wikiFile": WIKI_FILE,
+                    "draftVersion": draft_version,
+                },
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertFalse(self.wiki_path().exists())
+
+    def test_a_cancelled_write_leaves_no_page(self) -> None:
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = self.prepared(tools)
+        cancel = Event()
+        cancel.set()
+
+        with self.assertRaises(RunCancelled):
+            tools.dispatch(
+                "write_wiki",
+                json.dumps(
+                    {
+                        "wikiFile": WIKI_FILE,
+                        "draftVersion": draft_version,
+                    }
+                ),
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertFalse(self.wiki_path().exists())
+        page = WritingStateStore(self.layout).load().draft
+        status = page["pages"][0]["status"] if page["pages"] else ""
+        self.assertEqual(status, "draft")
 
     def test_a_slug_publishes_to_the_canonical_page(self) -> None:
         tools = writing_tools(self.layout)

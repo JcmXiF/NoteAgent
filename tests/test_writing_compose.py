@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from unittest.mock import patch
 
 from agent_fakes import FixedClock, SequentialIds
 from noteagent.acquire.types import CandidateCard, Capture
+from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import ToolContext
 from noteagent.api.deps import AppDeps
 from noteagent.api.session_access import session_tools
@@ -528,6 +530,76 @@ class WritingComposeTests(unittest.TestCase):
         pages = draft_pages(WritingStateStore(self.layout).load().draft)
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["wikiFile"], WIKI_FILE)
+
+    def test_the_compose_handler_checks_cancel_before_the_write(
+        self,
+    ) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        cancel = Event()
+        cancel.set()
+        spec = tools.get("compose_wiki")
+
+        with self.assertRaises(RunCancelled):
+            spec.handler(
+                {
+                    "wikiFile": WIKI_FILE,
+                    "baseDraftVersion": 0,
+                    "sections": [
+                        {
+                            "id": "definition",
+                            "heading": "定义",
+                            "body": "正文",
+                            "citations": [frame_id],
+                        }
+                    ],
+                },
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertEqual(
+            list(
+                draft_pages(
+                    WritingStateStore(self.layout).load().draft
+                )
+            ),
+            [],
+        )
+
+    def test_a_cancelled_compose_writes_nothing(self) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        cancel = Event()
+        cancel.set()
+
+        with self.assertRaises(RunCancelled):
+            tools.dispatch(
+                "compose_wiki",
+                json.dumps(
+                    {
+                        "wikiFile": WIKI_FILE,
+                        "baseDraftVersion": 0,
+                        "sections": [
+                            {
+                                "id": "definition",
+                                "heading": "定义",
+                                "body": "正文",
+                                "citations": [frame_id],
+                            }
+                        ],
+                    }
+                ),
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertEqual(
+            list(
+                draft_pages(
+                    WritingStateStore(self.layout).load().draft
+                )
+            ),
+            [],
+        )
 
     def test_an_invalid_wiki_file_names_the_right_form(self) -> None:
         tools = self.tools()
