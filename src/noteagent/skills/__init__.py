@@ -29,6 +29,8 @@ BUNDLED_ROOT = (
 )
 #: One skill file may not exceed this; the index must stay cheap to read.
 MAX_SKILL_BYTES = 256 * 1024
+#: One referenced file may not exceed this.
+MAX_REFERENCE_BYTES = 256 * 1024
 MAX_NAME_LENGTH = 64
 _NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
@@ -76,10 +78,16 @@ class SkillRegistry:
 
     def catalog(self) -> tuple[SkillCatalogEntry, ...]:
         """Tier 1 across the roots: one name and description per skill."""
-        seen: dict[str, SkillCatalogEntry] = {}
+        return tuple(entry for entry, _kind in self.entries())
+
+    def entries(
+        self,
+    ) -> tuple[tuple[SkillCatalogEntry, SkillRootKind], ...]:
+        """Tier 1 with the root kind; the first root per name wins."""
+        seen: dict[str, tuple[SkillCatalogEntry, SkillRootKind]] = {}
         for root in self.roots:
             for entry in catalog_in(root.folder):
-                seen.setdefault(entry.name, entry)
+                seen.setdefault(entry.name, (entry, root.kind))
         return tuple(seen.values())
 
     def load(self, name: str) -> Skill:
@@ -152,6 +160,43 @@ def problems_in(folder: Path) -> tuple[SkillProblem, ...]:
     """Every skill refused in one root, with its file and reason."""
     _found, problems = _scan(folder)
     return problems
+
+
+def read_skill_file(skill: Skill, relative: str) -> str:
+    """Read one referenced file inside *skill*'s own folder.
+
+    The path is relative to the folder holding ``SKILL.md``. An absolute
+    path, a ``..`` segment, a link, a folder, or a file over
+    ``MAX_REFERENCE_BYTES`` is refused with an actionable error.
+    """
+    raw = relative.strip()
+    if not raw:
+        raise SkillError("a file path is required")
+    path = Path(raw)
+    if path.is_absolute() or path.drive:
+        raise SkillError(
+            f"{raw!r}: use a path relative to the skill folder"
+        )
+    if any(part == ".." for part in path.parts):
+        raise SkillError(
+            f"{raw!r}: a reference must stay inside the skill folder"
+        )
+    if skill.path.name != "SKILL.md":
+        raise SkillError(
+            f"{skill.name}: a flat skill file has no referenced files"
+        )
+    base = skill.path.parent
+    target = base / path
+    label = repr(raw)
+    _refuse_links(target, base, label)
+    resolved = _resolve_inside(target, base, label)
+    if not resolved.is_file():
+        raise SkillError(f"{skill.name}: no file {raw!r}")
+    _refuse_oversize(resolved, MAX_REFERENCE_BYTES, label)
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        raise SkillError(f"{raw!r}: cannot be read: {err}") from err
 
 
 def _config_home() -> Path:
@@ -245,21 +290,39 @@ def _is_link(path: Path) -> bool:
 
 def _refuse_unsafe(path: Path, root: Path) -> None:
     """Refuse a link, a path outside *root*, or an oversized file."""
+    label = str(path)
+    _refuse_links(path, root, label)
+    resolved = _resolve_inside(path, root, label)
+    _refuse_oversize(resolved, MAX_SKILL_BYTES, label)
+
+
+def _refuse_links(path: Path, base: Path, label: str) -> None:
+    """Refuse a link anywhere on the way from *path* up to *base*."""
     current = path
-    while current != root:
+    while current != base:
         if _is_link(current):
-            raise SkillError(f"{path}: a skill must not be a symlink")
+            raise SkillError(f"{label}: a link is not allowed")
+        if current.parent == current:
+            raise SkillError(f"{label}: must stay inside {base}")
         current = current.parent
+
+
+def _resolve_inside(path: Path, base: Path, label: str) -> Path:
+    """The resolved path, or a refusal when it leaves *base*."""
     try:
-        path.resolve().relative_to(root.resolve())
+        resolved = path.resolve()
+        resolved.relative_to(base.resolve())
     except ValueError:
-        raise SkillError(
-            f"{path}: a skill must stay inside {root}"
-        ) from None
+        raise SkillError(f"{label}: must stay inside {base}") from None
+    return resolved
+
+
+def _refuse_oversize(path: Path, limit: int, label: str) -> None:
+    """Refuse a file over its byte budget."""
     size = path.stat().st_size
-    if size > MAX_SKILL_BYTES:
+    if size > limit:
         raise SkillError(
-            f"{path}: {size} bytes exceeds the {MAX_SKILL_BYTES}-byte limit"
+            f"{label}: {size} bytes exceeds the {limit}-byte limit"
         )
 
 

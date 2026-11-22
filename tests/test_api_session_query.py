@@ -308,6 +308,8 @@ class DefaultToolTests(unittest.TestCase):
                 "select_frame",
                 "compose_wiki",
                 "write_wiki",
+                "skill",
+                "skill_read_file",
             ],
         )
 
