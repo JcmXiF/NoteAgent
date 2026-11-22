@@ -420,7 +420,7 @@ def run_item_once(
     tmp = Path(tempfile.mkdtemp(prefix=f"noteagent-quality-v3-{spec.item_id}-"))
     try:
         run = CaseRun(tmp, pages=list(spec.pages))
-        api = run.start(recording)
+        api = run.start(recording, model_name=config.model)
         session_id = api.create_session(title=spec.item_id)
         for content in spec.turns:
             reply = api.query(session_id, content)

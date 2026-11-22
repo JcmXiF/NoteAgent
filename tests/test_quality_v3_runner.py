@@ -251,6 +251,25 @@ class RunItemTests(unittest.TestCase):
         self.assertEqual(item.error, "")
         self.assertIn(spec.expected_points[0], judge.messages[1].content)
 
+    def test_the_configured_model_name_reaches_the_request(self) -> None:
+        quality = load_quality_set()
+        spec = item_specs(quality)[0]
+        model = FauxModelClient(FauxModelClient.text("答案。").script)
+        judge = _Judge(_payload())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_item_once(
+                quality,
+                spec,
+                0,
+                _config(),
+                Path(tmp),
+                model=model,
+                judge_client=judge,
+            )
+
+        self.assertEqual(model.requests[0].model, "test-model")
+
     def test_a_known_model_gets_a_cost(self) -> None:
         quality = load_quality_set()
         spec = item_specs(quality)[0]

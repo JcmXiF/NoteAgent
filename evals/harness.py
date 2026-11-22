@@ -253,6 +253,9 @@ class CaseRun:
         self,
         model: ModelClient,
         *,
+        #: The name the kernel records and sends on the model request. Scripted
+        #: cases are faux; a live arm must pass the configured model's name.
+        model_name: str = "faux",
         tools: ToolRegistry | None = None,
         seed_system_sections: bool = False,
         max_turns: int = 50,
@@ -266,7 +269,7 @@ class CaseRun:
             ids=self.ids,
             model=model,
             tools=tools,
-            settings={"model": "faux"},
+            settings={"model": model_name},
             seed_system_sections=seed_system_sections,
             max_turns=max_turns,
             web_search=web_search,
