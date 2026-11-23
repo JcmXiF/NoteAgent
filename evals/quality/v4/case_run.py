@@ -111,14 +111,17 @@ def shape_checks(
 ) -> tuple[Check, ...]:
     """The deterministic task-compliance checks for one artifact."""
     if case.kind == PAGE_KIND:
-        return _page_checks(case, artifact, final_text)
+        return _page_checks(case, artifact, final_text, entries)
     if case.kind == ANSWER_KIND:
         return _answer_checks(case, artifact, entries)
     raise ValueError(f"unknown case kind: {case.kind!r}")
 
 
 def _page_checks(
-    case: QualityCase, page_text: str, final_text: str
+    case: QualityCase,
+    page_text: str,
+    final_text: str,
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
 ) -> tuple[Check, ...]:
     parsed = parse_page(page_text) if page_text else None
     sources = (
@@ -131,14 +134,14 @@ def _page_checks(
     stem = Path(case.wiki_file).stem.casefold()
     cited = tuple(
         any(source.startswith(f"{material_id}#") for source in sources)
-        for material_id in case.material_ids
+        for material_id in case.source_ids
     )
 
     def check(name: str, passed: bool, detail: str = "") -> Check:
         return Check(name, passed, detail, PUBLISH)
 
     language = _has_cjk(body)
-    return (
+    checks = [
         check(
             "the page exists at the requested path",
             bool(page_text),
@@ -169,7 +172,10 @@ def _page_checks(
             ),
             final_text[:120],
         ),
-    )
+    ]
+    if case.required_reads:
+        checks.extend(_trace_checks(case, entries))
+    return tuple(checks)
 
 
 def _answer_checks(
@@ -178,16 +184,6 @@ def _answer_checks(
     entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
 ) -> tuple[Check, ...]:
     language = _has_cjk(final_text)
-    calls = _tool_calls(entries)
-    searched = any(name == "search" for name, _args in calls)
-    read = {
-        _normalize_slug(args.get("slug"))
-        for name, args in calls
-        if name == "wiki_read"
-    }
-    required = {
-        slug for slug in case.required_reads if not _was_read(slug, read)
-    }
     return (
         Check(
             "an answer is present",
@@ -201,6 +197,25 @@ def _answer_checks(
             "" if language else "no CJK text",
             PUBLISH,
         ),
+        *_trace_checks(case, entries),
+    )
+
+
+def _trace_checks(
+    case: QualityCase,
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> tuple[Check, ...]:
+    calls = _tool_calls(entries)
+    searched = any(name == "search" for name, _args in calls)
+    read = {
+        _normalize_slug(args.get("slug"))
+        for name, args in calls
+        if name == "wiki_read"
+    }
+    required = {
+        slug for slug in case.required_reads if not _was_read(slug, read)
+    }
+    return (
         Check(
             "the agent searched the wiki",
             searched,
@@ -310,6 +325,10 @@ def _run_page_case(
     )
     try:
         run = CaseRun(tmp, pages=())
+        for material in case.wiki_materials:
+            run.write_raw_page(
+                material.id, material.text.encode("utf-8")
+            )
         agent_config = replace(config, temperature=AGENT_TEMPERATURE)
         raw_model = model or OpenAIModelClient(agent_config)
         captures = {
@@ -349,12 +368,15 @@ def _run_page_case(
         )
         session = api.create_session(title=f"case-{case.id}")
         api.query(session, case.task)
-        final_text = _final_text(api.entries(session))
+        entries = api.entries(session)
+        final_text = _final_text(entries)
         page = run.layout.root / case.wiki_file
         artifact = (
             page.read_text(encoding="utf-8") if page.is_file() else ""
         )
-        checks = shape_checks(case, artifact, final_text)
+        checks = shape_checks(
+            case, artifact, final_text, entries=entries
+        )
         result = CaseRunResult(
             case_id=case.id,
             checks=checks,
@@ -374,6 +396,7 @@ def _run_page_case(
             task_compliance=result.task_compliance(),
             client=judge_client or make_judge_client(config),
             secret=config.api_key,
+            scope_note=case.scope_note,
         )
         result = replace(
             result,
@@ -461,6 +484,7 @@ def _run_answer_case(
             task_compliance=result.task_compliance(),
             client=judge_client or make_judge_client(config),
             secret=config.api_key,
+            scope_note=case.scope_note,
         )
         result = replace(
             result,

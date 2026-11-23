@@ -15,6 +15,7 @@ from evals.quality.v4.case_a import CASE_A
 from evals.quality.v4.case_b import CASE_B
 from evals.quality.v4.case_c import CASE_C
 from evals.quality.v4.case_d import CASE_D
+from evals.quality.v4.case_e import CASE_E
 from evals.quality.v4.case_run import (
     CaseRunResult,
     run_case,
@@ -35,13 +36,19 @@ from noteagent.agent.faux import FauxModelClient
 from noteagent.llm.client import LlmTurn
 from noteagent.llm.config import LlmConfig
 
-CASES = (CASE_A, CASE_B, CASE_C, CASE_D)
-EXPECTED = {"A": 5, "B": 5, "C": 4, "D": 3}
+CASES = (CASE_A, CASE_B, CASE_C, CASE_D, CASE_E)
+EXPECTED = {"A": 5, "B": 5, "C": 4, "D": 3, "E": 5}
 DEFECTS = {
     "A-defective": ("correctness", "completeness", "source_legality"),
     "B-defective": ("correctness", "completeness", "source_legality"),
     "C-bad": ("correctness", "completeness"),
     "D-defective": (
+        "correctness",
+        "completeness",
+        "source_legality",
+        "honesty",
+    ),
+    "E-bad": (
         "correctness",
         "completeness",
         "source_legality",
@@ -124,6 +131,7 @@ def _sample_payloads() -> dict[str, dict]:
         payloads[sample] = _payload(case_id, failed)
     payloads["A-good"] = _payload("A")
     payloads["C-good"] = _payload("C")
+    payloads["E-good"] = _payload("E")
     return payloads
 
 
@@ -339,6 +347,69 @@ class FixtureTests(unittest.TestCase):
         )
         self.assertIn("联合熵-3fcc20b258ec.html", joint.text)
 
+    def test_case_e_carries_two_raws_and_the_existing_wiki(self) -> None:
+        self.assertEqual(CASE_E.kind, PAGE_KIND)
+        self.assertEqual(len(CASE_E.materials), 2)
+        self.assertEqual(len(CASE_E.source_ids), 2)
+        self.assertEqual(len(CASE_E.wiki_materials), 5)
+        self.assertEqual(len(CASE_E.expected_points), 5)
+        self.assertEqual(CASE_E.sample_names, ("E-good", "E-bad"))
+        self.assertEqual(len(CASE_E.required_reads), 3)
+
+    def test_case_e_requires_the_wiki_reads(self) -> None:
+        case = CASE_E
+        body = (
+            "---\n"
+            'title: "互信息与熵"\n'
+            "sources: ["
+            + ", ".join(
+                f'"{source}#b1"' for source in case.source_ids
+            )
+            + "]\n---\n\n"
+            "# 互信息与熵\n\n"
+            "## 关系\n\n"
+            "正文。\n"
+        )
+        entries = [
+            {
+                "role": "assistant",
+                "toolCalls": [
+                    {
+                        "name": "search",
+                        "arguments": '{"query": "互信息"}',
+                    },
+                    {
+                        "name": "wiki_read",
+                        "arguments": '{"slug": "concepts/信息熵"}',
+                    },
+                    {
+                        "name": "wiki_read",
+                        "arguments": '{"slug": "concepts/互信息"}',
+                    },
+                    {
+                        "name": "wiki_read",
+                        "arguments": '{"slug": "concepts/联合熵"}',
+                    },
+                ],
+            }
+        ]
+
+        checks = shape_checks(
+            case,
+            body,
+            f"已写入 {case.wiki_file}。",
+            entries=entries,
+        )
+        self.assertTrue(all(check.passed for check in checks), checks)
+
+        missing = shape_checks(
+            case, body, f"已写入 {case.wiki_file}。"
+        )
+        read = next(
+            check for check in missing if "read the pages" in check.name
+        )
+        self.assertFalse(read.passed)
+
     def test_a_page_shape_check_passes_a_page_citing_every_source(
         self,
     ) -> None:
@@ -542,11 +613,12 @@ class CalibrationTests(unittest.TestCase):
 
         self.assertEqual(
             [report.case_id for report in reports],
-            ["A", "B", "C", "D"],
+            ["A", "B", "C", "D", "E"],
         )
         self.assertTrue(all(report.matched for report in reports))
         self.assertEqual(
-            [len(report.samples) for report in reports], [2, 1, 2, 1]
+            [len(report.samples) for report in reports],
+            [2, 1, 2, 1, 2],
         )
 
     def test_a_mismatch_is_reported_point_by_point(self) -> None:
@@ -605,6 +677,9 @@ class QualityCliTests(unittest.TestCase):
         )
         self.assertEqual(
             payload["calibrations"]["D"]["samplesMatched"], 1
+        )
+        self.assertEqual(
+            payload["calibrations"]["E"]["samplesMatched"], 2
         )
         self.assertEqual(payload["cases"], {})
 

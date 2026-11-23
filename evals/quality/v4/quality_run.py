@@ -25,6 +25,7 @@ from evals.quality.v4.case_a import CASE_A
 from evals.quality.v4.case_b import CASE_B
 from evals.quality.v4.case_c import CASE_C
 from evals.quality.v4.case_d import CASE_D
+from evals.quality.v4.case_e import CASE_E
 from evals.quality.v4.case_run import CaseRunResult, run_case
 from evals.quality.v4.runner import V4_REPORT_VERSION, new_run_id
 from evals.report import markdown_cell
@@ -32,7 +33,7 @@ from evals.support import in_ci
 
 from noteagent.llm.config import LlmConfig
 
-CASES = (CASE_A, CASE_B, CASE_C, CASE_D)
+CASES = (CASE_A, CASE_B, CASE_C, CASE_D, CASE_E)
 CaseRunner = Callable[..., CaseRunResult]
 
 

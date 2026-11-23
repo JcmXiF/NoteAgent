@@ -27,6 +27,10 @@ CASE_C = load_answer_case(
         "concepts/联合熵",
         "concepts/条件熵",
     ),
+    scope_note=(
+        "The three pages above are the allowed wiki material for this "
+        "answer."
+    ),
 )
 
 __all__ = ["CASE_C", "CASE_DIR"]

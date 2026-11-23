@@ -36,6 +36,11 @@ CASE_D = load_answer_case(
         "concepts/联合熵",
         "sources/联合熵-clips",
     ),
+    scope_note=(
+        "The five concept pages and three source ledgers above are the "
+        "complete wiki material for this task; an item absent from them "
+        "is a gap."
+    ),
 )
 
 __all__ = ["CASE_D", "CASE_DIR"]

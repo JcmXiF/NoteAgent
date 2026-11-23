@@ -59,10 +59,14 @@ class QualityCase:
     materials: tuple[CaseMaterial, ...]
     expected_points: tuple[str, ...]
     samples: tuple[CalibrationSample, ...]
+    #: Existing wiki pages seeded for the agent and shown to the judge.
+    wiki_materials: tuple[CaseMaterial, ...] = ()
     wiki_file: str = ""
     page_title: str = ""
-    #: Answer cases: the pages the task asks the agent to read.
+    #: The pages the task asks the agent to read.
     required_reads: tuple[str, ...] = ()
+    #: Tells the judge what the allowed set covers, for an absence claim.
+    scope_note: str = ""
 
     @property
     def sample_names(self) -> tuple[str, ...]:
@@ -72,10 +76,19 @@ class QualityCase:
     def material_ids(self) -> tuple[str, ...]:
         return tuple(material.id for material in self.materials)
 
+    @property
+    def source_ids(self) -> tuple[str, ...]:
+        """The raw originals a written page's ``sources`` must cite."""
+        return tuple(
+            material.id
+            for material in self.materials
+            if material.capture is not None
+        )
+
     def judge_materials(self) -> tuple[JudgeMaterial, ...]:
         return tuple(
             JudgeMaterial(material.id, material.title, material.text)
-            for material in self.materials
+            for material in (*self.materials, *self.wiki_materials)
         )
 
 
@@ -87,6 +100,9 @@ def load_page_case(
     page_title: str,
     samples: tuple[str, ...],
     sources: tuple[tuple[str, str, str], ...],
+    wiki_pages: tuple[tuple[str, str, str], ...] = (),
+    required_reads: tuple[str, ...] = (),
+    scope_note: str = "",
 ) -> QualityCase:
     """Load a page-writing case: its task, raw originals, points and labels."""
     task, points, loaded_samples = _load_meta(
@@ -112,6 +128,8 @@ def load_page_case(
                 capture=capture,
             )
         )
+    wiki_materials = _load_pages(directory, wiki_pages)
+    _check_required_reads(case_id, required_reads, wiki_materials)
     return QualityCase(
         id=case_id,
         kind=PAGE_KIND,
@@ -119,8 +137,11 @@ def load_page_case(
         materials=tuple(materials),
         expected_points=points,
         samples=loaded_samples,
+        wiki_materials=tuple(wiki_materials),
         wiki_file=wiki_file,
         page_title=page_title,
+        required_reads=required_reads,
+        scope_note=scope_note,
     )
 
 
@@ -131,31 +152,14 @@ def load_answer_case(
     samples: tuple[str, ...],
     pages: tuple[tuple[str, str, str], ...],
     required_reads: tuple[str, ...] = (),
+    scope_note: str = "",
 ) -> QualityCase:
     """Load an answer case: its task, the wiki pages it may cite, and labels."""
     task, points, loaded_samples = _load_meta(
         case_id, directory, samples
     )
-    materials: list[CaseMaterial] = []
-    for slug, title, filename in pages:
-        text = (
-            directory / "pages" / filename
-        ).read_text(encoding="utf-8")
-        materials.append(
-            CaseMaterial(
-                id=slug,
-                title=title,
-                text=text.strip(),
-            )
-        )
-    missing = [
-        slug for slug in required_reads if slug not in {m.id for m in materials}
-    ]
-    if missing:
-        raise ValueError(
-            f"case {case_id}: required reads not in the material: "
-            + ", ".join(missing)
-        )
+    materials = _load_pages(directory, pages)
+    _check_required_reads(case_id, required_reads, materials)
     return QualityCase(
         id=case_id,
         kind=ANSWER_KIND,
@@ -164,7 +168,40 @@ def load_answer_case(
         expected_points=points,
         samples=loaded_samples,
         required_reads=required_reads,
+        scope_note=scope_note,
     )
+
+
+def _load_pages(
+    directory: Path,
+    pages: tuple[tuple[str, str, str], ...],
+) -> list[CaseMaterial]:
+    materials: list[CaseMaterial] = []
+    for slug, title, filename in pages:
+        text = (
+            directory / "pages" / filename
+        ).read_text(encoding="utf-8")
+        materials.append(
+            CaseMaterial(id=slug, title=title, text=text.strip())
+        )
+    return materials
+
+
+def _check_required_reads(
+    case_id: str,
+    required_reads: tuple[str, ...],
+    materials: list[CaseMaterial],
+) -> None:
+    missing = [
+        slug
+        for slug in required_reads
+        if slug not in {material.id for material in materials}
+    ]
+    if missing:
+        raise ValueError(
+            f"case {case_id}: required reads not in the material: "
+            + ", ".join(missing)
+        )
 
 
 def _load_meta(

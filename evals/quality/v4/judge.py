@@ -170,6 +170,7 @@ def judge_artifact(
     task_compliance: TaskCompliance,
     client: JudgeClient,
     secret: str = "",
+    scope_note: str = "",
 ) -> V4JudgeVerdict:
     """Ask the judge for one verdict per point of one artifact."""
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -181,6 +182,7 @@ def judge_artifact(
         artifact_id=artifact_id,
         artifact=artifact,
         task_compliance=task_compliance,
+        scope_note=scope_note,
     )
     try:
         response = client.complete(
@@ -222,6 +224,7 @@ def build_user_message(
     artifact_id: str,
     artifact: str,
     task_compliance: TaskCompliance,
+    scope_note: str = "",
 ) -> str:
     """The one user message: task, allowed originals, artifact, checks."""
     lines = ["## Task", task.strip(), "", "## Allowed material"]
@@ -233,6 +236,8 @@ def build_user_message(
                 material.text.strip(),
             ]
         )
+    if scope_note.strip():
+        lines.extend(["", "## Material scope", scope_note.strip()])
     lines.extend(["", "## Expected points"])
     lines.extend(f"- {point}" for point in expected_points)
     lines.extend(

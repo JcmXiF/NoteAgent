@@ -185,6 +185,7 @@ def calibrate_case(
             task_compliance=fixture_task_compliance(),
             client=client,
             secret=secret,
+            scope_note=case.scope_note,
         )
         actual = verdict.verdicts()
         points = tuple(
