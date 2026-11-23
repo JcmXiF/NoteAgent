@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="">
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
+  <meta name="noteagent:source_url" content="https://charlesliuyx.github.io/2017/09/11/%E4%BB%80%E4%B9%88%E6%98%AF%E4%BF%A1%E6%81%AF%E7%86%B5%E3%80%81%E4%BA%A4%E5%8F%89%E7%86%B5%E5%92%8C%E7%9B%B8%E5%AF%B9%E7%86%B5/">
+  <meta name="noteagent:capture_method" content="trafilatura-html">
+  <meta name="noteagent:fidelity" content="ok">
+  <title>【直观详解】信息熵、交叉熵和相对熵</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:1.5rem auto;padding:0 1rem;line-height:1.65;color:#1b1b1b;background:#fff;}
+img,svg{max-width:100%;height:auto;}
+pre,code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;}
+pre{overflow:auto;padding:.75rem;background:#f4f4f4;}
+table{border-collapse:collapse;width:100%;}
+td,th{border:1px solid #ccc;padding:.35rem .5rem;}</style>
+  <meta name="noteagent:captured_at" content="2026-09-04">
+</head>
+<body>
+<article>
+<p id="na-b1" data-na-block="b1">【阅读时间】10min - 13min<br>【内容简介】使用一个现实中直观的例子详解<strong>信息熵、交叉熵及相对熵</strong>的核心概念，读完后，希望能帮助你建立起这三个概念的固有直觉，不再疑惑</p>
+    <p id="na-b2" data-na-block="b2">要完成题目的最终解释，必须从<strong>熵</strong>这个神奇的概念开始讲起</p>
+    <p id="na-b3" data-na-block="b3">
+      <a href=""></a>
+    </p>
+    <h1 id="na-b4" data-na-block="b4"><a href="https://charlesliuyx.github.io#%E4%BB%80%E4%B9%88%E6%98%AF%E7%86%B5-Entropy"></a>什么是熵 - Entropy</h1>
+    <h2 id="na-b5" data-na-block="b5"><a href="https://charlesliuyx.github.io#%E8%AF%8D%E6%BA%90-%E6%9C%80%E5%88%9D%E6%9D%A5%E6%BA%90%E4%BA%8E%E7%83%AD%E5%8A%9B%E5%AD%A6"></a>词源 - 最初来源于热力学</h2>
+    <p id="na-b6" data-na-block="b6">Entropy来源于希腊语，原意：内向，即：一个系统不受外部干扰时<strong>往内部稳定状态发展</strong>的特性。定义的其实是一个热力学的系统<strong>变化的趋势</strong></p>
+    <p id="na-b7" data-na-block="b7">$$<br>\Delta S = \frac{Q}{T} = \frac{热量}{温度} \tag{1-1}<br>$$<br>1923年，德国科学家普朗克来中国讲学用到</p><pre id="na-b8" data-na-block="b8">entropy</pre>这个词，胡刚复教授看到这个公式，<strong>创造了“熵”字</strong>，因为“火”和热量有关，定义式又是热量比温度，相当自洽
+    <h2 id="na-b9" data-na-block="b9"><a href="https://charlesliuyx.github.io#%E4%BF%A1%E6%81%AF%E8%AE%BA"></a>信息论</h2>
+    <p id="na-b10" data-na-block="b10">信息论中，熵是接受的每条消息中<strong>包含的信息的平均值</strong>。又被称为信息熵、信源熵、平均自信息量。可以被理解为<strong>不确定性的度量</strong>，熵越大，信源的分布越随机</p>
+    <p id="na-b11" data-na-block="b11">1948年，由克劳德·爱尔伍德·香农将热力学中的熵引入信息论，所以也叫做：香农熵</p>
+    <h2 id="na-b12" data-na-block="b12"><a href="https://charlesliuyx.github.io#%E7%94%9F%E6%80%81%E5%AD%A6"></a>生态学</h2>
+    <p id="na-b13" data-na-block="b13">在生态学中，熵表示<strong>生物多样性的指标</strong></p>
+    <h2 id="na-b14" data-na-block="b14"><a href="https://charlesliuyx.github.io#%E5%B9%BF%E4%B9%89%E7%9A%84%E5%AE%9A%E4%B9%89"></a>广义的定义</h2>
+    <p id="na-b15" data-na-block="b15">熵是描述一个系统的<strong>无序程度</strong>的变量；同样的表述还有，熵是系统混乱度的度量，一切自发的不可逆过程都是从<strong>有序</strong>到<strong>无序</strong>的变化过程，向熵增的方向进行</p>
+    <p id="na-b16" data-na-block="b16">我们接下来要讨论的</p><pre id="na-b17" data-na-block="b17">信息熵</pre> <pre id="na-b18" data-na-block="b18">交叉熵</pre> <pre id="na-b19" data-na-block="b19">相对熵</pre> 更多的着眼于信息论的角度，换句话说，更加关注概率和不确定性
+    <h1 id="na-b20" data-na-block="b20"><a href="https://charlesliuyx.github.io#%E4%BB%80%E4%B9%88%E6%98%AF%E4%BF%A1%E6%81%AF%E7%86%B5%E3%80%81%E4%BA%A4%E5%8F%89%E7%86%B5%E3%80%81%E7%9B%B8%E5%AF%B9%E7%86%B5"></a>什么是信息熵、交叉熵、相对熵</h1>
+    <p id="na-b21" data-na-block="b21">可以将对熵的理解从简单到复杂依次分解成三个层次来理解</p>
+    <h2 id="na-b22" data-na-block="b22"><a href="https://charlesliuyx.github.io#%E5%A6%82%E4%BD%95%E8%A1%A1%E9%87%8F%E4%B8%8D%E7%A1%AE%E5%AE%9A%E4%BA%8B%E7%89%A9%E7%9A%84%E5%8F%91%E7%94%9F%EF%BC%9F"></a>如何衡量不确定事物的发生？</h2>
+    <p id="na-b23" data-na-block="b23">数学是一种工具，使用数学来描述现实中的各种事物是一个数学家本质的工作目标。而现实中不确定性，或者说不太确定是否会发生的事件必须要找到一种<strong>抽象的</strong>、<strong>符号化</strong>和<strong>公式化</strong>的手段去表示。</p>
+    <p id="na-b24" data-na-block="b24">比如天气情况，假设可能有【阴、晴、雨、雪】四种情况，使用概率符号表示 $\mathbf P = [p_1,p_2,p_3,p_4]$，接下来自然而然的思考：那么，什么<strong>条件</strong>（情况）会影响这些值呢？</p>
+    <p id="na-b25" data-na-block="b25">假设有一下三种描述，或者说条件</p>
+    <ul id="na-b26" data-na-block="b26">
+      <li>今天是晴天，所以明天可能也是晴天</li>
+      <li>天气预报说明天下雨</li>
+      <li>9月12日苹果公司举行发布会</li>
+    </ul>
+    <p id="na-b27" data-na-block="b27">那么这三个描述中，很明显，第二条的信息量更大，因为它可以使得不确定事件发生在 $p_3$ 的<strong>概率更大</strong>。类似的，第三条对判断毫无帮助，信息量为0。<i>注意，信息量不等于信息熵，如果是这样，那么直接用概率来衡量就可以了，不需要在重新定义一个概念</i></p>
+    <p id="na-b28" data-na-block="b28">
+      <strong>其实信息熵是信息量的期望（均值），它不是针对每条信息，而是针对整个不确定性结果集而言，信息熵越大，事件不确定性就越大。单条信息只能从某种程度上影响结果集概率的分布</strong>
+    </p>
+    <h2 id="na-b29" data-na-block="b29"><a href="https://charlesliuyx.github.io#%E8%80%83%E8%99%91%E5%88%B0%E4%BF%A1%E6%81%AF%E5%86%97%E4%BD%99%EF%BC%8C%E4%BF%A1%E6%81%AF%E9%87%8F%E5%AD%98%E5%82%A8%E4%B8%8B%E6%9D%A5%E7%A9%B6%E7%AB%9F%E9%9C%80%E8%A6%81%E5%A4%9A%E5%A4%A7%E7%A9%BA%E9%97%B4%EF%BC%9F"></a>考虑到信息冗余，信息量存储下来究竟需要<u>多大空间</u>？</h2>
+    <p id="na-b30" data-na-block="b30">我们已经有了 $\mathbf P = [p_1,p_2,p_3,p_4]$ 来表示天气情况，那么用计算机来存储每天的天气，那该如何编码呢？</p>
+    <p id="na-b31" data-na-block="b31">常见的做法是，4个不同的信息，只需要2bit就能做到，</p><pre id="na-b32" data-na-block="b32">00</pre> <pre id="na-b33" data-na-block="b33">01</pre> <pre id="na-b34" data-na-block="b34">11</pre> <pre id="na-b35" data-na-block="b35">10</pre>，假设我们在南方城市，肯定要把<pre id="na-b36" data-na-block="b36">00</pre>编码成雨天，这样可以<strong>节省存储空间</strong>，至于为什么能节省存储空间，这就要讨论编码方式。可以简单的理解为，如果一串信息一串<pre id="na-b37" data-na-block="b37">0</pre>很多，可以<strong>通过编码压缩这一群0来节省空间</strong>
+    <p id="na-b38" data-na-block="b38">使用一个公式来计算记录<strong>n天数据</strong>需要的<strong>存储空间</strong>：Sn</p>
+    <blockquote id="na-b39" data-na-block="b39">
+<p id="na-b40" data-na-block="b40">$P_i$ 表示第i个事件发生的概率；$F(P_i)$ 表示存储空间的存储因子</p></blockquote>
+    <p id="na-b41" data-na-block="b41">如何确定这个函数 $F(P_i)$ 的形式？考虑这个函数需要满足条件：<strong>概率大的事件对应小的存储空间，说人话，就是成反比</strong>，你的数学功底不错的话，脑海中第一反应出来满足这个条件最直观是<strong>反比例函数</strong>，说人话， $\frac{1}{P_i}$ 。</p>
+    <p id="na-b42" data-na-block="b42">之后我们发现这个公式中有个除法非常讨厌，我们想着去掉它，脑海中第一反应出来的满足这个条件的一定是<strong>取对数</strong>，至于为什么取对数，那说道就很多，取对数是指数的<strong>逆操作</strong>，</p>
+    <ul id="na-b43" data-na-block="b43">
+      <li>对数操作可以让原本不符合正态分布的模型符合正态分布，比如随着模型自变量的增加，因变量的方差也增大的模型取对数后会更加稳定</li>
+      <li>取对数操作可以rescale（原谅我，这里思前想后还是感觉一个英文单词更加生动）其实本质来说都是因为第一点。说人话版本，人不喜欢乘法，对数可以把乘法变加法</li>
+    </ul>
+    <p id="na-b44" data-na-block="b44">那么我们结束清楚之后，就很容易就可以定义出<br>$$<br>F(P_i) = \log_a ({\frac{1}{P_i}}) \tag{2-2}<br>$$<br> a作为底数，可以取2（处理2bit数据），10（万金油），e（处理正态分布相关的数据）</p>
+    <p id="na-b45" data-na-block="b45">结合对信息熵的定义（第一节最后的粗体字）然后把（2-2）带入（2-1），就会发现，哦！看着有点眼熟啊<br>$$<br>H(P) = \sum_i {P(i)log_a {\frac{1}{P(i)}}} = - \sum_i {P(i)log_a {P(i)}} \tag{2-3}<br>$$<br>这这这，就是信息熵的定义式吧？总结就发现，信息熵其实从某种意义上反映了<strong>信息量存储下来需要多少存储空间</strong></p>
+    <p id="na-b46" data-na-block="b46">总结为：根据<strong>真实分布</strong>，我们能够找到一个最优策略，以<strong>最小的代价消除系统的不确定性（</strong>比如编码），而<strong>这个代价的大小就是信息熵</strong></p>
+    <h2 id="na-b47" data-na-block="b47"><a href="https://charlesliuyx.github.io#%E7%90%86%E8%A7%A3%E5%9F%BA%E4%BA%8E%E4%BF%A1%E6%81%AF%E7%86%B5%E7%9A%84%E4%BA%A4%E5%8F%89%E7%86%B5%E5%92%8C%E7%9B%B8%E5%AF%B9%E7%86%B5"></a>理解基于信息熵的交叉熵和相对熵</h2>
+    <p id="na-b48" data-na-block="b48">因为是我们用2bit模式存储，为了计算方便，这里取a = 2</p>
+    <p id="na-b49" data-na-block="b49">先计算刚刚有关天气问题 $\mathbf P = [p_1,p_2,p_3,p_4]$ ：【阴、晴、雨、雪】的信息熵，假设我们对天气的概率一无所知，那么四种天气的发生概率为<strong>等概率（服从平均分布）</strong>，即 $\mathbf P = [\frac {1}{4},\frac {1}{4},\frac {1}{4},\frac {1}{4}]$ ，带入公式2-3，得到 $H(P) = 2$ ，存储信息需要的空间 $S_n = 2n$ </p>
+    <p id="na-b50" data-na-block="b50">继续思考，假设我们考虑天气的城市是一个地处中国南方雨季的城市，那么阴天和雨天的概率从<strong>经验角度（先验概率）</strong>来看大于晴天雪天，把这种分布<strong>记为</strong> $\mathbf Q = [\frac{1}{4},\frac{1}{8},\frac{1}{2},\frac{1}{8}]$，带入公式2-3，信息熵 $H(Q) = 1.75$，存储信息需要的空间 $S_n = 1.75n$ </p>
+    <p id="na-b51" data-na-block="b51">直观的来考虑上面不同的两种情况，明显当<strong>事件的不确定性变小</strong>时候，我们可以改变存储策略（00 雨天 01 阴天），再通过编码，节省存储空间。信息熵的大小<strong>就是用来度量这个不确定大小的</strong></p>
+    <p id="na-b52" data-na-block="b52">关于编码的方式，这里提一下，<a href="https://zhuanlan.zhihu.com/p/25181781">哈夫曼树与哈夫曼编码</a> ，有兴趣的读者可以去研究一下</p>
+    <h3 id="na-b53" data-na-block="b53"><a href="https://charlesliuyx.github.io#%E4%BA%A4%E5%8F%89%E7%86%B5%E7%9A%84%E7%94%B1%E6%9D%A5"></a>交叉熵的由来</h3>
+    <p id="na-b54" data-na-block="b54">我们把这个问题再扩展一下</p>
+    <table id="na-b55" data-na-block="b55">
+      <tr>
+        <th>天气【阴、晴、雨、雪】</th>
+        <th>信息熵</th>
+      </tr>
+      <tr>
+        <td>$\mathbf P = [\frac{1}{4},\frac{1}{4},\frac{1}{4},\frac{1}{4}]$</td>
+        <td>$H(P) = 2$</td>
+      </tr>
+      <tr>
+        <td>$\mathbf Q = [\frac{1}{4},\frac{1}{8},\frac{1}{2},\frac{1}{8}]$</td>
+        <td>$H(Q) = 1.75$</td>
+      </tr>
+      <tr>
+        <td>$\mathbf Z = [\frac{1}{8},\frac{1}{16},\frac{3}{4},\frac{1}{16}]$</td>
+        <td>$H(Z) = \frac{7}{8}+\frac{3}{4}\log_2 {\frac{4}{3}} = 1.186$</td>
+      </tr>
+      <tr>
+        <td>$\mathbf W = [0,0,1,0]$</td>
+        <td>$H(W) = 0$</td>
+      </tr>
+    </table>
+    <p id="na-b56" data-na-block="b56">接下来，假定在<strong>确定性更大的概率分布</strong>情况下，用<strong>更不确定的存储策略</strong>来计算，比如使用 $\mathbf P$ 的概率乘上 $\mathbf Q$ 的存储因子，套用公式2-3<br>$$<br>H(\mathbf P,\mathbf Q) = \sum_i {P(i) \log_a {\frac{1}{Q(i)}}} \tag{3-1}<br>$$<br>顾名思义，看公式3-1的形式，就不难发现，这就是所谓的<strong>交叉熵</strong>，计算可得</p>
+    <table id="na-b57" data-na-block="b57">
+      <tr>
+        <th>交叉熵</th>
+        <th>P</th>
+        <th>Q</th>
+        <th>Z</th>
+        <th>W</th>
+      </tr>
+      <tr>
+        <td>P</td>
+        <td>$H(P,P) = 2$</td>
+        <td>$H(P,Q) = 2.25$</td>
+        <td>$H(P,Z) = \frac{11}{4}+\frac{1}{4}\log_2 {\frac{4}{3}} = 2.85$</td>
+        <td>$+\infty$</td>
+      </tr>
+      <tr>
+        <td>Q</td>
+        <td>$H(Q,P) = 2$</td>
+        <td>$H(Q,Q) = 1.75$</td>
+        <td>$H(Q,Z) = \frac{7}{4}+\frac{1}{2}\log_2 {\frac{4}{3}} = 1.96$</td>
+        <td>$+\infty$</td>
+      </tr>
+      <tr>
+        <td>Z</td>
+        <td>$H(Z,P) = 2$</td>
+        <td>$H(Z,Q) = 1.375$</td>
+        <td>$H(Z,Z) = \frac{7}{8}+\frac{3}{4}\log_2 {\frac{4}{3}} = 1.186$</td>
+        <td>$+\infty$</td>
+      </tr>
+      <tr>
+        <td>W</td>
+        <td>$H(W,P) = 2$</td>
+        <td>$H(W,Q) = 1$</td>
+        <td>$H(W,Z) = \log_2 {\frac{4}{3}} = 0.415$</td>
+        <td>$H(W,W) = 0$</td>
+      </tr>
+    </table>
+    <p id="na-b58" data-na-block="b58">上表直观的展现的<strong>交叉熵</strong>的数值表现，PQZW依次<strong>不确定性越来越低</strong>，极端情况的W不确定性为0，即<strong>是确定的</strong></p>
+    <p id="na-b59" data-na-block="b59">
+      <strong>交叉熵，用来高衡量在给定的真实分布下，使用非真实分布指定的策略消除系统的不确定性所需要付出努力的大小</strong>
+    </p>
+    <p id="na-b60" data-na-block="b60">总的来说，<strong>我们的目的是：让熵尽可能小，即存储空间小（消除系统的不确定的努力小）。</strong>（不要问为什么想要存储空间小，这都是钱更是效率和时间）</p>
+    <p id="na-b61" data-na-block="b61">通过上表我们发现一个规律，为了让熵小，解决方案是：<strong>是用确定性更大的概率乘以确定性更小的存储因子</strong>，比如不确定性越大的概率分布，如P概率分布，其信息熵越大；<strong>基于同一真实（确定性）分布的情况下</strong>，套用不确定性更大的存储因子，如P的存储因子，得出的交叉熵越大</p>
+    <p id="na-b62" data-na-block="b62">在机器学习中，即用测试结果集（样本结果集）的概率乘以训练出来的结果集存储因子，而在不断的训练过程中，我们要做的就是通过不断调整参数，降低这个值，<strong>使得模型更加的稳定，不确定性越来越小</strong>，即突出需要表征的数值的特点（白话文也就是分类的效果更好）</p>
+    <h3 id="na-b63" data-na-block="b63"><a href="https://charlesliuyx.github.io#%E7%9B%B8%E5%AF%B9%E7%86%B5%E7%9A%84%E7%94%B1%E6%9D%A5"></a>相对熵的由来</h3>
+    <p id="na-b64" data-na-block="b64">有了信息熵和交叉熵后，<strong>相对熵是用来衡量两个概率分布之间的差异</strong>，记为 $D(P||Q) = H(P,Q) - H(P)$，也称之为KL散度<br>$$<br>D_{KL}(P||Q) = \sum_i{P(i) \log_a {\frac{P(i)}{Q(i)}}}<br>$$<br>当 $P(i) = Q(i)$ 的时候，该值为0，深度学习过程也是一个降低该值的过程，<strong>该值越低，训练出来的概率Q越接近样本集概率P，即越准确</strong>，或者可以理解为<strong>相对熵一把标尺，用来衡量两个函数是否相似，一样就是0</strong>，当然，这种解释十分牵强，但是更直观</p>
+    <blockquote id="na-b65" data-na-block="b65">
+<p id="na-b66" data-na-block="b66">关于底数 $a$ 的选择问题，其实和概率分布的情况是分不开的。比如使用2进制编码，那么所能表示的不同情况的数量，$\sum_{i=0}^N 2^i$，我们知道，指数函数变化率变化很大，不好分析，稳定性差。对数操作可以<strong>乘法变加法，指数放下来</strong>，是十分好用的数学工具（其实是一种变换域的思想，这种思想在整个信息论，统计学中处处可见）</p><p id="na-b67" data-na-block="b67">比如使用 $ln()$ 的时候，对应的分布，其实是<strong>正态分布</strong>，很好理解，正太分布的底数是 $e$</p></blockquote>
+</article>
+</body>
+</html>

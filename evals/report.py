@@ -286,6 +286,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def markdown_cell(text: str) -> str:
+    """One line safe to put in a Markdown table cell."""
+    cleaned = " ".join(text.split())
+    return cleaned.replace("|", "\\|") if cleaned else "-"
+
+
 def _score(passed: int, total: int) -> dict[str, object]:
     return {
         "passed": passed,
@@ -323,5 +329,6 @@ __all__ = [
     "STATE",
     "TOOL_CONTRACT",
     "UNCATEGORIZED",
+    "markdown_cell",
     "utc_now",
 ]

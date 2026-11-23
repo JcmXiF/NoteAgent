@@ -241,7 +241,7 @@ def run_atoms(
     cleared: a run adds its own folder, and an older failure stays readable.
     """
     started_at = utc_now()
-    identifier = run_id or _run_id()
+    identifier = run_id or new_run_id()
     runner: RunAtom = run_atom or run_atom_once
     started = time.monotonic()
     results = tuple(
@@ -318,11 +318,6 @@ def _preserve(
 ) -> Path:
     """Keep what a failed atom needs: project, event logs and its checks."""
     target = failures_root / run_id / result.name
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir(parents=True)
-    if run is not None:
-        run.preserve(target)
     payload: dict[str, object] = {
         "atom": result.name,
         "title": result.title,
@@ -335,14 +330,29 @@ def _preserve(
         "log": list(run.log) if run is not None else [],
         "artifacts": str(target),
     }
-    (target / "failure.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    preserve_case(run, target, payload)
     if run is not None and run.log:
         (target / "atom.log").write_text(
             "\n".join(run.log) + "\n", encoding="utf-8"
         )
+    return target
+
+
+def preserve_case(
+    run: CaseRun | None,
+    target: Path,
+    payload: dict[str, object],
+) -> Path:
+    """Keep a failed case's project, event logs and payload under *target*."""
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    if run is not None:
+        run.preserve(target)
+    (target / "failure.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return target
 
 
@@ -379,7 +389,7 @@ def _table(title: str, atoms: tuple[AtomResult, ...]) -> list[str]:
     return lines
 
 
-def _run_id() -> str:
+def new_run_id() -> str:
     moment = datetime.now(timezone.utc)
     return moment.strftime("%Y%m%dT%H%M%S%fZ")
 
@@ -391,6 +401,8 @@ __all__ = [
     "UsageCounter",
     "V4Report",
     "V4_REPORT_VERSION",
+    "new_run_id",
+    "preserve_case",
     "run_atom_once",
     "run_atoms",
 ]

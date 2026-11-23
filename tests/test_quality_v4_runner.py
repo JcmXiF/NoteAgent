@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,15 @@ from evals.quality.v4.runner import (
 from evals.report import Check, STATE, TOOL_CONTRACT
 
 from noteagent.agent.faux import FauxModelClient
+
+
+@contextmanager
+def _without_ci():
+    """The CLI tests run in CI too; the refusal has its own test."""
+    with patch.dict(
+        os.environ, {"CI": "", "GITHUB_ACTIONS": ""}, clear=False
+    ):
+        yield
 
 
 def _failing_atom(run, recorder) -> None:
@@ -229,17 +239,18 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report_path = root / "report.json"
-            code = run_main(
-                [
-                    "--report",
-                    str(report_path),
-                    "--failures",
-                    str(root / "failures"),
-                ],
-                atoms=(atom,),
-                run_atom=_passing_runner,
-                run_id="run-1",
-            )
+            with _without_ci():
+                code = run_main(
+                    [
+                        "--report",
+                        str(report_path),
+                        "--failures",
+                        str(root / "failures"),
+                    ],
+                    atoms=(atom,),
+                    run_atom=_passing_runner,
+                    run_id="run-1",
+                )
             payload = json.loads(
                 report_path.read_text(encoding="utf-8")
             )
@@ -262,38 +273,39 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             without = root / "without.json"
-            run_main(
-                [
-                    "--report",
-                    str(without),
-                    "--failures",
-                    str(root / "f1"),
-                ],
-                atoms=(local_atom,),
-                live=(live_atom,),
-                run_atom=_passing_runner,
-                run_id="run-1",
-            )
-            without_live = json.loads(
-                without.read_text(encoding="utf-8")
-            )
-            with_live_path = root / "with.json"
-            run_main(
-                [
-                    "--report",
-                    str(with_live_path),
-                    "--failures",
-                    str(root / "f2"),
-                    "--live",
-                ],
-                atoms=(local_atom,),
-                live=(live_atom,),
-                run_atom=_passing_runner,
-                run_id="run-2",
-            )
-            with_live = json.loads(
-                with_live_path.read_text(encoding="utf-8")
-            )
+            with _without_ci():
+                run_main(
+                    [
+                        "--report",
+                        str(without),
+                        "--failures",
+                        str(root / "f1"),
+                    ],
+                    atoms=(local_atom,),
+                    live=(live_atom,),
+                    run_atom=_passing_runner,
+                    run_id="run-1",
+                )
+                without_live = json.loads(
+                    without.read_text(encoding="utf-8")
+                )
+                with_live_path = root / "with.json"
+                run_main(
+                    [
+                        "--report",
+                        str(with_live_path),
+                        "--failures",
+                        str(root / "f2"),
+                        "--live",
+                    ],
+                    atoms=(local_atom,),
+                    live=(live_atom,),
+                    run_atom=_passing_runner,
+                    run_id="run-2",
+                )
+                with_live = json.loads(
+                    with_live_path.read_text(encoding="utf-8")
+                )
 
         self.assertEqual(without_live["live"], [])
         self.assertEqual(without_live["liveTotal"], 0)
@@ -310,16 +322,17 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report_path = root / "report.json"
-            code = run_main(
-                [
-                    "--report",
-                    str(report_path),
-                    "--failures",
-                    str(root / "failures"),
-                ],
-                atoms=(atom,),
-                run_id="run-1",
-            )
+            with _without_ci():
+                code = run_main(
+                    [
+                        "--report",
+                        str(report_path),
+                        "--failures",
+                        str(root / "failures"),
+                    ],
+                    atoms=(atom,),
+                    run_id="run-1",
+                )
             payload = json.loads(
                 report_path.read_text(encoding="utf-8")
             )
