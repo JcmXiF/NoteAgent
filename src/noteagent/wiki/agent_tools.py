@@ -42,6 +42,8 @@ SEARCH = "search"
 _READ_DESCRIPTION = (
     "Open one wiki page by slug (a [[wikilink]] or a wiki/...md path). "
     "Read a page before quoting or summarizing it. "
+    "A long page comes in segments: the result says totalChars and, when it "
+    "was cut, nextOffset; call again with offset=nextOffset to read on. "
     "Call it once per page; several calls in one round run in parallel. "
     "Wiki pages only: never raw/ or notes/."
 )
@@ -60,7 +62,23 @@ _READ_PARAMETERS = {
             "minLength": 1,
             "pattern": r"\S",
             "description": "Wiki page as [[slug]] or wiki/...md",
-        }
+        },
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "Character offset into the page body to start from "
+                "(default 0)"
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": (
+                "Maximum body characters to return in this call "
+                "(default: the page, up to the per-page ceiling)"
+            ),
+        },
     },
     "required": ["slug"],
     "additionalProperties": False,
@@ -88,12 +106,15 @@ _TRUNCATED = "\n\n…(truncated)…"
 class WikiToolLimits:
     """How much of the wiki one call may carry.
 
-    ``wiki_read`` takes one page per call, so ``max_page_chars`` is what one
-    result may hold; reading several pages is several parallel calls, and the
-    round's total is bounded by the calls the loop admits.
+    ``wiki_read`` takes one page per call, so ``max_page_chars`` is one
+    segment's ceiling: a longer page is read in segments with ``offset``, not
+    cut for good. ``max_result_chars`` stays the search budget; a read is not
+    held to it, because the page must survive whole. Reading several pages is
+    several parallel calls, and the round's total is bounded by the calls the
+    loop admits and by ``max_turns``, not by a per-round character cap.
     """
 
-    max_page_chars: int = 8_000
+    max_page_chars: int = 64_000
     max_hits: int = 20
     excerpt_chars: int = 400
     max_result_chars: int = 24_000
@@ -122,7 +143,9 @@ def wiki_tools(
                 output_limits=OutputLimits(
                     max_items=1,
                     max_chars_per_item=bounds.max_page_chars,
-                    max_chars_total=bounds.max_result_chars,
+                    # One page per call, and the handler keeps the header
+                    # inside the same ceiling; search keeps its own budget.
+                    max_chars_total=bounds.max_page_chars,
                 ),
                 handler=_read_handler(layout, bounds),
                 argument_hint="slug",
@@ -171,25 +194,49 @@ def _read_handler(layout: ProjectLayout, limits: WikiToolLimits):
         title = _title(page.fields, relative)
         slug = _slug(relative, target)
         header = f"[[{slug}]] — {title}\n\n"
+        body = page.body.strip()
+        total = len(body)
+        offset_value = _read_int("offset", arguments.get("offset"), 0)
+        offset = 0 if offset_value is None else offset_value
+        requested = _read_int("limit", arguments.get("limit"), 1)
         budget = max(0, limits.max_page_chars - len(header))
-        body, clipped = _clip(page.body.strip(), budget)
+        if requested is not None:
+            budget = min(budget, requested)
         meta: dict[str, object] = {
             "title": title,
             "target": f"[[{slug}]]",
             "path": relative,
             "slug": slug,
+            "totalChars": total,
+            "offset": offset,
         }
         diagnostics: list[Diagnostic] = []
-        if clipped:
+        if offset >= total:
+            note = (
+                "(this page has no body text)"
+                if total == 0
+                else (
+                    f"(no text at offset {offset}; "
+                    f"the page has {total} characters)"
+                )
+            )
+            diagnostics.append(
+                Diagnostic("warning", "offset_past_end", note)
+            )
+            return ToolResult(header + note, meta, tuple(diagnostics))
+        shown, end, truncated = _body_segment(body, offset, budget)
+        if truncated:
             meta["truncated"] = True
+            meta["nextOffset"] = end
             diagnostics.append(
                 Diagnostic(
                     "warning",
                     "truncated",
-                    f"{slug} is longer than {limits.max_page_chars} characters",
+                    f"{slug} has {total} characters; continue at "
+                    f"offset {end}",
                 )
             )
-        return ToolResult(header + body, meta, tuple(diagnostics))
+        return ToolResult(header + shown, meta, tuple(diagnostics))
 
     return read
 
@@ -425,6 +472,52 @@ def _clip(text: str, limit: int) -> tuple[str, bool]:
     if limit <= len(_TRUNCATED):
         return text[:limit], True
     return text[: limit - len(_TRUNCATED)] + _TRUNCATED, True
+
+
+def _continuation(end: int) -> str:
+    """The note that tells the reader how to fetch the rest."""
+    return f"\n\n…(truncated; next offset={end})…"
+
+
+def _body_segment(
+    body: str, offset: int, budget: int
+) -> tuple[str, int, bool]:
+    """One segment of *body*, the offset just past it, and whether more follows.
+
+    The continuation note counts inside the budget, so one segment never grows
+    past the page ceiling. ``nextOffset`` is the exact end of the text shown:
+    the next call continues there without repeating or skipping a character.
+    A segment always advances while there is text and budget left, even when
+    the budget is too small to hold the note.
+    """
+    total = len(body)
+    if budget <= 0:
+        return "", offset, offset < total
+    end = min(offset + budget, total)
+    if end >= total:
+        return body[offset:end], end, False
+    note = _continuation(end)
+    if len(note) < budget:
+        end = min(offset + budget - len(note), total)
+        if end >= total:
+            return body[offset:end], end, False
+        note = _continuation(end)
+    else:
+        note = _TRUNCATED if len(_TRUNCATED) < budget else ""
+        end = min(offset + max(1, budget - len(note)), total)
+        if end >= total:
+            return body[offset:end], end, False
+    return body[offset:end] + note, end, True
+
+
+def _read_int(name: str, value: object, minimum: int) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum:
+        raise ValueError(f"{name} must be {minimum} or greater")
+    return value
 
 
 def _check_cancel(context: ToolContext) -> None:
