@@ -40,6 +40,17 @@ def _passing_runner(atom, _failures_root, _run_id) -> AtomResult:
     )
 
 
+def _live_fails(atom, failures_root, run_id) -> AtomResult:
+    if atom.name.startswith("live"):
+        return AtomResult(
+            atom.name,
+            atom.title,
+            (Check("live down", False, "no network", TOOL_CONTRACT),),
+            0.1,
+        )
+    return _passing_runner(atom, failures_root, run_id)
+
+
 class AtomRunnerTests(unittest.TestCase):
     def test_the_four_local_atoms_pass_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,6 +75,68 @@ class AtomRunnerTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(report.tokens_in, 0)
         self.assertEqual(report.tokens_out, 0)
+
+    def test_the_live_smoke_is_reported_apart(self) -> None:
+        live_atom = AtomCase(
+            "live-x", "Live", lambda run, counter: None
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_atoms(
+                LOCAL_ATOMS,
+                Path(tmp) / "failures",
+                live=(live_atom,),
+                run_atom=_live_fails,
+                run_id="run-1",
+            )
+            payload = report.payload()
+            summary = report.markdown()
+
+        self.assertEqual(
+            [atom.name for atom in report.live], ["live-x"]
+        )
+        self.assertEqual(len(payload["atoms"]), len(LOCAL_ATOMS))
+        self.assertEqual(len(payload["live"]), 1)
+        self.assertEqual(payload["localTotal"], len(LOCAL_ATOMS))
+        self.assertEqual(payload["localPassed"], len(LOCAL_ATOMS))
+        self.assertEqual(payload["liveTotal"], 1)
+        self.assertEqual(payload["livePassed"], 0)
+        self.assertEqual(report.local_passed_count, len(LOCAL_ATOMS))
+        self.assertEqual(report.passed_count, len(LOCAL_ATOMS))
+        self.assertIn("## Local atoms", summary)
+        self.assertIn("## Live smoke", summary)
+        self.assertIn(
+            f"Local atoms: **{len(LOCAL_ATOMS)} passed, 0 failed**",
+            summary,
+        )
+        self.assertIn("Live smoke: **0 passed, 1 failed**", summary)
+
+    def test_an_atom_passes_share_settings_to_the_case(self) -> None:
+        seen: dict[str, bool] = {}
+
+        def atom_run(run, counter) -> None:
+            seen["shared"] = run.share_settings
+            run.check(
+                "settings were shared",
+                run.share_settings,
+                "",
+                TOOL_CONTRACT,
+            )
+
+        atom = AtomCase(
+            "atom-settings",
+            "Settings",
+            atom_run,
+            share_settings=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_atoms(
+                (atom,), Path(tmp) / "failures", run_id="run-1"
+            )
+
+        self.assertTrue(report.atoms[0].passed)
+        self.assertTrue(seen.get("shared"))
 
     def test_a_failed_atom_keeps_its_project_and_writes_an_entry(
         self,
@@ -177,6 +250,59 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["atoms"][0]["tokensIn"], 1)
         self.assertTrue(markdown_written)
+
+    def test_the_cli_runs_the_live_smoke_only_when_asked(self) -> None:
+        local_atom = AtomCase(
+            "atom-local", "Local", lambda run, counter: None
+        )
+        live_atom = AtomCase(
+            "live-x", "Live", lambda run, counter: None
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            without = root / "without.json"
+            run_main(
+                [
+                    "--report",
+                    str(without),
+                    "--failures",
+                    str(root / "f1"),
+                ],
+                atoms=(local_atom,),
+                live=(live_atom,),
+                run_atom=_passing_runner,
+                run_id="run-1",
+            )
+            without_live = json.loads(
+                without.read_text(encoding="utf-8")
+            )
+            with_live_path = root / "with.json"
+            run_main(
+                [
+                    "--report",
+                    str(with_live_path),
+                    "--failures",
+                    str(root / "f2"),
+                    "--live",
+                ],
+                atoms=(local_atom,),
+                live=(live_atom,),
+                run_atom=_passing_runner,
+                run_id="run-2",
+            )
+            with_live = json.loads(
+                with_live_path.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(without_live["live"], [])
+        self.assertEqual(without_live["liveTotal"], 0)
+        self.assertEqual(
+            [atom["name"] for atom in with_live["live"]],
+            ["live-x"],
+        )
+        self.assertEqual(with_live["localTotal"], 1)
+        self.assertEqual(with_live["liveTotal"], 1)
 
     def test_the_cli_records_a_failure_and_still_completes(self) -> None:
         atom = AtomCase("atom-fail", "Fails", _failing_atom)

@@ -3,7 +3,8 @@
 A case is a small user story driven through the endpoints the interface calls.
 The model is scripted, so the case is deterministic and free; the project is a
 temporary directory, so the case reads and writes real files without touching a
-checkout. Nothing here reaches a provider or an external service.
+checkout. A case keeps the user's settings out by default; a live case opts in
+with ``share_settings``, because its real provider is the thing under test.
 
 The harness keeps what a failed case needs to be understood: the project it
 wrote (including each session's transcript and event log), every exchange it
@@ -205,10 +206,12 @@ class CaseRun:
         pages: Iterable[tuple[str, str, str]] | None = None,
         raw_pages: Iterable[tuple[str, bytes]] | None = None,
         brief: str | None = None,
+        share_settings: bool = False,
     ) -> None:
         self.repo = workdir / "repo"
         self.repo.mkdir(parents=True)
         self.layout = init_project(self.repo / "projects" / "demo")
+        self.share_settings = share_settings
         self.checks: list[Check] = []
         self.log: list[str] = []
         self.clock = FixedClock()
@@ -247,15 +250,15 @@ class CaseRun:
         root = patch.object(projects_api, "REPO_ROOT", self.repo)
         root.start()
         self._patchers.append(root)
-        env = patch.dict(
-            os.environ,
-            {
-                "NOTEAGENT_PROJECT": str(self.layout.root),
-                "NOTEAGENT_HOME": "",
-                # Keep the user's own skills and settings out of every case.
-                "NOTEAGENT_CONFIG_DIR": str(self.repo / "config"),
-            },
-        )
+        environment = {"NOTEAGENT_PROJECT": str(self.layout.root)}
+        if not self.share_settings:
+            # Keep the user's own skills and settings out of every case. A live
+            # atom opts out: it needs the real search provider to search at all.
+            environment["NOTEAGENT_HOME"] = ""
+            environment["NOTEAGENT_CONFIG_DIR"] = str(
+                self.repo / "config"
+            )
+        env = patch.dict(os.environ, environment)
         env.start()
         self._patchers.append(env)
         projects_api.use_project("demo")

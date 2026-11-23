@@ -1,10 +1,11 @@
 """Run the V4 atoms and report what each one did.
 
 An atom is one capability the agent is built from, exercised end to end through
-the same HTTP/SSE path the product uses. The atoms here run scripts, so they
-cost nothing and reach no provider. The report keeps every check, its time and
-its token count; a failing atom also keeps its project, sessions and event logs
-under the failure library, and a passing atom leaves no failure behind.
+the same HTTP/SSE path the product uses. The local atoms run scripts and cost
+nothing; the live smoke reaches the network only when asked. The report keeps
+every check, its time and its token count, with the live smoke reported apart; a
+failing atom also keeps its project, sessions and event logs under the failure
+library, and a passing atom leaves no failure behind.
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ class AtomCase:
     #: An empty tuple starts with no wiki pages; ``None`` would seed the
     #: harness default pages, which an atom must not inherit by accident.
     pages: tuple[tuple[str, str, str], ...] = ()
+    #: A live atom reads the user's own settings; a local one stays isolated.
+    share_settings: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,28 +107,45 @@ class AtomResult:
 
 @dataclass(frozen=True, slots=True)
 class V4Report:
-    """The atoms, their checks, and where a failure can be read."""
+    """The atoms, their checks, and where a failure can be read.
+
+    ``atoms`` is the free local set; ``live`` is the web smoke, reported on its
+    own because it can fail for reasons the machine does not own.
+    """
 
     atoms: tuple[AtomResult, ...]
     run_id: str
     started_at: str
     duration_s: float
+    live: tuple[AtomResult, ...] = ()
+
+    @property
+    def all_atoms(self) -> tuple[AtomResult, ...]:
+        return (*self.atoms, *self.live)
 
     @property
     def passed_count(self) -> int:
-        return sum(1 for atom in self.atoms if atom.passed)
+        return sum(1 for atom in self.all_atoms if atom.passed)
 
     @property
     def failed_count(self) -> int:
-        return len(self.atoms) - self.passed_count
+        return len(self.all_atoms) - self.passed_count
+
+    @property
+    def local_passed_count(self) -> int:
+        return sum(1 for atom in self.atoms if atom.passed)
+
+    @property
+    def live_passed_count(self) -> int:
+        return sum(1 for atom in self.live if atom.passed)
 
     @property
     def tokens_in(self) -> int:
-        return sum(atom.tokens_in for atom in self.atoms)
+        return sum(atom.tokens_in for atom in self.all_atoms)
 
     @property
     def tokens_out(self) -> int:
-        return sum(atom.tokens_out for atom in self.atoms)
+        return sum(atom.tokens_out for atom in self.all_atoms)
 
     def payload(self) -> dict[str, object]:
         return {
@@ -136,50 +156,47 @@ class V4Report:
             "durationSeconds": round(self.duration_s, 3),
             "passed": self.passed_count,
             "failed": self.failed_count,
+            "localPassed": self.local_passed_count,
+            "localTotal": len(self.atoms),
+            "livePassed": self.live_passed_count,
+            "liveTotal": len(self.live),
             "tokensIn": self.tokens_in,
             "tokensOut": self.tokens_out,
-            "atoms": [
-                {
-                    "name": atom.name,
-                    "title": atom.title,
-                    "passed": atom.passed,
-                    "durationSeconds": round(atom.duration_s, 3),
-                    "tokensIn": atom.tokens_in,
-                    "tokensOut": atom.tokens_out,
-                    "checks": [
-                        check.to_payload() for check in atom.checks
-                    ],
-                    "error": atom.error_line,
-                    "artifacts": atom.artifacts,
-                }
-                for atom in self.atoms
-            ],
+            "atoms": [_atom_payload(atom) for atom in self.atoms],
+            "live": [_atom_payload(atom) for atom in self.live],
         }
 
     def markdown(self) -> str:
         lines = [
-            "# V4 quality eval — local atoms",
+            "# V4 quality eval",
             "",
             f"- Run: {self.run_id}",
             f"- Started: {self.started_at}",
             (
-                f"- Result: **{self.passed_count} passed, "
-                f"{self.failed_count} failed** in {self.duration_s:.1f}s"
+                f"- Local atoms: **{self.local_passed_count} passed, "
+                f"{len(self.atoms) - self.local_passed_count} failed**"
             ),
-            f"- Tokens in/out: {self.tokens_in}/{self.tokens_out}",
-            "",
-            "| Atom | Result | Checks | Time | Tokens in/out |",
-            "|---|---|---|---|---|",
         ]
-        for atom in self.atoms:
-            verdict = "PASS" if atom.passed else "FAIL"
+        if self.live:
             lines.append(
-                f"| `{atom.name}` | {verdict} | "
-                f"{len(atom.checks) - len(atom.failed_checks)}/"
-                f"{len(atom.checks)} | {atom.duration_s:.1f}s | "
-                f"{atom.tokens_in}/{atom.tokens_out} |"
+                f"- Live smoke: **{self.live_passed_count} passed, "
+                f"{len(self.live) - self.live_passed_count} failed**"
             )
-        failures = [atom for atom in self.atoms if not atom.passed]
+        lines.extend(
+            [
+                (
+                    f"- Total: {self.passed_count} passed, "
+                    f"{self.failed_count} failed in {self.duration_s:.1f}s"
+                ),
+                f"- Tokens in/out: {self.tokens_in}/{self.tokens_out}",
+            ]
+        )
+        lines.extend(_table("Local atoms", self.atoms))
+        if self.live:
+            lines.extend(_table("Live smoke", self.live))
+        failures = [
+            atom for atom in self.all_atoms if not atom.passed
+        ]
         if failures:
             lines.extend(["", "## Failures"])
             for atom in failures:
@@ -214,13 +231,14 @@ def run_atoms(
     atoms: tuple[AtomCase, ...],
     failures_root: Path,
     *,
+    live: tuple[AtomCase, ...] = (),
     run_id: str | None = None,
     run_atom: RunAtom | None = None,
 ) -> V4Report:
     """Run every atom once; *run_atom* is the test seam.
 
-    The failure library is not cleared: a run adds its own folder, and an
-    older failure stays readable.
+    The local atoms run first, then the live smoke. The failure library is not
+    cleared: a run adds its own folder, and an older failure stays readable.
     """
     started_at = utc_now()
     identifier = run_id or _run_id()
@@ -229,11 +247,15 @@ def run_atoms(
     results = tuple(
         runner(atom, Path(failures_root), identifier) for atom in atoms
     )
+    live_results = tuple(
+        runner(atom, Path(failures_root), identifier) for atom in live
+    )
     return V4Report(
         atoms=results,
         run_id=identifier,
         started_at=started_at,
         duration_s=time.monotonic() - started,
+        live=live_results,
     )
 
 
@@ -249,7 +271,11 @@ def run_atom_once(
     counter = UsageCounter()
     error = ""
     try:
-        run = CaseRun(tmp, pages=atom.pages)
+        run = CaseRun(
+            tmp,
+            pages=atom.pages,
+            share_settings=atom.share_settings,
+        )
         atom.run(run, counter)
     except Exception:
         error = traceback.format_exc()
@@ -318,6 +344,39 @@ def _preserve(
             "\n".join(run.log) + "\n", encoding="utf-8"
         )
     return target
+
+
+def _atom_payload(atom: AtomResult) -> dict[str, object]:
+    return {
+        "name": atom.name,
+        "title": atom.title,
+        "passed": atom.passed,
+        "durationSeconds": round(atom.duration_s, 3),
+        "tokensIn": atom.tokens_in,
+        "tokensOut": atom.tokens_out,
+        "checks": [check.to_payload() for check in atom.checks],
+        "error": atom.error_line,
+        "artifacts": atom.artifacts,
+    }
+
+
+def _table(title: str, atoms: tuple[AtomResult, ...]) -> list[str]:
+    lines = [
+        "",
+        f"## {title}",
+        "",
+        "| Atom | Result | Checks | Time | Tokens in/out |",
+        "|---|---|---|---|---|",
+    ]
+    for atom in atoms:
+        verdict = "PASS" if atom.passed else "FAIL"
+        lines.append(
+            f"| `{atom.name}` | {verdict} | "
+            f"{len(atom.checks) - len(atom.failed_checks)}/"
+            f"{len(atom.checks)} | {atom.duration_s:.1f}s | "
+            f"{atom.tokens_in}/{atom.tokens_out} |"
+        )
+    return lines
 
 
 def _run_id() -> str:

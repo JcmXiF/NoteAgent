@@ -106,6 +106,41 @@ class FailureArtifactTests(unittest.TestCase):
         self.assertIs(projects_api.REPO_ROOT, root)
         self.assertEqual(os.environ.get("NOTEAGENT_PROJECT"), project)
 
+    def test_a_case_keeps_the_users_settings_out_by_default(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"NOTEAGENT_CONFIG_DIR": "the-users-own-config"},
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                run = CaseRun(Path(tmp) / "work")
+                try:
+                    isolated = os.environ.get("NOTEAGENT_CONFIG_DIR")
+                finally:
+                    run.close()
+            restored = os.environ.get("NOTEAGENT_CONFIG_DIR")
+
+        self.assertNotEqual(isolated, "the-users-own-config")
+        self.assertTrue(str(isolated).endswith("config"))
+        self.assertEqual(restored, "the-users-own-config")
+
+    def test_a_live_case_can_read_the_users_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"NOTEAGENT_CONFIG_DIR": "the-users-own-config"},
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                run = CaseRun(
+                    Path(tmp) / "work", share_settings=True
+                )
+                try:
+                    shared = os.environ.get("NOTEAGENT_CONFIG_DIR")
+                finally:
+                    run.close()
+
+        self.assertEqual(shared, "the-users-own-config")
+
 
 class ReportTests(unittest.TestCase):
     def _case(self, name, *, passed=True, first_error=None):

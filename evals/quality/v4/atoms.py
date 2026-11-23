@@ -16,6 +16,12 @@ from typing import Any
 
 from evals.harness import CaseRun
 from evals.quality.v4.runner import AtomCase, UsageCounter
+from evals.quality.v4.scripted import (
+    as_json,
+    call_script,
+    final_script,
+    tool_results,
+)
 from evals.report import (
     PUBLISH,
     PROVENANCE,
@@ -28,7 +34,6 @@ from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.model import (
     AssistantMessage,
     ModelDoneEvent,
-    ModelEvent,
     ModelStartEvent,
     ModelTextDelta,
     ModelToolCallEnd,
@@ -61,18 +66,6 @@ _READ_PAGES = (
 )
 
 
-def _call(
-    call_id: str, name: str, arguments: dict[str, object]
-) -> list[ModelEvent]:
-    return FauxModelClient.tool_call(
-        call_id, name, json.dumps(arguments, ensure_ascii=False)
-    ).script
-
-
-def _final(text: str) -> list[ModelEvent]:
-    return FauxModelClient.text(text).script
-
-
 def _search_cards(_query: str) -> list[CandidateCard]:
     return [
         CandidateCard(
@@ -100,23 +93,6 @@ def _capture(_url: str) -> Capture:
     )
 
 
-def _results(api, session: str, name: str) -> list[dict[str, Any]]:
-    return [
-        entry
-        for entry in api.entries(session)
-        if entry.get("role") == "toolResult"
-        and entry.get("name") == name
-    ]
-
-
-def _json(content: object) -> dict[str, Any]:
-    try:
-        payload = json.loads(str(content or ""))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -135,14 +111,14 @@ def frame_atom(run: CaseRun, counter: UsageCounter) -> None:
     """A fetched page is framed into bounded blocks."""
     model = counter.wrap(
         FauxModelClient(
-            _call("c1", "web_search", {"query": "信息熵"}),
-            _call("c2", "select_page", {"hitId": "hit-1"}),
-            _call(
+            call_script("c1", "web_search", {"query": "信息熵"}),
+            call_script("c2", "select_page", {"hitId": "hit-1"}),
+            call_script(
                 "c3",
                 "select_frame",
                 {"pageId": "page-1", "blockIds": ["b1", "b2"]},
             ),
-            _final("已画框。"),
+            final_script("已画框。"),
         )
     )
     api = run.start(
@@ -157,9 +133,9 @@ def frame_atom(run: CaseRun, counter: UsageCounter) -> None:
         200,
         TOOL_CONTRACT,
     )
-    results = _results(api, session, "select_frame")
+    results = tool_results(api, session, "select_frame")
     run.equal("select_frame ran once", len(results), 1, TOOL_CONTRACT)
-    payload = _json(results[0].get("content") if results else "")
+    payload = as_json(results[0].get("content") if results else "")
     run.equal(
         "the frame is ready", payload.get("status"), "ok", TOOL_CONTRACT
     )
@@ -197,14 +173,14 @@ def write_atom(run: CaseRun, counter: UsageCounter) -> None:
     """A frame becomes a page with provenance and a maintained catalog."""
     model = counter.wrap(
         FauxModelClient(
-            _call("c1", "web_search", {"query": "信息熵"}),
-            _call("c2", "select_page", {"hitId": "hit-1"}),
-            _call(
+            call_script("c1", "web_search", {"query": "信息熵"}),
+            call_script("c2", "select_page", {"hitId": "hit-1"}),
+            call_script(
                 "c3",
                 "select_frame",
                 {"pageId": "page-1", "blockIds": ["b1", "b2"]},
             ),
-            _call(
+            call_script(
                 "c4",
                 "compose_wiki",
                 {
@@ -223,12 +199,12 @@ def write_atom(run: CaseRun, counter: UsageCounter) -> None:
                     ],
                 },
             ),
-            _call(
+            call_script(
                 "c5",
                 "write_wiki",
                 {"wikiFile": WIKI_FILE, "draftVersion": 1},
             ),
-            _final("已发布。"),
+            final_script("已发布。"),
         )
     )
     api = run.start(
@@ -243,9 +219,9 @@ def write_atom(run: CaseRun, counter: UsageCounter) -> None:
         200,
         TOOL_CONTRACT,
     )
-    results = _results(api, session, "write_wiki")
+    results = tool_results(api, session, "write_wiki")
     run.equal("write_wiki ran once", len(results), 1, TOOL_CONTRACT)
-    payload = _json(results[0].get("content") if results else "")
+    payload = as_json(results[0].get("content") if results else "")
     run.equal("the publish succeeded", payload.get("status"), "ok", PUBLISH)
     warnings = payload.get("warnings") or []
     codes = [
@@ -333,8 +309,8 @@ def search_atom(run: CaseRun, counter: UsageCounter) -> None:
     _write_material(run)
     model = counter.wrap(
         FauxModelClient(
-            _call("c1", "search", {"query": "不确定性"}),
-            _final("搜到了。"),
+            call_script("c1", "search", {"query": "不确定性"}),
+            final_script("搜到了。"),
         )
     )
     api = run.start(model)
@@ -347,7 +323,7 @@ def search_atom(run: CaseRun, counter: UsageCounter) -> None:
         200,
         TOOL_CONTRACT,
     )
-    results = _results(api, session, "search")
+    results = tool_results(api, session, "search")
     run.equal("search ran once", len(results), 1, TOOL_CONTRACT)
     content = str(results[0].get("content") or "") if results else ""
     meta = (results[0].get("meta") or {}) if results else {}
@@ -465,7 +441,7 @@ def read_atom(run: CaseRun, counter: UsageCounter) -> None:
         200,
         TOOL_CONTRACT,
     )
-    results = _results(api, session, "wiki_read")
+    results = tool_results(api, session, "wiki_read")
     run.equal("wiki_read ran twice", len(results), 2, TOOL_CONTRACT)
     first = results[0] if results else {}
     second = results[1] if len(results) > 1 else {}
@@ -554,7 +530,8 @@ LOCAL_ATOMS = (
     ),
 )
 
-#: What the V4 command runs today. The live atoms join this tuple in ticket 04.
+#: What the V4 command runs by default; the live atoms live in ``live.py``
+#: and run only under ``--live``.
 ATOMS = LOCAL_ATOMS
 
 __all__ = ["ATOMS", "LOCAL_ATOMS"]
