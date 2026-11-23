@@ -11,13 +11,11 @@ from evals.quality.judge_client import (
     conversation_from,
     judge_config,
 )
-from evals.quality.v3.judge import EXPECTED_KEYS, judge_item
-from evals.quality.v3.set import load_quality_set
 
-from noteagent.llm.client import LlmError, LlmTurn
+from noteagent.llm.client import ChatMessage, LlmError, LlmTurn
 from noteagent.llm.config import LlmConfig
 
-_KEYS = EXPECTED_KEYS
+_PAYLOAD = {"ok": True}
 
 
 def _config() -> LlmConfig:
@@ -29,12 +27,7 @@ def _config() -> LlmConfig:
 
 
 def _payload_json() -> str:
-    return json.dumps(
-        {
-            name: {"verdict": "pass", "reason": "", "evidence": []}
-            for name in _KEYS
-        }
-    )
+    return json.dumps(_PAYLOAD)
 
 
 class _SequenceJudge:
@@ -88,19 +81,8 @@ class ConversationTests(unittest.TestCase):
 
 
 class JudgeRetryTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.rubric = load_quality_set().rubric
-
-    def _verdict(self, judge):
-        return judge_item(
-            self.rubric,
-            question="X 是什么？",
-            wiki=(("concepts/x", "X", "X body."),),
-            conversation=(("user", "X 是什么？"), ("assistant", "X。")),
-            expected_points=("要点一",),
-            pitfalls=(),
-            client=judge,
-        )
+    def _turn(self, judge):
+        return judge.complete([ChatMessage("user", "X 是什么？")])
 
     def _retrying(self, results):
         sequence = _SequenceJudge(results)
@@ -130,15 +112,15 @@ class JudgeRetryTests(unittest.TestCase):
             ]
         )
 
-        verdict = self._verdict(judge)
+        turn = self._turn(judge)
 
-        self.assertTrue(verdict.passed(self.rubric))
+        self.assertEqual(turn.content, _payload_json())
         self.assertEqual(sequence.calls, 2)
         self.assertEqual(
             budgets, [JUDGE_MAX_TOKENS, JUDGE_MAX_TOKENS * 2]
         )
         self.assertEqual(
-            (verdict.input_tokens, verdict.output_tokens), (300, 30)
+            (turn.input_tokens, turn.output_tokens), (300, 30)
         )
 
     def test_a_length_error_keeps_its_usage_and_retries(self) -> None:
@@ -159,12 +141,12 @@ class JudgeRetryTests(unittest.TestCase):
             ]
         )
 
-        verdict = self._verdict(judge)
+        turn = self._turn(judge)
 
-        self.assertTrue(verdict.passed(self.rubric))
+        self.assertEqual(turn.content, _payload_json())
         self.assertEqual(sequence.calls, 2)
         self.assertEqual(
-            (verdict.input_tokens, verdict.output_tokens),
+            (turn.input_tokens, turn.output_tokens),
             (600, 16_404),
         )
 
@@ -173,9 +155,9 @@ class JudgeRetryTests(unittest.TestCase):
             [LlmTurn(_payload_json(), finish_reason="stop")]
         )
 
-        verdict = self._verdict(judge)
+        turn = self._turn(judge)
 
-        self.assertTrue(verdict.passed(self.rubric))
+        self.assertEqual(turn.content, _payload_json())
         self.assertEqual(sequence.calls, 1)
         self.assertEqual(budgets, [JUDGE_MAX_TOKENS])
 
@@ -189,8 +171,8 @@ class JudgeRetryTests(unittest.TestCase):
             ]
         )
 
-        self._verdict(judge)
-        self._verdict(judge)
+        self._turn(judge)
+        self._turn(judge)
 
         self.assertEqual(
             budgets,
