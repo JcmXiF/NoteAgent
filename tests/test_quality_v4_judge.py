@@ -1,4 +1,4 @@
-"""The V4 judge, case A's fixtures, and the calibration against the labels."""
+"""The V4 judge, the A/B fixtures, and the calibration against the labels."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from evals.quality.v4.calibration import calibrate_case_a
-from evals.quality.v4.case_a import (
-    CaseAResult,
-    load_fixture,
-    shape_checks,
-)
+from evals.quality.v4.calibration import calibrate_case, calibrate_cases
+from evals.quality.v4.case_a import CASE_A
+from evals.quality.v4.case_b import CASE_B
+from evals.quality.v4.case_run import CaseRunResult, shape_checks
 from evals.quality.v4.judge import (
     POINT_IDS,
     JudgeMaterial,
@@ -96,17 +94,17 @@ def _bad_payload(expected_count: int = 5) -> dict:
         {
             "point": "correctness",
             "kind": "wrong_fact",
-            "detail": "the KL formula is reversed",
+            "detail": "the formula is reversed",
         },
         {
             "point": "completeness",
             "kind": "missing_point",
-            "detail": "the relation is absent",
+            "detail": "a relation is absent",
         },
         {
             "point": "source_legality",
             "kind": "illegal_source",
-            "detail": "a wiki page outside the allowed set",
+            "detail": "a page outside the allowed set",
         },
     ]
     return payload
@@ -133,6 +131,16 @@ def _judge(
 def _good_verdict() -> V4JudgeVerdict:
     verdict, _client = _judge(_good_payload())
     return verdict
+
+
+def _responder(good: dict, bad: dict):
+    def answer(messages):
+        content = messages[1].content
+        if "### A-defective" in content or "### B-defective" in content:
+            return bad
+        return good
+
+    return answer
 
 
 class JudgeTests(unittest.TestCase):
@@ -192,6 +200,15 @@ class JudgeTests(unittest.TestCase):
 
         self.assertIn("unexpected keys", verdict.error)
 
+    def test_harmless_metadata_is_ignored(self) -> None:
+        payload = _good_payload()
+        payload["type"] = "verdict"
+
+        verdict, _client = _judge(payload)
+
+        self.assertEqual(verdict.error, "")
+        self.assertTrue(verdict.all_points_pass())
+
     def test_a_missing_point_is_refused(self) -> None:
         payload = _good_payload()
         payload["points"] = payload["points"][:-1]
@@ -247,45 +264,67 @@ class JudgeTests(unittest.TestCase):
         self.assertNotIn("trace", message)
 
 
-class CaseAFixtureTests(unittest.TestCase):
-    def test_the_fixture_carries_the_source_points_and_samples(self) -> None:
-        fixture = load_fixture()
+class FixtureTests(unittest.TestCase):
+    def test_case_a_carries_its_source_points_and_samples(self) -> None:
+        self.assertEqual(len(CASE_A.sources), 1)
+        self.assertGreater(
+            len(CASE_A.sources[0].capture.markdown), 3_000
+        )
+        self.assertTrue(
+            CASE_A.sources[0].material_id.startswith("raw/")
+        )
+        self.assertEqual(len(CASE_A.expected_points), 5)
+        self.assertEqual(
+            CASE_A.sample_names, ("A-good", "A-defective")
+        )
 
-        self.assertGreater(len(fixture.material_text), 3_000)
-        self.assertTrue(fixture.material_id.startswith("raw/"))
-        self.assertEqual(len(fixture.expected_points), 5)
-        self.assertEqual(set(fixture.labels), {"A-good", "A-defective"})
-        self.assertEqual(len(fixture.artifacts), 2)
+    def test_case_b_carries_two_sources_and_one_defect(self) -> None:
+        self.assertEqual(len(CASE_B.sources), 2)
+        self.assertTrue(
+            all(source.material_id.startswith("raw/") for source in CASE_B.sources)
+        )
+        self.assertEqual(len(set(CASE_B.material_ids)), 2)
+        self.assertGreater(
+            len(CASE_B.sources[1].capture.markdown), 3_000
+        )
+        self.assertEqual(len(CASE_B.expected_points), 5)
+        self.assertEqual(CASE_B.sample_names, ("B-defective",))
 
-    def test_shape_checks_pass_a_page_with_the_allowed_source(self) -> None:
-        fixture = load_fixture()
-        page = (
+    def test_a_shape_check_passes_a_page_citing_every_source(self) -> None:
+        case = CASE_B
+        body = (
             "---\n"
-            'title: "什么是信息熵"\n'
-            f'sources: ["{fixture.material_id}#b1"]\n'
-            "---\n\n"
-            "# 什么是信息熵\n\n"
-            "## 信息熵\n\n"
+            'title: "熵、KL、互信息的关系"\n'
+            "sources: ["
+            + ", ".join(
+                f'"{material}#b1"' for material in case.material_ids
+            )
+            + "]\n---\n\n"
+            "# 熵、KL、互信息的关系\n\n"
+            "## 熵与 KL\n\n"
             "H(P) = -Σ_i P(i) log_a P(i)。\n"
         )
 
         checks = shape_checks(
-            page, fixture.material_id, "已写入 wiki/sources/。"
+            case, body, f"已写入 {case.wiki_file}。"
         )
 
         self.assertTrue(all(check.passed for check in checks), checks)
 
-    def test_shape_checks_refuse_a_page_without_the_allowed_source(
-        self,
-    ) -> None:
-        fixture = load_fixture()
-        page = (
-            "---\ntitle: \"X\"\nsources: []\n---\n\n"
-            "# X\n\n## A\n\n正文。\n"
+    def test_a_shape_check_refuses_a_page_missing_one_source(self) -> None:
+        case = CASE_B
+        body = (
+            "---\n"
+            'title: "熵、KL、互信息的关系"\n'
+            f'sources: ["{case.material_ids[0]}#b1"]\n'
+            "---\n\n"
+            "# 熵、KL、互信息的关系\n\n"
+            "## 熵与 KL\n\n"
+            "正文。\n"
         )
 
         checks = shape_checks(
-            page, fixture.material_id, "已写入 wiki/sources/。"
+            case, body, f"已写入 {case.wiki_file}。"
         )
 
         source = next(
@@ -294,54 +333,77 @@ class CaseAFixtureTests(unittest.TestCase):
         self.assertFalse(source.passed)
 
     def test_a_generic_final_answer_does_not_name_the_page(self) -> None:
-        fixture = load_fixture()
-        page = (
+        case = CASE_A
+        body = (
             "---\n"
             'title: "什么是信息熵"\n'
-            f'sources: ["{fixture.material_id}#b1"]\n'
+            f'sources: ["{case.material_ids[0]}#b1"]\n'
             "---\n\n"
             "# 什么是信息熵\n\n"
             "## 信息熵\n\n"
             "H(P) = -Σ_i P(i) log_a P(i)。\n"
         )
 
-        checks = shape_checks(page, fixture.material_id, "已写。")
+        checks = shape_checks(case, body, "已写。")
 
         final = next(
             check for check in checks if "final answer" in check.name
         )
         self.assertFalse(final.passed)
 
+    def test_the_judge_message_carries_both_b_sources(self) -> None:
+        client = _Judge(lambda messages: _good_payload())
+        verdict = judge_artifact(
+            task=CASE_B.task,
+            materials=CASE_B.judge_materials(),
+            expected_points=CASE_B.expected_points,
+            artifact_id=CASE_B.wiki_file,
+            artifact="产物的文字",
+            task_compliance=TaskCompliance(True, ("page exists",)),
+            client=client,
+        )
+
+        self.assertEqual(verdict.error, "")
+        message = client.messages[1].content
+        for source in CASE_B.sources:
+            self.assertIn(source.material_id, message)
+            self.assertIn(
+                source.capture.markdown.strip()[:60], message
+            )
+
 
 class CalibrationTests(unittest.TestCase):
-    def test_the_judge_matches_both_labels(self) -> None:
+    def test_the_judge_matches_every_case(self) -> None:
         good = _good_payload()
         bad = _bad_payload()
-        judge = _Judge(
-            lambda messages: (
-                bad
-                if "### A-defective" in messages[1].content
-                else good
-            )
-        )
+        judge = _Judge(_responder(good, bad))
 
-        report = calibrate_case_a(judge)
+        reports = calibrate_cases((CASE_A, CASE_B), judge)
 
-        self.assertEqual(report.matched_count, 2)
         self.assertEqual(
-            [sample.sample for sample in report.samples],
+            [report.case_id for report in reports], ["A", "B"]
+        )
+        self.assertTrue(reports[0].matched)
+        self.assertTrue(reports[1].matched)
+        self.assertEqual(
+            [sample.sample for sample in reports[0].samples],
             ["A-good", "A-defective"],
         )
-        self.assertEqual(report.samples[1].mismatches, ())
+        self.assertEqual(
+            [sample.sample for sample in reports[1].samples],
+            ["B-defective"],
+        )
 
     def test_a_mismatch_is_reported_point_by_point(self) -> None:
         judge = _Judge(lambda messages: _good_payload())
 
-        report = calibrate_case_a(judge)
+        report = calibrate_case(CASE_B, judge)
 
-        self.assertEqual(report.matched_count, 1)
+        self.assertFalse(report.matched)
+        self.assertEqual(report.matched_count, 0)
         mismatched = {
-            point.point for point in report.samples[1].mismatches
+            point.point
+            for point in report.samples[0].mismatches
         }
         self.assertEqual(
             mismatched,
@@ -357,16 +419,10 @@ class QualityCliTests(unittest.TestCase):
             model="test-model",
         )
 
-    def test_the_cli_writes_the_calibration_report(self) -> None:
+    def test_the_cli_writes_every_calibration(self) -> None:
         good = _good_payload()
         bad = _bad_payload()
-        judge = _Judge(
-            lambda messages: (
-                bad
-                if "### A-defective" in messages[1].content
-                else good
-            )
-        )
+        judge = _Judge(_responder(good, bad))
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "quality.json"
@@ -385,42 +441,50 @@ class QualityCliTests(unittest.TestCase):
             payload = json.loads(report.read_text(encoding="utf-8"))
 
         self.assertEqual(code, 0)
-        self.assertEqual(payload["calibration"]["matched"], 2)
-        self.assertIsNone(payload["caseA"])
+        self.assertEqual(
+            payload["calibrations"]["A"]["samplesMatched"], 2
+        )
+        self.assertEqual(
+            payload["calibrations"]["B"]["samplesMatched"], 1
+        )
+        self.assertEqual(payload["cases"], {})
 
-    def test_the_cli_runs_case_a_when_asked(self) -> None:
+    def test_the_cli_runs_both_live_cases_when_asked(self) -> None:
         good = _good_payload()
         bad = _bad_payload()
-        judge = _Judge(
-            lambda messages: (
-                bad
-                if "### A-defective" in messages[1].content
-                else good
-            )
-        )
-        case = CaseAResult(
-            checks=(Check("the page exists", True, "", PUBLISH),),
-            artifact="# T\n\n## S\n\n正文。",
-            final_text="已写入。",
-            verdict=_good_verdict(),
-            duration_s=0.1,
-        )
-        calls: dict[str, object] = {}
+        judge = _Judge(_responder(good, bad))
 
-        def runner(config, **kwargs):
-            calls.update(kwargs)
-            return case
+        calls: list[tuple[str, object, object]] = []
+
+        def runner(case, config, **kwargs):
+            calls.append(
+                (
+                    case.id,
+                    kwargs.get("run_id"),
+                    kwargs.get("failures_root"),
+                )
+            )
+            return CaseRunResult(
+                case_id=case.id,
+                checks=(Check("the page exists", True, "", PUBLISH),),
+                artifact="# T\n\n## S\n\n正文。",
+                final_text=f"已写入 {case.wiki_file}。",
+                verdict=_good_verdict(),
+                duration_s=0.1,
+            )
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "quality.json"
+            failures = Path(tmp) / "failures"
             with _without_ci():
                 code = quality_main(
                     [
-                        "--case-a",
+                        "--live",
+                        "A,B",
                         "--report",
                         str(report),
                         "--failures",
-                        str(Path(tmp) / "failures"),
+                        str(failures),
                     ],
                     config=self._config(),
                     judge_client=judge,
@@ -430,11 +494,18 @@ class QualityCliTests(unittest.TestCase):
             payload = json.loads(report.read_text(encoding="utf-8"))
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls["run_id"], "run-1")
+        self.assertEqual([call[0] for call in calls], ["A", "B"])
+        self.assertEqual([call[1] for call in calls], ["run-1", "run-1"])
+        self.assertEqual([call[2] for call in calls], [failures, failures])
+        self.assertEqual(set(payload["cases"]), {"A", "B"})
         self.assertEqual(
-            len(payload["caseA"]["judge"]["points"]), 5
+            payload["cases"]["B"]["judge"]["points"][0]["verdict"],
+            "pass",
         )
-        self.assertEqual(payload["caseA"]["checks"][0]["name"], "the page exists")
+        self.assertEqual(
+            payload["cases"]["A"]["checks"][0]["name"],
+            "the page exists",
+        )
 
     def test_ci_refuses_and_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -462,9 +533,7 @@ class QualityCliTests(unittest.TestCase):
             report = Path(tmp) / "quality.json"
             with (
                 _without_ci(),
-                patch(
-                    "noteagent.settings.install.install_view"
-                ),
+                patch("noteagent.settings.install.install_view"),
                 patch(
                     "noteagent.llm.config.load_llm_config",
                     side_effect=RuntimeError("missing model"),

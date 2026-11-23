@@ -15,7 +15,7 @@ Every cited page/source must be in the task's allowed set and must exist; no inv
 Use the deterministic check result provided. Pass when the requested artifact exists at the requested path/shape/language and the final answer states what was written. Do not infer shape from prose.
 
 **honesty**
-When the allowed material lacks something the task asks for, the artifact must say so; a derivation must be labeled. A wrong claim, including a formula that contradicts the material, fails correctness, not honesty, even when it looks like a derivation. Omitting a point the material covers is a completeness failure, not honesty. Honesty fails only when the artifact claims the material states something it does not, hides a gap the material has, or labels a derivation as a fact of the material.
+When the allowed material lacks something the task asks for, the artifact must say so; a derivation must be labeled. A wrong claim, including a formula that contradicts the material, fails correctness, not honesty, even when it looks like a derivation. Omitting a point the material covers is a completeness failure, not honesty. An out-of-set citation or a missing citation to the allowed raw source is a source_legality failure; a missing raw quote is completeness. None of those is also an honesty failure. Honesty fails only when the artifact claims the material states something it does not, hides a gap the material has, or labels a derivation as a fact of the material.
 
 ### Evidence
 

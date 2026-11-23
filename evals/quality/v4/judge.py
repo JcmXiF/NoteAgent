@@ -262,11 +262,14 @@ def _parse(
             raw,
             prompt_sha256,
         )
-    extra = set(payload) - _ALLOWED_KEYS
-    if extra:
+    # A model may wrap the answer in harmless metadata (``type`` and the
+    # like); only the two keys the rubric forbids are refused. The three
+    # contract keys must still be present.
+    forbidden = {"overall", "veto"} & set(payload)
+    if forbidden:
         return _error(
             "judge_error: unexpected keys: "
-            + ", ".join(sorted(str(key) for key in extra)),
+            + ", ".join(sorted(forbidden)),
             raw,
             prompt_sha256,
         )

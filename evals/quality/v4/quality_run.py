@@ -1,9 +1,9 @@
-"""Run the V4 quality arm: judge calibration, then case A if asked.
+"""Run the V4 quality arm: judge calibration, then live cases if asked.
 
-Calibration is two judge calls on the fixed good/defective samples and costs
-little. ``--case-a`` also runs the live agent on the 17k raw source, which
-costs model tokens. Both are record-only: the report keeps the per-point
-verdicts, and a failure keeps its project under the failure library.
+Calibration is one judge call per signed sample and costs little. ``--case-a``
+and ``--case-b`` also run the live agent on that case's raw sources, which costs
+model tokens. Both are record-only: the report keeps the per-point verdicts,
+and a failure keeps its project under the failure library.
 """
 
 from __future__ import annotations
@@ -19,30 +19,36 @@ from pathlib import Path
 from evals.quality.judge_client import JudgeClient, make_judge_client
 from evals.quality.v4.calibration import (
     CalibrationReport,
-    calibrate_case_a,
+    calibrate_cases,
 )
-from evals.quality.v4.case_a import CaseAResult, run_case_a
+from evals.quality.v4.case_a import CASE_A
+from evals.quality.v4.case_b import CASE_B
+from evals.quality.v4.case_run import CaseRunResult, run_case
 from evals.quality.v4.runner import V4_REPORT_VERSION, new_run_id
 from evals.report import markdown_cell
 from evals.support import in_ci
 
 from noteagent.llm.config import LlmConfig
 
-CaseRunner = Callable[..., CaseAResult]
+CASES = (CASE_A, CASE_B)
+CaseRunner = Callable[..., CaseRunResult]
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m evals.quality.v4.quality_run",
         description=(
-            "Calibrate the V4 judge on case A and, with --case-a, run the "
-            "live case. Local only, record-only."
+            "Calibrate the V4 judge on every case and, with --live, run "
+            "the named live cases. Local only, record-only."
         ),
     )
     parser.add_argument(
-        "--case-a",
-        action="store_true",
-        help="also run the live case A agent and judge its page",
+        "--live",
+        default="",
+        help=(
+            "comma-separated case ids to run live, e.g. A,B; the "
+            "calibration always runs every case"
+        ),
     )
     parser.add_argument(
         "--report",
@@ -52,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--failures",
         default="build/evals/quality/v4/failures",
-        help="where a failed case A keeps its project and event logs",
+        help="where a failed live case keeps its project and event logs",
     )
     return parser
 
@@ -90,34 +96,46 @@ def main(
     judge = judge_client or make_judge_client(config)
     identifier = run_id or new_run_id()
     started = time.monotonic()
-    calibration = calibrate_case_a(
-        judge, secret=config.api_key
+    calibrations = calibrate_cases(
+        CASES, judge, secret=config.api_key
     )
-    case: CaseAResult | None = None
-    if args.case_a:
-        runner = case_runner or run_case_a
-        case = runner(
-            config,
-            failures_root=Path(args.failures),
-            run_id=identifier,
-            judge_client=judge,
+    requested = [
+        item.strip() for item in args.live.split(",") if item.strip()
+    ]
+    known = {case.id for case in CASES}
+    unknown = [item for item in requested if item not in known]
+    if unknown:
+        parser.error(
+            "unknown live case(s): " + ", ".join(unknown)
         )
+    live: list[CaseRunResult] = []
+    if requested:
+        runner = case_runner or run_case
+        live = [
+            runner(
+                case,
+                config,
+                failures_root=Path(args.failures),
+                run_id=identifier,
+                judge_client=judge,
+            )
+            for case in CASES
+            if case.id in requested
+        ]
     duration = time.monotonic() - started
     report = _QualityReport(
         run_id=identifier,
         model=config.model,
-        calibration=calibration,
-        case=case,
+        calibrations=calibrations,
+        cases=tuple(live),
         duration_s=duration,
     )
     path = report.write(Path(args.report))
-    _print_calibration(calibration)
-    if case is not None:
+    for calibration in calibrations:
+        _print_calibration(calibration)
+    for case in live:
         _print_case(case)
-    print(
-        f"\nreport: {path}",
-        flush=True,
-    )
+    print(f"\nreport: {path}", flush=True)
     return 0
 
 
@@ -125,8 +143,8 @@ def main(
 class _QualityReport:
     run_id: str
     model: str
-    calibration: CalibrationReport
-    case: CaseAResult | None
+    calibrations: tuple[CalibrationReport, ...]
+    cases: tuple[CaseRunResult, ...]
     duration_s: float
 
     def payload(self) -> dict[str, object]:
@@ -137,8 +155,13 @@ class _QualityReport:
             "runId": self.run_id,
             "model": self.model,
             "durationSeconds": round(self.duration_s, 3),
-            "calibration": self.calibration.payload(),
-            "caseA": self.case.to_payload() if self.case else None,
+            "calibrations": {
+                item.case_id: item.payload()
+                for item in self.calibrations
+            },
+            "cases": {
+                item.case_id: item.to_payload() for item in self.cases
+            },
         }
 
     def markdown(self) -> str:
@@ -148,25 +171,27 @@ class _QualityReport:
             f"- Run: {self.run_id}",
             f"- Model: {self.model}",
             f"- Duration: {self.duration_s:.1f}s",
-            "",
-            self.calibration.markdown().strip(),
         ]
-        if self.case is not None:
+        for calibration in self.calibrations:
+            lines.extend(
+                ["", calibration.markdown().strip()]
+            )
+        for case in self.cases:
             lines.extend(
                 [
                     "",
-                    "# Case A",
+                    f"# Case {case.case_id}",
                     "",
-                    f"- Path: "
-                    f"{'written' if self.case.artifact.strip() else 'missing'}",
+                    f"- Page: "
+                    f"{'written' if case.artifact.strip() else 'missing'}",
                     f"- Tokens in/out: "
-                    f"{self.case.tokens_in}/{self.case.tokens_out}",
+                    f"{case.tokens_in}/{case.tokens_out}",
                     "",
                     "| Check | Result | Detail |",
                     "|---|---|---|",
                 ]
             )
-            for check in self.case.checks:
+            for check in case.checks:
                 lines.append(
                     f"| {check.name} | "
                     f"{'PASS' if check.passed else 'FAIL'} | "
@@ -179,28 +204,33 @@ class _QualityReport:
                     "|---|---|---|",
                 ]
             )
-            for point in self.case.verdict.points:
+            for point in case.verdict.points:
                 lines.append(
                     f"| {point.id} | {point.verdict} | "
                     f"{markdown_cell(point.reason)} |"
                 )
-            if self.case.verdict.error:
+            if case.verdict.error:
                 lines.extend(
                     [
                         "",
                         "## Judge error",
                         "",
                         "```",
-                        self.case.verdict.error,
+                        case.verdict.error,
                         "```",
                     ]
                 )
-            if self.case.error:
+            if case.error:
                 lines.extend(
-                    ["", "```", self.case.error.strip().splitlines()[-1], "```"]
+                    [
+                        "",
+                        "```",
+                        case.error.strip().splitlines()[-1],
+                        "```",
+                    ]
                 )
-            if self.case.artifacts:
-                lines.append(f"- artifacts: {self.case.artifacts}")
+            if case.artifacts:
+                lines.append(f"- artifacts: {case.artifacts}")
         return "\n".join(lines) + "\n"
 
     def write(self, path: Path) -> Path:
@@ -217,7 +247,9 @@ class _QualityReport:
 
 
 def _print_calibration(report: CalibrationReport) -> None:
-    print("\nCalibration", flush=True)
+    print(
+        f"\nCalibration {report.case_id}", flush=True
+    )
     for sample in report.samples:
         verdict = "PASS" if sample.matched else "FAIL"
         points = len(sample.points) - len(sample.mismatches)
@@ -228,23 +260,25 @@ def _print_calibration(report: CalibrationReport) -> None:
         )
         for point in sample.mismatches:
             print(
-                f"  - {point.point}: label {point.expected or '-'}, "
-                f"judge {point.actual or '-'} ({point.reason})",
+                f"  - {point.point}: label "
+                f"{point.expected or '-'}, judge "
+                f"{point.actual or '-'} ({point.reason})",
                 flush=True,
             )
         if sample.verdict.error:
             print(f"  ! {sample.verdict.error}", flush=True)
 
 
-def _print_case(case: CaseAResult) -> None:
-    print("\nCase A", flush=True)
+def _print_case(case: CaseRunResult) -> None:
+    print(f"\nCase {case.case_id}", flush=True)
     verdict = "PASS" if case.passed else "FAIL"
     checks = len(case.checks) - len(case.failed_checks)
     points = sum(
         1 for point in case.verdict.points if point.verdict == "pass"
     )
     print(
-        f"{verdict} case-A ({checks}/{len(case.checks)} checks, "
+        f"{verdict} case-{case.case_id} "
+        f"({checks}/{len(case.checks)} checks, "
         f"{points}/{len(case.verdict.points)} points)",
         flush=True,
     )
@@ -252,20 +286,19 @@ def _print_case(case: CaseAResult) -> None:
         print(f"  - {check.name}: {check.detail}", flush=True)
     for point in case.verdict.points:
         if point.verdict != "pass":
-            print(
-                f"  - {point.id}: {point.reason}", flush=True
-            )
+            print(f"  - {point.id}: {point.reason}", flush=True)
     if case.verdict.error:
         print(f"  ! {case.verdict.error}", flush=True)
     if case.error:
         print(
-            f"  ! {case.error.strip().splitlines()[-1]}", flush=True
+            f"  ! {case.error.strip().splitlines()[-1]}",
+            flush=True,
         )
     if case.artifacts:
         print(f"  artifacts: {case.artifacts}", flush=True)
 
 
-__all__ = ["main"]
+__all__ = ["CASES", "main"]
 
 
 if __name__ == "__main__":

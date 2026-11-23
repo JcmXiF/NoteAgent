@@ -27,8 +27,9 @@ from evals.support import remove_tree
 from noteagent.agent.model import ModelClient, ModelUsageEvent
 
 #: The V4 report schema. The shared ``REPORT_VERSION`` names the V1-V3 report,
-#: whose field set V4 extends with tokens and failure artifacts.
-V4_REPORT_VERSION = 4
+#: whose field set V4 extends with tokens and failure artifacts. Bump it when
+#: a reader of an older V4 report would read the new one differently.
+V4_REPORT_VERSION = 5
 
 
 @dataclass(slots=True)

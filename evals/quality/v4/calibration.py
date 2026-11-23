@@ -1,4 +1,4 @@
-"""Calibrate the V4 judge on case A's good and defective samples.
+"""Calibrate the V4 judge against every case's signed samples.
 
 The labels are the human reference: they are compared after the judge answers
 and never placed in its prompt. A mismatch points at the rubric or the prompt,
@@ -13,11 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from evals.quality.judge_client import JudgeClient
-from evals.quality.v4.case_a import (
-    SAMPLES,
-    CaseAFixture,
+from evals.quality.v4.case_spec import (
+    QualityCase,
     fixture_task_compliance,
-    load_fixture,
 )
 from evals.quality.v4.judge import (
     POINT_IDS,
@@ -79,10 +77,17 @@ class SampleCalibration:
 
 @dataclass(frozen=True, slots=True)
 class CalibrationReport:
-    """Both samples, their agreement, and the judge's usage."""
+    """One case's samples, their agreement, and the judge's usage."""
 
+    case_id: str
     samples: tuple[SampleCalibration, ...]
     duration_s: float
+
+    @property
+    def matched(self) -> bool:
+        return bool(self.samples) and all(
+            sample.matched for sample in self.samples
+        )
 
     @property
     def matched_count(self) -> int:
@@ -100,7 +105,9 @@ class CalibrationReport:
 
     def payload(self) -> dict[str, object]:
         return {
-            "matched": self.matched_count,
+            "case": self.case_id,
+            "matched": self.matched,
+            "samplesMatched": self.matched_count,
             "samples": len(self.samples),
             "durationSeconds": round(self.duration_s, 3),
             "tokensIn": self.tokens_in,
@@ -112,7 +119,7 @@ class CalibrationReport:
 
     def markdown(self) -> str:
         lines = [
-            "# V4 judge calibration — case A",
+            f"# V4 judge calibration — case {self.case_id}",
             "",
             (
                 f"- Samples matched: **{self.matched_count}"
@@ -159,24 +166,22 @@ class CalibrationReport:
         return path
 
 
-def calibrate_case_a(
+def calibrate_case(
+    case: QualityCase,
     client: JudgeClient,
     *,
-    fixture: CaseAFixture | None = None,
     secret: str = "",
 ) -> CalibrationReport:
-    """Judge both fixtures with one prompt and compare each point to its label."""
-    fixture = fixture or load_fixture()
+    """Judge every sample of one case and compare each point to its label."""
     started = time.monotonic()
     samples: list[SampleCalibration] = []
-    for sample in SAMPLES:
-        labels = fixture.labels.get(sample, {})
+    for sample in case.samples:
         verdict = judge_artifact(
-            task=fixture.task,
-            materials=fixture.judge_materials(),
-            expected_points=fixture.expected_points,
-            artifact_id=sample,
-            artifact=fixture.artifacts[sample],
+            task=case.task,
+            materials=case.judge_materials(),
+            expected_points=case.expected_points,
+            artifact_id=sample.name,
+            artifact=sample.artifact,
             task_compliance=fixture_task_compliance(),
             client=client,
             secret=secret,
@@ -185,7 +190,7 @@ def calibrate_case_a(
         points = tuple(
             PointMatch(
                 point=point,
-                expected=str(labels.get(point, "")),
+                expected=sample.labels.get(point, ""),
                 actual=actual.get(point, ""),
                 reason=next(
                     (
@@ -198,10 +203,23 @@ def calibrate_case_a(
             )
             for point in POINT_IDS
         )
-        samples.append(SampleCalibration(sample, verdict, points))
+        samples.append(SampleCalibration(sample.name, verdict, points))
     return CalibrationReport(
+        case_id=case.id,
         samples=tuple(samples),
         duration_s=time.monotonic() - started,
+    )
+
+
+def calibrate_cases(
+    cases: tuple[QualityCase, ...],
+    client: JudgeClient,
+    *,
+    secret: str = "",
+) -> tuple[CalibrationReport, ...]:
+    """Calibrate every case with one judge transport."""
+    return tuple(
+        calibrate_case(case, client, secret=secret) for case in cases
     )
 
 
@@ -209,5 +227,6 @@ __all__ = [
     "CalibrationReport",
     "PointMatch",
     "SampleCalibration",
-    "calibrate_case_a",
+    "calibrate_case",
+    "calibrate_cases",
 ]
