@@ -3,8 +3,9 @@
 An agent that turns curated sources into a persistent Markdown wiki.
 
 NOTEAGENT reads material you have chosen — web pages, PDFs, Office documents, images, Markdown —
-and compiles it into linked wiki pages. Compilation always passes through an explicit human gate:
-the program proposes pages, you decide what gets written.
+and compiles it into linked wiki pages. Writing always passes through an explicit publish step:
+the agent composes a draft in the project's writing state, and nothing reaches the wiki until
+the agent publishes it on your instruction.
 
 > **Status:** early development. The Python core and the desktop app run end to end on Windows.
 > Interfaces and on-disk formats may still change.
@@ -16,14 +17,15 @@ the program proposes pages, you decide what gets written.
         ↓  you pick what to keep
 [workbench]         saved sources, preview the original, select the passages you want
         ↓  selected passages
-[compile]           plan topics → confirm pages → write
+[write]             agent composes sections → write_wiki publishes on your ask
 [wiki]              Markdown pages with sources[] pointing back to the exact passages
 ```
 
 Design rules the implementation holds to:
 
 - `raw/` is **immutable** — the model reads it, never writes it.
-- The **human decides what counts as a source**; only selected passages reach a prompt.
+- Material enters through typed tools (`select_page`, `select_frame`); a person can edit
+  what the agent selected in the writing state.
 - Pages carry `sources[]` locators (`path#block_id`) so every claim points back to a passage.
 - `wiki/index.md` and `wiki/log.md` are maintained deterministically by the program.
 
@@ -31,7 +33,7 @@ Design rules the implementation holds to:
 
 - Python 3.12 (a conda environment is the supported path)
 - Node.js 20.19+ or 22.12+ for the frontend and the Electron shell (Vite's requirement)
-- An OpenAI-compatible LLM endpoint (for analysis, planning and writing)
+- An OpenAI-compatible LLM endpoint (for analysis and writing)
 - Optional: a search API key (Brave or Serper) for source discovery
 
 ## Getting started
@@ -155,8 +157,8 @@ node scripts/smoke-packaged.mjs   # start the packaged core and check it end to 
 
 The installer lands in `build/installer/`. The smoke runs the core from
 `build/runtime/core`, so run a build first; it starts that core, migrates an old chat at
-startup, asks `/api/v1/health` for the version, loads the built interface, and runs one chat +
-wait flow with a scripted model. No provider key or network is involved.
+startup, asks `/api/v1/health` for the version, loads the built interface, and runs one
+chat flow (two scripted turns) with a scripted model. No provider key or network is involved.
 
 The packaged app keeps its files apart:
 
@@ -174,7 +176,7 @@ The menu opens each of those folders; the same menu follows the system language.
 
 | Path | What it is |
 |------|-----------|
-| `src/noteagent/` | The Python core: ingest, wiki compilation, chat, acquisition, HTTP API |
+| `src/noteagent/` | The Python core: ingest, writing, sessions/agent, acquire, HTTP API |
 | `web/` | The frontend (Vite + React + TypeScript) |
 | `desktop/` | The Electron shell: application window, startup screens, guest browser |
 | `scripts/` | Release build: the interface copied into the Python package, the bundled Python runtime, the order the two must be done in, and the packaged-core smoke |
