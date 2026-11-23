@@ -369,6 +369,20 @@ class CaseRun:
     def note(self, text: str) -> None:
         self.log.append(text)
 
+    def preserve(self, target: Path) -> None:
+        """Copy this case's project and event logs into *target*.
+
+        The caller creates the target; the project carries the session
+        transcripts, and the events beside them are copied out for reading.
+        """
+        shutil.copytree(self.layout.root, target / "project")
+        sessions = self.layout.sessions_dir
+        if sessions.is_dir():
+            event_target = target / "events"
+            event_target.mkdir(parents=True, exist_ok=True)
+            for path in sorted(sessions.glob("*.events.jsonl")):
+                shutil.copyfile(path, event_target / path.name)
+
     def close(self) -> None:
         if self.api is not None:
             try:
@@ -444,13 +458,7 @@ def _preserve(
         shutil.rmtree(target)
     target.mkdir(parents=True)
     if run is not None:
-        shutil.copytree(run.layout.root, target / "project")
-        sessions = run.layout.sessions_dir
-        if sessions.is_dir():
-            event_target = target / "events"
-            event_target.mkdir()
-            for path in sorted(sessions.glob("*.events.jsonl")):
-                shutil.copyfile(path, event_target / path.name)
+        run.preserve(target)
     payload: dict[str, object] = {
         "case": result.name,
         "title": result.title,

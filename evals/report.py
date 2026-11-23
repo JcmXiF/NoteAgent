@@ -58,6 +58,16 @@ class Check:
                 f"unknown check category: {self.category!r}"
             )
 
+    def to_payload(self) -> dict[str, object]:
+        """The check as a report entry."""
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "detail": self.detail,
+            "category": self.category,
+            "location": self.location,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class FirstError:
@@ -193,14 +203,7 @@ class EvalReport:
                     "passed": result.passed,
                     "durationSeconds": round(result.duration_s, 3),
                     "checks": [
-                        {
-                            "name": item.name,
-                            "passed": item.passed,
-                            "detail": item.detail,
-                            "category": item.category,
-                            "location": item.location,
-                        }
-                        for item in result.checks
+                        item.to_payload() for item in result.checks
                     ],
                     "firstError": (
                         result.first_error.to_payload()
