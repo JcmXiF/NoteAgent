@@ -24,10 +24,8 @@ from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
 #: What a call is allowed to touch. ``state`` is the project's writing state and
-#: ``disk`` is a wiki page write; both are serialized, not network or human acts.
-SideEffect: TypeAlias = Literal[
-    "read", "network", "human", "state", "disk"
-]
+#: ``disk`` is a wiki page write; both are serialized, not network acts.
+SideEffect: TypeAlias = Literal["read", "network", "state", "disk"]
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -51,8 +49,6 @@ OBSERVATION_FIELDS = (
     "omitted",
     "truncated",
     "not_source",
-    "needs_human",
-    "job",
     "fidelity",
     "http_status",
     "action",
@@ -218,7 +214,7 @@ class ToolRegistry:
         """Run one round's calls, answering in the asked order.
 
         Read/network calls run at the same time. A round that includes a state
-        (or human) call runs in the model's order instead: a state write must
+        call runs in the model's order instead: a state write must
         not race the read that follows it or another state write beside it.
         The model writes its calls in the order it means them; the log keeps
         that order even when a later call finishes first, so the prompt and the
@@ -230,7 +226,7 @@ class ToolRegistry:
         prepared = [self._prepare(call.name, call.arguments) for call in calls]
         if any(
             isinstance(item, tuple)
-            and item[0].side_effect in {"state", "disk", "human"}
+            and item[0].side_effect in {"state", "disk"}
             for item in prepared
         ):
             results: list[ToolResult] = []

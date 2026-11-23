@@ -59,8 +59,9 @@ class WriteFileBlocksTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             layout = default_layout(tmp)
             (layout.root / "wiki").mkdir(parents=True, exist_ok=True)
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as caught:
                 resolve_wiki_write_path(layout, "../secret.md")
+            self.assertIn("wiki/", str(caught.exception))
 
     def test_dry_run_does_not_touch_disk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

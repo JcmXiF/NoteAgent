@@ -17,6 +17,7 @@ from noteagent.project.init import init_project
 from noteagent.writing.state import (
     WritingState,
     WritingStateBusy,
+    WRITER_TTL_S,
     WritingStateConflict,
     WritingStateStore,
     draft_pages,
@@ -244,8 +245,13 @@ class WritingEditTests(unittest.TestCase):
         self.store.save(_state())
         held = self.store.ensure_writer("agent", "run-1")
 
-        with self.assertRaises(WritingStateBusy):
+        with self.assertRaises(WritingStateBusy) as caught:
             self.store.save_human(held.state_version, self.changes())
+        self.assertIn("agent run-1", str(caught.exception))
+        self.assertIn(
+            f"retry after {WRITER_TTL_S // 60} minutes",
+            str(caught.exception),
+        )
 
         self.assertEqual(
             self.store.load().searches[0]["hits"][0]["title"],

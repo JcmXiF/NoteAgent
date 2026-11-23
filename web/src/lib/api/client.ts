@@ -352,7 +352,6 @@ export type ObservationPayload = {
   omitted?: string;
   truncated?: boolean;
   not_source?: boolean;
-  job?: string;
   fidelity?: string;
   http_status?: number;
   /** For a write action: which one it was, and whether it actually wrote. */

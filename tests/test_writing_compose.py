@@ -555,6 +555,26 @@ class WritingComposeTests(unittest.TestCase):
         self.assertTrue(result.meta.get("error"))
         self.assertIn("baseDraftVersion", result.content)
 
+    def test_a_missing_draft_names_the_existing_ones(self) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        section = {
+            "id": "definition",
+            "heading": "定义",
+            "citations": [frame_id],
+        }
+
+        empty = self.compose(tools, [section], base=1)
+        self.assertTrue(empty.meta.get("error"))
+        self.assertIn("draft pages: none", empty.content)
+
+        self.compose(tools, [section], wiki=WIKI_FILE)
+        result = self.compose(
+            tools, [section], base=1, wiki="concepts/其他"
+        )
+        self.assertTrue(result.meta.get("error"))
+        self.assertIn(f"draft pages: {WIKI_FILE}", result.content)
+
     def test_spellings_of_one_page_share_one_draft(self) -> None:
         tools = self.tools()
         frame_id = self.frame(tools)

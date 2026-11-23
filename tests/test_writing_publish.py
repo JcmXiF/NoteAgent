@@ -242,6 +242,14 @@ class WritingPublishTests(unittest.TestCase):
         self.assertIn("original", result.content)
         self.assertFalse(self.wiki_path().exists())
 
+    def test_publishing_without_a_draft_names_the_drafts(self) -> None:
+        tools = writing_tools(self.layout)
+
+        result = write_draft(tools, draft_version=1)
+
+        self.assertTrue(result.meta.get("error"))
+        self.assertIn("draft pages: none", result.content)
+
     def test_a_stale_draft_version_is_refused(self) -> None:
         tools = writing_tools(self.layout)
         _page_id, _frame_id, _draft_version = self.prepared(tools)

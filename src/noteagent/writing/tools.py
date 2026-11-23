@@ -35,6 +35,7 @@ from noteagent.writing.state import (
     WritingState,
     WritingStateStore,
     canonical_wiki_file,
+    draft_key_text,
     draft_page_for,
     draft_pages,
     draft_section_for,
@@ -244,7 +245,10 @@ def get_state_tool(layout: ProjectLayout) -> ToolSpec:
             section_id = str(arguments.get("sectionId") or "").strip()
             page = draft_page_for(state.draft, wiki_file)
             if page is None:
-                raise ValueError(f"no such draft page: {wiki_file}")
+                raise ValueError(
+                    f"no such draft page: {wiki_file}; draft pages: "
+                    f"{draft_key_text(draft_pages(state.draft))}"
+                )
             item = draft_section_for(page, section_id)
             if item is None:
                 raise ValueError(f"no such section: {section_id}")

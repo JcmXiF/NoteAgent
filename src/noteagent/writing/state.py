@@ -613,7 +613,9 @@ class WritingStateStore:
             if index is None:
                 if base_version != 0:
                     raise ValueError(
-                        f"no draft page {key} at version {base_version}"
+                        f"no draft page {key} at version "
+                        f"{base_version}; draft pages: "
+                        f"{draft_key_text(pages)}"
                     )
                 pages.append(
                     {
@@ -869,7 +871,10 @@ class WritingStateStore:
             pages = [dict(item) for item in draft_pages(state.draft)]
             index = _page_index_for(pages, wiki_file)
             if index is None:
-                raise ValueError(f"no draft page: {wiki_file}")
+                raise ValueError(
+                    f"no draft page: {wiki_file}; draft pages: "
+                    f"{draft_key_text(pages)}"
+                )
             pages[index] = {
                 **page,
                 "status": "written",
@@ -1165,10 +1170,14 @@ def _material_suffix(material: str) -> str:
 
 def _busy_message(writer: Mapping[str, object] | None) -> str:
     record = writer or {}
-    return (
-        "the writing state is held by "
+    holder = (
         f"{record.get('kind') or 'a run'} "
-        f"{record.get('id') or ''}".rstrip()
+        f"{record.get('id') or ''}"
+    ).rstrip()
+    return (
+        f"the writing state is held by {holder}; wait for it to finish, "
+        f"or retry after {WRITER_TTL_S // 60} minutes when the lease goes "
+        "stale"
     )
 
 
@@ -1496,6 +1505,16 @@ def _page_for_url(
     return active if active is not None else failed
 
 
+def draft_key_text(pages: Sequence[Mapping[str, object]]) -> str:
+    """The draft page keys, joined for an actionable refusal."""
+    keys = [
+        str(page.get("wikiFile") or "")
+        for page in pages
+        if str(page.get("wikiFile") or "").strip()
+    ]
+    return ", ".join(keys) or "none"
+
+
 def canonical_wiki_file(value: str) -> str:
     """The one key for a wiki page: ``wiki/<slug>.md``.
 
@@ -1550,7 +1569,10 @@ def _checked_draft_page(
 ) -> Mapping[str, object]:
     page = draft_page_for(state.draft, wiki_file)
     if page is None:
-        raise ValueError(f"no draft page: {wiki_file}")
+        raise ValueError(
+            f"no draft page: {wiki_file}; draft pages: "
+            f"{draft_key_text(draft_pages(state.draft))}"
+        )
     current = row_version(page)
     if current != draft_version:
         raise ValueError(
@@ -1645,6 +1667,7 @@ __all__ = [
     "STATE_SCHEMA_VERSION",
     "STATE_WRITER",
     "WRITER_TTL_S",
+    "draft_key_text",
     "WRITING_ID",
     "WritingState",
     "WritingStateBusy",
