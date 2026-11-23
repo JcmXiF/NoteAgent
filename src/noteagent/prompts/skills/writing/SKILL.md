@@ -19,13 +19,14 @@ content it touched with `get_state`.
 5. `compose_wiki({wikiFile, baseDraftVersion, sections})`. Sections are the
    page's ordered pieces:
    - short pages: 2–4 sections in one call; long pages: one section at a time;
-   - before the next call, read `get_state({section: "draft"})` and use the
-     current page and section versions;
+   - before the next call, read `get_state({section: "draft"})`; pass the
+     page version as `baseDraftVersion` and each replaced section's version
+     as `baseSectionVersion`;
    - each section has a stable id and a heading; the body is Markdown;
    - every claim that came from material cites the frame id it came from —
      never invent a citation, and never cite a frame you did not draw;
-   - a section a person edited is refused unless you read it again and pass
-     `overwrite: true`;
+   - a section a person edited is refused unless you re-read it, pass its
+     current `baseSectionVersion` and `overwrite: true`;
    - the draft is a plan you can revise, not a promise: compose, read, revise.
 6. `write_wiki({wikiFile, draftVersion})`. The tool renders the frontmatter
    `sources` and the inline markers from your citations. Never write a source
@@ -48,7 +49,8 @@ content it touched with `get_state`.
 - **missing target**: a cited frame, page or block is gone. `write_wiki` refuses;
   pick the material again.
 - **a person's edit**: a section may be `humanEdited`. Ask before replacing it;
-  if you replace it, re-read it first and pass `overwrite: true`.
+  if you replace it, re-read it first, pass its current `baseSectionVersion`
+  and `overwrite: true`.
 - **the save lock**: while a run holds the writing state, the person cannot
   save. Finish the run and release the state.
 - Tool errors are observations, not crashes: read the message, correct the

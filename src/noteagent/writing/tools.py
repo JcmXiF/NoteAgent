@@ -97,9 +97,10 @@ _COMPOSE_WIKI_DESCRIPTION = (
     "Compose structured sections into the wiki draft. Each section has a stable "
     "id, heading, Markdown body and frame ids as citations; an existing id is "
     "replaced in place, a new id is inserted after `after` or appended. A "
-    "section a person edited is refused unless `overwrite` is true after you "
-    "read it again. Pass the draft page's current version as baseDraftVersion "
-    "(0 for a new page). The draft is state only; publishing is a later step. "
+    "section a person edited is refused unless you re-read it, pass its "
+    "current baseSectionVersion and set `overwrite`. Pass the draft page's "
+    "current version as baseDraftVersion (0 for a new page). The draft is "
+    "state only; publishing is a later step. "
     "Read the page list with get_state({section: 'draft'}) and one section "
     "with section: 'section'."
 )
@@ -797,7 +798,7 @@ def compose_wiki_tool(
         _take_lease(layout, context, moment)
         raw_file = str(arguments["wikiFile"]).strip()
         wiki_file = canonical_wiki_file(raw_file)
-        base_version = arguments.get("baseDraftVersion", 0)
+        base_version = arguments["baseDraftVersion"]
         if (
             isinstance(base_version, bool)
             or not isinstance(base_version, int)
@@ -828,7 +829,9 @@ def compose_wiki_tool(
                         for frame_id in raw.get("citations", [])
                     ],
                     "after": str(raw.get("after") or "").strip(),
-                    "baseVersion": raw.get("baseVersion"),
+                    "baseSectionVersion": raw.get(
+                        "baseSectionVersion"
+                    ),
                 }
             )
         check_cancelled(context.cancel)
@@ -910,12 +913,12 @@ def compose_wiki_tool(
                                 "type": "string",
                                 "minLength": 1,
                             },
-                            "baseVersion": {
+                            "baseSectionVersion": {
                                 "type": "integer",
                                 "minimum": 0,
                                 "description": (
-                                    "The section version the caller read; "
-                                    "omit for a new section"
+                                    "The version you read of an existing "
+                                    "section; omit only for a new section"
                                 ),
                             },
                         },
@@ -924,7 +927,11 @@ def compose_wiki_tool(
                     },
                 },
             },
-            "required": ["wikiFile", "sections"],
+            "required": [
+                "wikiFile",
+                "baseDraftVersion",
+                "sections",
+            ],
             "additionalProperties": False,
         },
         side_effect="state",

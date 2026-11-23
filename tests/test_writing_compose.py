@@ -156,6 +156,7 @@ class WritingComposeTests(unittest.TestCase):
                     "heading": "定义",
                     "body": "新正文",
                     "citations": [frame_id],
+                    "baseSectionVersion": 2,
                 }
             ],
             base=2,
@@ -171,6 +172,7 @@ class WritingComposeTests(unittest.TestCase):
                     "heading": "定义",
                     "body": "新正文",
                     "citations": [frame_id],
+                    "baseSectionVersion": 2,
                 }
             ],
             base=2,
@@ -285,6 +287,7 @@ class WritingComposeTests(unittest.TestCase):
                     "heading": "定义",
                     "body": "新正文",
                     "citations": [frame_id],
+                    "baseSectionVersion": 1,
                 }
             ],
             base=2,
@@ -465,18 +468,92 @@ class WritingComposeTests(unittest.TestCase):
                     "heading": "定义",
                     "body": "二",
                     "citations": [frame_id],
-                    "baseVersion": 0,
+                    "baseSectionVersion": 0,
                 }
             ],
             base=1,
         )
 
         self.assertTrue(result.meta.get("error"))
-        self.assertIn("section definition", result.content)
+        self.assertIn(
+            "section definition is at version 1", result.content
+        )
+        self.assertIn("you read 0", result.content)
         page = draft_pages(WritingStateStore(self.layout).load().draft)[0]
         section = draft_sections(page)[0]
         self.assertEqual(section["body"], "一")
         self.assertEqual(section["version"], 1)
+
+    def test_replacing_a_section_without_its_version_is_refused(
+        self,
+    ) -> None:
+        tools = self.tools()
+        frame_id = self.frame(tools)
+        self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "一",
+                    "citations": [frame_id],
+                }
+            ],
+        )
+
+        result = self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "二",
+                    "citations": [frame_id],
+                }
+            ],
+            base=1,
+        )
+
+        self.assertTrue(result.meta.get("error"))
+        self.assertIn("pass baseSectionVersion 1", result.content)
+        forced = self.compose(
+            tools,
+            [
+                {
+                    "id": "definition",
+                    "heading": "定义",
+                    "body": "二",
+                    "citations": [frame_id],
+                }
+            ],
+            base=1,
+            overwrite=True,
+        )
+        self.assertTrue(forced.meta.get("error"))
+        self.assertIn(
+            "pass baseSectionVersion 1", forced.content
+        )
+        page = draft_pages(WritingStateStore(self.layout).load().draft)[0]
+        self.assertEqual(draft_sections(page)[0]["body"], "一")
+
+    def test_compose_requires_base_draft_version(self) -> None:
+        tools = self.tools()
+
+        result = tools.dispatch(
+            "compose_wiki",
+            json.dumps(
+                {
+                    "wikiFile": WIKI_FILE,
+                    "sections": [
+                        {"id": "definition", "heading": "定义"}
+                    ],
+                }
+            ),
+            ToolContext("s1"),
+        )
+
+        self.assertTrue(result.meta.get("error"))
+        self.assertIn("baseDraftVersion", result.content)
 
     def test_spellings_of_one_page_share_one_draft(self) -> None:
         tools = self.tools()
@@ -496,7 +573,7 @@ class WritingComposeTests(unittest.TestCase):
 
         second = self.compose(
             tools,
-            [section],
+            [{**section, "baseSectionVersion": 1}],
             base=1,
             wiki="[[wiki/concepts/信息熵.md]]",
         )
@@ -523,7 +600,10 @@ class WritingComposeTests(unittest.TestCase):
         store.save(replace(state, draft={"pages": [page]}))
 
         result = self.compose(
-            tools, [section], base=1, wiki="concepts/信息熵"
+            tools,
+            [{**section, "baseSectionVersion": 1}],
+            base=1,
+            wiki="concepts/信息熵",
         )
 
         self.assertFalse(result.meta.get("error"), result.content)

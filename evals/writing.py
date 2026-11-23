@@ -833,7 +833,7 @@ def writing_human_edit_and_conflict(run: CaseRun) -> None:
         "id": "definition",
         "heading": "定义",
         "citations": ["frame-1"],
-        "baseVersion": 2,
+        "baseSectionVersion": 2,
     }
     next_call = iter(range(1, 7))
 

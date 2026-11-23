@@ -584,10 +584,11 @@ class WritingStateStore:
     ]:
         """Merge sections into one draft page, checking its base version.
 
-        An existing section id is replaced where it stands (its ``baseVersion``
-        must match); a new id is inserted after its ``after`` anchor or
-        appended. A section a person edited is refused unless the caller passes
-        ``overwrite`` after re-reading it. Frame ids are resolved here, so the
+        An existing section id is replaced where it stands only when the
+        caller passes the section version it read as ``baseSectionVersion``;
+        a new id is inserted after its ``after`` anchor or appended. A section
+        a person edited is refused unless the caller passes ``overwrite`` in
+        addition to the matching version. Frame ids are resolved here, so the
         citation pins the frame version and block ids the page was written
         from. The page's version moves on by one, and a caller built on an
         older page is refused.
@@ -656,14 +657,15 @@ class WritingStateStore:
                             ),
                         }
                     )
-                base_section = raw.get("baseVersion")
-                if base_section is not None and (
-                    isinstance(base_section, bool)
-                    or not isinstance(base_section, int)
-                    or base_section < 0
+                base_section_version = raw.get("baseSectionVersion")
+                if base_section_version is not None and (
+                    isinstance(base_section_version, bool)
+                    or not isinstance(base_section_version, int)
+                    or base_section_version < 0
                 ):
                     raise ValueError(
-                        "baseVersion must be a non-negative integer"
+                        "baseSectionVersion must be a non-negative "
+                        "integer"
                     )
                 existing = _section_index(
                     current_sections, section_id
@@ -671,14 +673,17 @@ class WritingStateStore:
                 if existing is not None:
                     old = current_sections[existing]
                     old_version = row_version(old)
-                    if (
-                        base_section is not None
-                        and old_version != base_section
-                    ):
+                    if base_section_version is None:
                         raise ValueError(
                             f"section {section_id} is at version "
-                            f"{old_version}; the caller read "
-                            f"{base_section}"
+                            f"{old_version}; read it again and pass "
+                            f"baseSectionVersion {old_version}"
+                        )
+                    if old_version != base_section_version:
+                        raise ValueError(
+                            f"section {section_id} is at version "
+                            f"{old_version}; you read "
+                            f"{base_section_version}"
                         )
                     if old.get("humanEdited") and not overwrite:
                         raise ValueError(
@@ -696,10 +701,10 @@ class WritingStateStore:
                     }
                     current_sections[existing] = new
                 else:
-                    if base_section not in (None, 0):
+                    if base_section_version not in (None, 0):
                         raise ValueError(
                             f"new section {section_id} cannot have "
-                            f"baseVersion {base_section}"
+                            f"baseSectionVersion {base_section_version}"
                         )
                     after = str(raw.get("after") or "").strip()
                     new = {
