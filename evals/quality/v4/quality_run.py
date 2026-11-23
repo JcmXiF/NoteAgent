@@ -1,9 +1,9 @@
 """Run the V4 quality arm: judge calibration, then live cases if asked.
 
-Calibration is one judge call per signed sample and costs little. ``--case-a``
-and ``--case-b`` also run the live agent on that case's raw sources, which costs
-model tokens. Both are record-only: the report keeps the per-point verdicts,
-and a failure keeps its project under the failure library.
+Calibration is one judge call per signed sample and costs little. ``--live``
+also runs the named live cases, which costs model tokens. Both are record-only:
+the report keeps the per-point verdicts, and a failure keeps its project under
+the failure library.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from evals.quality.v4.calibration import (
 )
 from evals.quality.v4.case_a import CASE_A
 from evals.quality.v4.case_b import CASE_B
+from evals.quality.v4.case_c import CASE_C
+from evals.quality.v4.case_d import CASE_D
 from evals.quality.v4.case_run import CaseRunResult, run_case
 from evals.quality.v4.runner import V4_REPORT_VERSION, new_run_id
 from evals.report import markdown_cell
@@ -30,7 +32,7 @@ from evals.support import in_ci
 
 from noteagent.llm.config import LlmConfig
 
-CASES = (CASE_A, CASE_B)
+CASES = (CASE_A, CASE_B, CASE_C, CASE_D)
 CaseRunner = Callable[..., CaseRunResult]
 
 
@@ -182,8 +184,8 @@ class _QualityReport:
                     "",
                     f"# Case {case.case_id}",
                     "",
-                    f"- Page: "
-                    f"{'written' if case.artifact.strip() else 'missing'}",
+                    f"- Artifact: "
+                    f"{'present' if case.artifact.strip() else 'missing'}",
                     f"- Tokens in/out: "
                     f"{case.tokens_in}/{case.tokens_out}",
                     "",

@@ -1,14 +1,15 @@
-"""Run one V4 quality case through the real tools, then judge the page.
+"""Run one V4 quality case through the real tools, then judge its artifact.
 
-The search and fetch are local: every candidate is a fixture, and the fetch
-serves the fixture's HTML, so the model still has to select, frame, compose and
-publish through the product's own tools. The deterministic checks cover the
-page's path, its citations to every allowed original, its shape and language,
-and whether the final answer names the page.
+A page-writing case searches and fetches local fixture captures, then selects,
+frames, composes and publishes through the product's tools. An answer case
+seeds the real wiki pages, searches and reads them, then answers in the chat.
+The deterministic checks cover only the requested shape; the judge grades the
+content against the allowed material and the expected points.
 """
 
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import traceback
@@ -23,7 +24,11 @@ from evals.quality.judge_client import (
     conversation_from,
     make_judge_client,
 )
-from evals.quality.v4.case_spec import QualityCase
+from evals.quality.v4.case_spec import (
+    ANSWER_KIND,
+    PAGE_KIND,
+    QualityCase,
+)
 from evals.quality.v4.judge import (
     TaskCompliance,
     V4JudgeVerdict,
@@ -98,9 +103,23 @@ class CaseRunResult:
 
 
 def shape_checks(
+    case: QualityCase,
+    artifact: str,
+    final_text: str = "",
+    *,
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+) -> tuple[Check, ...]:
+    """The deterministic task-compliance checks for one artifact."""
+    if case.kind == PAGE_KIND:
+        return _page_checks(case, artifact, final_text)
+    if case.kind == ANSWER_KIND:
+        return _answer_checks(case, artifact, entries)
+    raise ValueError(f"unknown case kind: {case.kind!r}")
+
+
+def _page_checks(
     case: QualityCase, page_text: str, final_text: str
 ) -> tuple[Check, ...]:
-    """The deterministic task-compliance checks for one page."""
     parsed = parse_page(page_text) if page_text else None
     sources = (
         parse_inline_list(parsed.fields.get("sources", ""))
@@ -118,7 +137,7 @@ def shape_checks(
     def check(name: str, passed: bool, detail: str = "") -> Check:
         return Check(name, passed, detail, PUBLISH)
 
-    language = any("一" <= char <= "鿿" for char in body)
+    language = _has_cjk(body)
     return (
         check(
             "the page exists at the requested path",
@@ -153,6 +172,91 @@ def shape_checks(
     )
 
 
+def _answer_checks(
+    case: QualityCase,
+    final_text: str,
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> tuple[Check, ...]:
+    language = _has_cjk(final_text)
+    calls = _tool_calls(entries)
+    searched = any(name == "search" for name, _args in calls)
+    read = {
+        _normalize_slug(args.get("slug"))
+        for name, args in calls
+        if name == "wiki_read"
+    }
+    required = {
+        slug for slug in case.required_reads if not _was_read(slug, read)
+    }
+    return (
+        Check(
+            "an answer is present",
+            bool(final_text.strip()),
+            "" if final_text.strip() else "the run produced no answer",
+            PUBLISH,
+        ),
+        Check(
+            "the answer is in the task's language",
+            language,
+            "" if language else "no CJK text",
+            PUBLISH,
+        ),
+        Check(
+            "the agent searched the wiki",
+            searched,
+            "no search call",
+            PUBLISH,
+        ),
+        Check(
+            "the agent read the pages the task names",
+            not required,
+            "not read: " + ", ".join(sorted(required)),
+            PUBLISH,
+        ),
+    )
+
+
+def _tool_calls(
+    entries: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> list[tuple[str, dict[str, Any]]]:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    for entry in entries:
+        if entry.get("role") != "assistant":
+            continue
+        for raw in entry.get("toolCalls") or []:
+            if not isinstance(raw, dict):
+                continue
+            arguments = raw.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append((str(raw.get("name") or ""), arguments))
+    return calls
+
+
+def _normalize_slug(value: object) -> str:
+    text = str(value or "").strip()
+    if text.startswith("[[") and text.endswith("]]"):
+        text = text[2:-2]
+    if text.startswith("wiki/"):
+        text = text[5:]
+    if text.endswith(".md"):
+        text = text[:-3]
+    return text
+
+
+def _was_read(required: str, read: set[str]) -> bool:
+    bare = required.rsplit("/", 1)[-1]
+    return any(
+        slug == required or slug.rsplit("/", 1)[-1] == bare
+        for slug in read
+    )
+
+
 def run_case(
     case: QualityCase,
     config: LlmConfig,
@@ -162,7 +266,37 @@ def run_case(
     model: ModelClient | None = None,
     judge_client: JudgeClient | None = None,
 ) -> CaseRunResult:
-    """Run one case through the real tools, then judge its page."""
+    """Run one case through the real tools, then judge its artifact."""
+    if case.kind == PAGE_KIND:
+        return _run_page_case(
+            case,
+            config,
+            failures_root=failures_root,
+            run_id=run_id,
+            model=model,
+            judge_client=judge_client,
+        )
+    if case.kind == ANSWER_KIND:
+        return _run_answer_case(
+            case,
+            config,
+            failures_root=failures_root,
+            run_id=run_id,
+            model=model,
+            judge_client=judge_client,
+        )
+    raise ValueError(f"unknown case kind: {case.kind!r}")
+
+
+def _run_page_case(
+    case: QualityCase,
+    config: LlmConfig,
+    *,
+    failures_root: Path,
+    run_id: str,
+    model: ModelClient | None,
+    judge_client: JudgeClient | None,
+) -> CaseRunResult:
     started = time.monotonic()
     tmp = Path(tempfile.mkdtemp(prefix=f"noteagent-v4-case-{case.id}-"))
     run: CaseRun | None = None
@@ -172,32 +306,30 @@ def run_case(
     final_text = ""
     verdict = V4JudgeVerdict(error="the run did not reach the judge")
     checks: tuple[Check, ...] = (
-        Check(
-            "the case started",
-            False,
-            "it did not start",
-            PUBLISH,
-        ),
+        Check("the case started", False, "it did not start", PUBLISH),
     )
     try:
         run = CaseRun(tmp, pages=())
         agent_config = replace(config, temperature=AGENT_TEMPERATURE)
         raw_model = model or OpenAIModelClient(agent_config)
         captures = {
-            source.url: source.capture for source in case.sources
+            material.url: material.capture
+            for material in case.materials
+            if material.capture is not None
         }
 
         def search(_query: str) -> list[CandidateCard]:
             return [
                 CandidateCard(
-                    title=source.title,
-                    url=source.url,
-                    site=urlsplit(source.url).hostname or "",
+                    title=material.title,
+                    url=material.url,
+                    site=urlsplit(material.url).hostname or "",
                     snippet="",
                     why="",
                     via="eval",
                 )
-                for source in case.sources
+                for material in case.materials
+                if material.capture is not None
             ]
 
         def fetch(url: str) -> Capture:
@@ -217,8 +349,7 @@ def run_case(
         )
         session = api.create_session(title=f"case-{case.id}")
         api.query(session, case.task)
-        entries = api.entries(session)
-        final_text = _final_text(entries)
+        final_text = _final_text(api.entries(session))
         page = run.layout.root / case.wiki_file
         artifact = (
             page.read_text(encoding="utf-8") if page.is_file() else ""
@@ -262,11 +393,115 @@ def run_case(
             tokens_out=counter.tokens_out,
             error=error,
         )
+    return _finish_case(
+        case,
+        run,
+        result,
+        failures_root=failures_root,
+        run_id=run_id,
+        tmp=tmp,
+    )
+
+
+def _run_answer_case(
+    case: QualityCase,
+    config: LlmConfig,
+    *,
+    failures_root: Path,
+    run_id: str,
+    model: ModelClient | None,
+    judge_client: JudgeClient | None,
+) -> CaseRunResult:
+    started = time.monotonic()
+    tmp = Path(tempfile.mkdtemp(prefix=f"noteagent-v4-case-{case.id}-"))
+    run: CaseRun | None = None
+    counter = UsageCounter()
+    error = ""
+    final_text = ""
+    verdict = V4JudgeVerdict(error="the run did not reach the judge")
+    checks: tuple[Check, ...] = (
+        Check("the case started", False, "it did not start", PUBLISH),
+    )
+    try:
+        run = CaseRun(tmp, pages=())
+        for material in case.materials:
+            run.write_raw_page(
+                material.id, material.text.encode("utf-8")
+            )
+        agent_config = replace(config, temperature=AGENT_TEMPERATURE)
+        raw_model = model or OpenAIModelClient(agent_config)
+        api = run.start(
+            counter.wrap(raw_model),
+            model_name=agent_config.model,
+            seed_system_sections=True,
+            web_search=lambda _query: [],
+            web_fetch=_offline_fetch,
+        )
+        session = api.create_session(title=f"case-{case.id}")
+        api.query(session, case.task)
+        entries = api.entries(session)
+        final_text = _final_text(entries)
+        checks = shape_checks(case, final_text, entries=entries)
+        result = CaseRunResult(
+            case_id=case.id,
+            checks=checks,
+            artifact=final_text,
+            final_text=final_text,
+            verdict=verdict,
+            duration_s=time.monotonic() - started,
+            tokens_in=counter.tokens_in,
+            tokens_out=counter.tokens_out,
+        )
+        verdict = judge_artifact(
+            task=case.task,
+            materials=case.judge_materials(),
+            expected_points=case.expected_points,
+            artifact_id=f"case-{case.id} answer",
+            artifact=final_text or "(no answer)",
+            task_compliance=result.task_compliance(),
+            client=judge_client or make_judge_client(config),
+            secret=config.api_key,
+        )
+        result = replace(
+            result,
+            verdict=verdict,
+            duration_s=time.monotonic() - started,
+        )
+    except Exception:
+        error = traceback.format_exc()
+        result = CaseRunResult(
+            case_id=case.id,
+            checks=checks,
+            artifact=final_text,
+            final_text=final_text,
+            verdict=verdict,
+            duration_s=time.monotonic() - started,
+            tokens_in=counter.tokens_in,
+            tokens_out=counter.tokens_out,
+            error=error,
+        )
+    return _finish_case(
+        case,
+        run,
+        result,
+        failures_root=failures_root,
+        run_id=run_id,
+        tmp=tmp,
+    )
+
+
+def _finish_case(
+    case: QualityCase,
+    run: CaseRun | None,
+    result: CaseRunResult,
+    *,
+    failures_root: Path,
+    run_id: str,
+    tmp: Path,
+) -> CaseRunResult:
     if not result.passed:
         try:
-            target = (
-                failures_root / run_id / f"case-{case.id}"
-            )
+            target = failures_root / run_id / f"case-{case.id}"
             result = replace(result, artifacts=str(target))
             preserve_case(run, target, result.to_payload())
         except Exception as err:  # noqa: BLE001 - evidence is best effort
@@ -283,6 +518,14 @@ def run_case(
     finally:
         remove_tree(tmp)
     return result
+
+
+def _offline_fetch(_url: str) -> Capture:
+    raise ValueError("this case answers from the wiki only")
+
+
+def _has_cjk(text: str) -> bool:
+    return any("一" <= char <= "鿿" for char in text)
 
 
 def _final_text(entries: list[dict[str, Any]]) -> str:

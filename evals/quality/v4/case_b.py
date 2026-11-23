@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evals.quality.v4.case_spec import load_case
+from evals.quality.v4.case_spec import load_page_case
 
 CASE_DIR = Path(__file__).resolve().parent / "cases" / "B"
 WIKI_FILE = "wiki/熵-KL-互信息的关系.md"
@@ -21,7 +21,7 @@ ENTROPY_TITLE = "什么是信息熵、交叉熵和相对熵"
 MI_URL = "https://zh.wikipedia.org/wiki/互信息"
 MI_TITLE = "互信息"
 
-CASE_B = load_case(
+CASE_B = load_page_case(
     case_id="B",
     directory=CASE_DIR,
     wiki_file=WIKI_FILE,
