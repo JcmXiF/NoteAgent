@@ -5,12 +5,13 @@ Not named ``test_*``, so discovery treats it as a helper rather than a suite.
 
 from __future__ import annotations
 
+#: Why the old pipeline's start/advance tests are skipped after its retirement.
+OLD_PIPELINE_RETIRED = "the old pipeline no longer starts new runs"
+
 import threading
-from dataclasses import replace
 from datetime import datetime, timezone
 
 from noteagent.agent.events import DoneEvent, ObservationEvent, StatusEvent, TokenEvent
-from noteagent.agent.jobs import JobResult
 from noteagent.agent.model import (
     AssistantMessage,
     Message,
@@ -24,8 +25,6 @@ from noteagent.agent.model import (
 from noteagent.agent.runtime import RunResult
 from noteagent.agent.store import SessionSnapshot, SessionSummary
 from noteagent.agent.tools import ToolContext
-from noteagent.agent.wait import WaitState
-from noteagent.agent.wait_store import wait_status_for
 
 
 def old_chat_payload(
@@ -198,9 +197,6 @@ class FakeRuntime:
     def cancel(self, session_id: str) -> None:
         self.cancelled.append(session_id)
 
-    def wait_state(self, session_id: str) -> WaitState | None:
-        return None
-
     def is_busy(self, session_id: str) -> bool:
         return session_id in self.running
 
@@ -249,50 +245,3 @@ class FakeSessionStore:
     def delete(self, session_id: str) -> None:
         self.entries.pop(session_id, None)
         self.titles.pop(session_id, None)
-
-
-class FakeWaitStore:
-    """At most one wait per session, held in memory."""
-
-    def __init__(self) -> None:
-        self.waits: dict[str, WaitState] = {}
-
-    def current(self, session_id: str) -> WaitState | None:
-        return self.waits.get(session_id)
-
-    def propose(self, session_id: str, wait: WaitState) -> None:
-        self.waits[session_id] = wait
-
-    def enter(self, session_id: str, wait_id: str, job_id: str) -> None:
-        wait = self.waits[session_id]
-        self.waits[session_id] = replace(
-            wait, status="entered", job_id=job_id
-        )
-
-    def finish(self, session_id: str, wait_id: str, result: JobResult) -> None:
-        wait = self.waits[session_id]
-        self.waits[session_id] = replace(
-            wait,
-            status=wait_status_for(result),
-            result_summary=result.summary,
-            artifacts=result.artifacts,
-            error=result.error,
-        )
-
-    def cancel(self, session_id: str, wait_id: str, reason: str = "") -> None:
-        wait = self.waits[session_id]
-        self.waits[session_id] = replace(wait, status="cancelled")
-
-
-class FakeJobClient:
-    """Jobs are whatever a test put in the dictionary."""
-
-    def __init__(self) -> None:
-        self.results: dict[str, JobResult] = {}
-        self.cancelled: list[str] = []
-
-    def get(self, job_id: str) -> JobResult | None:
-        return self.results.get(job_id)
-
-    def cancel(self, job_id: str) -> None:
-        self.cancelled.append(job_id)

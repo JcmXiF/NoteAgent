@@ -8,7 +8,11 @@ when a test helper does.
 
 from __future__ import annotations
 
+import os
+import shutil
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 class FixedClock:
@@ -33,4 +37,39 @@ class SequentialIds:
         return f"{prefix}-{number}" if prefix else str(number)
 
 
-__all__ = ["FixedClock", "SequentialIds"]
+def remove_tree(path: Path) -> None:
+    """Remove a temporary project, retrying a handle that is still closing."""
+    for attempt in range(6):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 5:
+                raise
+            time.sleep(0.1)
+
+
+def env_flag(name: str) -> bool:
+    """Whether an environment flag is set to a true value, not just present."""
+    return os.environ.get(name, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def in_ci() -> bool:
+    """Whether the run is in CI; the quality eval refuses there."""
+    return env_flag("CI") or env_flag("GITHUB_ACTIONS")
+
+
+__all__ = [
+    "FixedClock",
+    "SequentialIds",
+    "env_flag",
+    "in_ci",
+    "remove_tree",
+]

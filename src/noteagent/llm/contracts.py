@@ -122,22 +122,6 @@ MODEL_CALLS: tuple[ModelCall, ...] = (
         ),
     ),
     ModelCall(
-        name="topic-map",
-        source="ingest/topic_map.py",
-        given=frozenset(
-            {"clips", "catalog", "wiki-index", "brief", "targets"}
-        ),
-        checks=(
-            PostCheck("known-collection-ids", "gate", frozenset({"clips", "catalog"})),
-            PostCheck("known-block-ids", "gate", frozenset({"clips"})),
-            # Reads the same list the request carries.
-            PostCheck("within-targets", "gate", frozenset({"targets"})),
-            PostCheck("write-atomic", "gate", frozenset({"clips"})),
-            PostCheck("cap-candidates", "clamp"),
-            PostCheck("infer-coverage", "clamp", frozenset({"clips"})),
-        ),
-    ),
-    ModelCall(
         name="page-blueprint",
         source="ingest/page_agents.py",
         given=frozenset(

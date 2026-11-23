@@ -3,8 +3,9 @@
 An agent that turns curated sources into a persistent Markdown wiki.
 
 NOTEAGENT reads material you have chosen — web pages, PDFs, Office documents, images, Markdown —
-and compiles it into linked wiki pages. Compilation always passes through an explicit human gate:
-the program proposes pages, you decide what gets written.
+and compiles it into linked wiki pages. Writing always passes through an explicit publish step:
+the agent composes a draft in the project's writing state, and nothing reaches the wiki until
+the agent publishes it on your instruction.
 
 > **Status:** early development. The Python core and the desktop app run end to end on Windows.
 > Interfaces and on-disk formats may still change.
@@ -16,14 +17,15 @@ the program proposes pages, you decide what gets written.
         ↓  you pick what to keep
 [workbench]         saved sources, preview the original, select the passages you want
         ↓  selected passages
-[compile]           plan topics → confirm pages → write
+[write]             agent composes sections → write_wiki publishes on your ask
 [wiki]              Markdown pages with sources[] pointing back to the exact passages
 ```
 
 Design rules the implementation holds to:
 
 - `raw/` is **immutable** — the model reads it, never writes it.
-- The **human decides what counts as a source**; only selected passages reach a prompt.
+- Material enters through typed tools (`select_page`, `select_frame`); a person can edit
+  what the agent selected in the writing state.
 - Pages carry `sources[]` locators (`path#block_id`) so every claim points back to a passage.
 - `wiki/index.md` and `wiki/log.md` are maintained deterministically by the program.
 
@@ -31,7 +33,7 @@ Design rules the implementation holds to:
 
 - Python 3.12 (a conda environment is the supported path)
 - Node.js 20.19+ or 22.12+ for the frontend and the Electron shell (Vite's requirement)
-- An OpenAI-compatible LLM endpoint (for analysis, planning and writing)
+- An OpenAI-compatible LLM endpoint (for analysis and writing)
 - Optional: a search API key (Brave or Serper) for source discovery
 
 ## Getting started
@@ -74,6 +76,7 @@ without touching the saved settings.
 |---|---|
 | `NOTEAGENT_LLM_BASE_URL`, `NOTEAGENT_LLM_API_KEY`, `NOTEAGENT_LLM_MODEL` | The model connection |
 | `NOTEAGENT_LLM_TEMPERATURE`, `NOTEAGENT_LLM_MAX_TOKENS`, `NOTEAGENT_LLM_TIMEOUT` | Generation parameters |
+| `NOTEAGENT_LLM_CONTEXT_WINDOW` | The model's context window for compaction (default 32000); an advanced environment override, not in the settings document |
 | `NOTEAGENT_SEARCH_PROVIDER`, `NOTEAGENT_SEARCH_API_KEY` | `brave`, `serper`, or `none` |
 | `NOTEAGENT_SEARCH_MODE` | `auto`, `native`, or `external` |
 | `NOTEAGENT_SEARCH_TIMEOUT`, `NOTEAGENT_SEARCH_COUNTRY`, `NOTEAGENT_SEARCH_LANG`, `NOTEAGENT_SEARCH_UI_LANG` | Search locale and limits |
@@ -154,8 +157,8 @@ node scripts/smoke-packaged.mjs   # start the packaged core and check it end to 
 
 The installer lands in `build/installer/`. The smoke runs the core from
 `build/runtime/core`, so run a build first; it starts that core, migrates an old chat at
-startup, asks `/api/v1/health` for the version, loads the built interface, and runs one chat +
-wait flow with a scripted model. No provider key or network is involved.
+startup, asks `/api/v1/health` for the version, loads the built interface, and runs one
+chat flow (two scripted turns) with a scripted model. No provider key or network is involved.
 
 The packaged app keeps its files apart:
 
@@ -173,7 +176,7 @@ The menu opens each of those folders; the same menu follows the system language.
 
 | Path | What it is |
 |------|-----------|
-| `src/noteagent/` | The Python core: ingest, wiki compilation, chat, acquisition, HTTP API |
+| `src/noteagent/` | The Python core: ingest, writing, sessions/agent, acquire, HTTP API |
 | `web/` | The frontend (Vite + React + TypeScript) |
 | `desktop/` | The Electron shell: application window, startup screens, guest browser |
 | `scripts/` | Release build: the interface copied into the Python package, the bundled Python runtime, the order the two must be done in, and the packaged-core smoke |
@@ -203,9 +206,11 @@ Bug fixes and small corrections are welcome as a pull request; a new feature is 
 first, since this project has a deliberately narrow idea of what it is. The checks to run before
 opening one — `unittest`, the behaviour evals, the Markdown checker,
 `typecheck`/`test`/`lint`/`build` — are listed in
-[`docs/development.md`](docs/development.md); CI runs the same commands. The evals run with
-`python -m evals` from the repository root; every case uses a temporary project and a scripted
-model, so no key or network is needed.
+[`docs/development.md`](docs/development.md); CI runs the mechanical checks, while the behaviour
+and quality evals are local-only. The behaviour evals run with `python -m evals` from the
+repository root; every case uses a temporary project and a scripted model, so no key or network is
+needed. The quality eval is local-only and calls a real model: `python -m evals.quality.v3.run`
+(CI refuses).
 
 - One concern per change, and do not reformat code you are not changing.
 - Logic that can be reasoned about without a browser gets a test next to it.

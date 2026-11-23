@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from evals.golden.dataset import GoldenQuery
-from noteagent.agent.wait import JOB_SOURCES
+from evals.golden.dataset import JOB_SOURCES
 
 _VALID_PAIRS = frozenset(
     (job, interface)

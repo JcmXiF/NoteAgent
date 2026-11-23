@@ -30,11 +30,9 @@ from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.agent.events import (
     DoneEvent,
     ErrorEvent,
-    JobResultEvent,
     ObservationEvent,
     RunEvent,
     StatusEvent,
-    WaitEvent,
 )
 from noteagent.agent.runtime import RunRef
 from noteagent.project.layout import ProjectLayout
@@ -48,10 +46,6 @@ TRACE_VERSION = 1
 #: A tool name is model output until the registry proves otherwise. Only a name
 #: that could be a registered tool is written down; anything else is "unknown".
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-
-#: The wait statuses that name a lifecycle event in the trace.
-_WAIT_STATUSES = frozenset({"proposed", "entered", "completed", "cancelled"})
-
 
 class SessionTrace:
     """A session's ``.events.jsonl``: append-only, best effort, content-free."""
@@ -113,22 +107,6 @@ def _safe_record(event: RunEvent) -> dict[str, object] | None:
         return {"type": "status", "step": event.step_id or ""}
     if isinstance(event, ObservationEvent):
         return _tool_record(event.observation)
-    if isinstance(event, WaitEvent):
-        status = event.wait.status
-        kind = f"wait_{status}" if status in _WAIT_STATUSES else "wait"
-        return {
-            "type": kind,
-            "waitId": event.wait.wait_id,
-            "job": event.wait.job,
-            "status": status,
-        }
-    if isinstance(event, JobResultEvent):
-        return {
-            "type": "job_result",
-            "waitId": event.wait_id,
-            "status": event.result.status,
-            "artifacts": len(event.result.artifacts),
-        }
     if isinstance(event, ErrorEvent):
         # An error ends the run in this kernel, so it is also the run's terminal
         # record. Only the code is written; the sentence can quote a provider.

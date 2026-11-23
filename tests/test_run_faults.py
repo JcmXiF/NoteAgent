@@ -265,35 +265,6 @@ class RunFaultTests(unittest.TestCase):
             )
         self.assertEqual(model.requests, [])
 
-    def test_a_wait_is_not_a_crash_resume(self) -> None:
-        session = self.session()
-        self.user(session)
-        self.start(session)
-        self.append(
-            session,
-            {
-                "type": "wait_proposed",
-                "id": "w1",
-                "waitId": "w1",
-                "job": "plan",
-                "interface": "source",
-                "completion": "start_plan",
-                "proposedAt": "2026-11-10T09:00:00Z",
-            },
-        )
-
-        found = recover_store(self.store, clock=FixedClock())
-        runtime, model = self.kernel("不该被调用")
-
-        self.assertEqual(found, ())
-        self.assertEqual(self.markers(session)[-1]["state"], "waiting")
-        self.assertIsNone(interrupted_run(self.store, session, "run-1"))
-        with self.assertRaises(ValueError):
-            runtime.execute(
-                RunResume(session, "run-1"), lambda _event: None
-            )
-        self.assertEqual(model.requests, [])
-
     def test_the_old_marker_is_never_rewritten(self) -> None:
         session = self.session()
         self.user(session)

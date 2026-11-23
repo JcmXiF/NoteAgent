@@ -37,6 +37,101 @@
       "label": "Browse",
       "hint": "Search the web and open pages in the built-in browser",
       "sidebar": "Search"
+    },
+    "writing": {
+      "label": "Writing",
+      "hint": "The agent's searches, selected pages, frames and draft",
+      "sidebar": "Writing state"
+    }
+  },
+  "writing": {
+    "title": "Writing state",
+    "version": "State version {{version}}",
+    "writer": "Writer: {{writer}}",
+    "noWriter": "No writer",
+    "loading": "Reading the writing state…",
+    "error": "The writing state could not be read.",
+    "retry": "Retry",
+    "empty": "Nothing here yet.",
+    "noProject": "Choose a project first.",
+    "attention": "Attention",
+    "noAttention": "Nothing needs attention.",
+    "search": {
+      "query": "Query: {{query}}",
+      "failed": "The search failed.",
+      "noHits": "No hits."
+    },
+    "pages": {
+      "fetching": "Fetching",
+      "ready": "Ready",
+      "failed": "Failed",
+      "blockCount": "{{count}} blocks"
+    },
+    "frames": {
+      "blockCount": "{{count}} blocks"
+    },
+    "draft": {
+      "pageMeta": "v{{version}} · {{status}}",
+      "status": {
+        "draft": "Draft",
+        "written": "Written"
+      }
+    },
+    "areas": {
+      "searches": "Search results",
+      "selectedPages": "Selected pages",
+      "frames": "Frames",
+      "draft": "Draft"
+    },
+    "draftCount": "{{pages}} pages, {{sections}} sections",
+    "save": "Save",
+    "saving": "Saving…",
+    "dirty": "Unsaved edits",
+    "saveError": "The writing state could not be saved.",
+    "discardUnsaved": "You have unsaved edits. Discard them?",
+    "reload": "Reload",
+    "notice": {
+      "busy": "A run is holding the writing state. Save when it ends.",
+      "conflict": "The writing state changed after you loaded it. Reload to compare; your edits are kept.",
+      "remote": "The writing state changed on the server while you edited."
+    },
+    "archive": "Archive current",
+    "archives": "Archived states",
+    "archivesEmpty": "No archived states. Archive the current one to start a new topic.",
+    "archiveError": "The writing state's archives could not be changed.",
+    "archiveSummary": "v{{version}} · {{searches}} searches · {{pages}} pages · {{frames}} frames · {{draft}} draft pages",
+    "activate": "Activate",
+    "edited": "Edited",
+    "node": {
+      "autoFrame": "Auto-select frames",
+      "framing": "Selecting frames…",
+      "done": "Frames selected",
+      "failed": "Auto-select frames failed.",
+      "activity": "Auto-select frames · {{page}}",
+      "step": "Select frames",
+      "unsaved": "Auto-select frames works on the saved state. You have unsaved writing-state edits. Start anyway?",
+      "blocked": "Auto-select frames did not finish."
+    },
+    "stale": {
+      "badge": "May be out of date",
+      "missingBadge": "Citation lost",
+      "frame_changed": "The frame changed after “{{heading}}” was written. Ask the agent to rewrite this section, then publish again.",
+      "page_changed": "The page changed after “{{heading}}” was written. Ask the agent to rewrite this section, then publish again.",
+      "frame_missing": "The frame “{{heading}}” cites is gone. Pick new material and rewrite this section.",
+      "page_missing": "The page “{{heading}}” cites is gone or not ready. Pick new material and rewrite this section.",
+      "blocks_missing": "The pinned blocks of “{{heading}}” are gone from the page. Pick new material and rewrite this section."
+    },
+    "unsaved": "You have unsaved writing-state edits. Save them first if the agent should see them. Send anyway?",
+    "unsavedBusy": "The agent is running and cannot see your unsaved writing-state edits.",
+    "edit": {
+      "hitTitle": "Hit title",
+      "hitUrl": "Hit URL",
+      "hitSnippet": "Hit snippet",
+      "pageTitle": "Page title",
+      "frameBlocks": "Block ids, comma separated",
+      "sectionHeading": "Section heading",
+      "sectionBody": "Section body",
+      "remove": "Remove"
     }
   },
   "nav": {
@@ -224,7 +319,6 @@
     },
     "storedHint": "Not stored yet. The page's text must be saved before pages can be written from it.",
     "fromRound": "from a deep search",
-    "task": "Writing task",
     "scope": {
       "label": "Which selections to show",
       "mine": "This search",
@@ -267,14 +361,10 @@
     "saveFailed": "Could not save what has been selected"
   },
   "pipeline": {
-    "intentLabel": "What should this run write?",
-    "intentPlaceholder": "One sentence is enough",
-    "start": "Start",
-    "cancel": "Stop",
-    "empty": "No run yet. Give it an intent to start one.",
-    "startFailed": "The pipeline could not be started.",
+    "retired": "The old pipeline no longer starts new runs. Write from the writing state.",
+    "goWriting": "Open the writing state",
+    "empty": "No old pipeline run yet.",
     "loadFailed": "The pipeline's state could not be read.",
-    "cancelFailed": "The run could not be stopped.",
     "status": {
       "running": "Running",
       "awaiting_confirmation": "Waiting for your confirmation",
@@ -304,17 +394,6 @@
       "compiled": "Compiled",
       "changed": "Changed",
       "dropped": "Dropped"
-    },
-    "query": {
-      "label": "Query",
-      "precise": "Keywords",
-      "model": "Model"
-    },
-    "materialMode": {
-      "label": "Material",
-      "auto": "Automatic",
-      "manual": "Manual",
-      "manualHint": "In manual mode, pick cards in Sources."
     },
     "restore": {
       "open": "Roll back this run",
@@ -625,9 +704,6 @@
     "aborted": "Stopped before this answer was finished.",
     "incomplete": "The model stream failed; this is only the part written before it.",
     "busy": "This conversation is still answering in another tab. Reload when it finishes.",
-    "resumedOp": "Resumed {{kind}} op · {{status}} · rev {{rev}}",
-    "resumedOpHint": "The executor finished a long op; the conversation continued from this result.",
-    "reviewTask": "Review in the task panel",
     "compacted": "Earlier turns were summarized to fit the model. The original log is still kept.",
     "remark": {
       "save": "Save as a remark",
@@ -657,60 +733,7 @@
       "truncated": "cut short",
       "timeout": "timed out",
       "omitted": "some left out",
-      "hits": "{{count}} hits",
-      "searching": "still searching",
-      "picking": "still fetching",
-      "blocks": "{{count}} blocks",
-      "needsApproval": "needs your approval",
-      "approved": "approved",
-      "written": "written",
-      "writeSkipped": "skipped",
-      "writeFailed": "write failed",
-      "writing": "still writing"
-    },
-    "wait": {
-      "title": "Waiting on you",
-      "job": {
-        "plan": "Plan",
-        "compile": "Compile"
-      },
-      "interface": {
-        "source": "the source page",
-        "plan_board": "the plan board",
-        "compile_board": "the compile board"
-      },
-      "where": "This happens in {{place}}.",
-      "completion": {
-        "start_plan": "Start the plan with the original button there.",
-        "start_compile": "Start the compile with the original button there.",
-        "start": "Start it with the original button there."
-      },
-      "open": {
-        "source": "Go to the source page",
-        "plan_board": "Go to the plan board",
-        "compile_board": "Go to the compile board",
-        "default": "Go there"
-      },
-      "status": {
-        "proposed": "Waiting for you to start it.",
-        "entered": "The job has started.",
-        "completed": "The job finished.",
-        "failed": "The job failed.",
-        "cancelled": "Stopped."
-      },
-      "enteredHint": "The job belongs to its own interface now; stop it there.",
-      "result": "Result",
-      "resultCount": "{{count}} pages",
-      "artifact": {
-        "write": "write",
-        "mention": "mention",
-        "skip": "skip",
-        "written": "written"
-      },
-      "jobFailedHint": "The job failed; ask in the chat to try it again.",
-      "stop": "Stop waiting",
-      "stopping": "Stopping…",
-      "stopFailed": "Could not stop this wait"
+      "hits": "{{count}} hits"
     }
   },
   "browse": {
@@ -1491,31 +1514,23 @@
     "openFolder": "Could not open that folder",
     "deleteProject": "Could not delete the project",
     "code": {
-      "conflict": "The writing task changed since this view was read. Re-read it and try again.",
-      "not_found": "That card or material is no longer in the writing task.",
-      "bad_spec": "The frame names passages that do not belong to this material.",
-      "needs_approval": "The write request changed or is no longer pending. Read it again before deciding.",
-      "op_failed": "The material could not be fetched or staged. Read the task before trying again.",
-      "task": {
-        "recordFailed": "The page was saved, but the writing task could not record the edit; its approval may no longer match the page.",
-        "unreadable": "The writing task file exists but cannot be read. It was not replaced; repair it before continuing."
-      },
       "model_error": "The assistant did not answer. Try again.",
       "cancelled": "Stopped.",
       "busy": "This conversation is already answering. Wait for it to finish.",
       "internal": "Something went wrong. Try again.",
-      "wait": {
-        "notFound": "That wait is no longer the session's current one.",
-        "notCancelable": "The job has already started; stop it in its own interface.",
-        "contextIncomplete": "A job started from the chat needs both its session and its wait.",
-        "wrongJob": "This wait belongs to a different job.",
-        "alreadyStarted": "This wait has already been started."
+      "state": {
+        "busy": "A run is holding the writing state. Try again when it ends.",
+        "conflict": "The writing state changed since you read it. Read it again.",
+        "invalid": "That writing-state change is not valid.",
+        "archiveNotFound": "That archived writing state does not exist."
       },
-      "job": {
-        "busy": "Another job is already running. Wait for it to finish."
+      "node": {
+        "invalid": "The auto-frame request is not valid.",
+        "notFound": "That auto-frame run does not exist."
       },
       "pipeline": {
         "busy": "Another pipeline run is already active. Wait for it to finish.",
+        "retired": "The old pipeline no longer starts new runs.",
         "projectBusy": "Another process is writing this project. Close it and try again.",
         "notFound": "That pipeline run is no longer there.",
         "invalid": "The pipeline was given incomplete settings.",
@@ -1577,7 +1592,6 @@
         "missing": "That page is no longer in the project; it may have been deleted.",
         "notAPage": "That is not a note in this project.",
         "changed": "This page was written again after you opened it. Open it afresh and make your change there.",
-        "busy": "This page is being written right now. Try again when that write has finished.",
         "exists": "A page already has that name. Choose another.",
         "nameEmpty": "A page needs a name.",
         "nameNotAllowed": "That page name cannot be used. Choose another.",
@@ -1675,89 +1689,6 @@
         "modelsUnavailable": "This service did not return a model list. Enter the model name yourself.",
         "toolCallingUnsupported": "The model service did not complete a tool call: it may not support tools, or it refused this call. Chat will fall back to answering directly."
       }
-    }
-  },
-  "task": {
-    "title": "Writing task",
-    "rev": "rev {{rev}}",
-    "loading": "Loading the task",
-    "empty": "No cards yet",
-    "search": "Search",
-    "searching": "Searching…",
-    "searchPlaceholder": "Search the web for cards",
-    "searchDone": "Found {{count}} cards.",
-    "searchRunning": "The search is still running; read the task again later.",
-    "searchFailed": "The web search could not run",
-    "cards": "{{count}} cards",
-    "materials": "Materials {{count}}",
-    "blocks": "{{count}} blocks",
-    "moreBlocks": "{{count}} more",
-    "pick": "Pick",
-    "picking": "Picking…",
-    "pickFailed": "The card could not be picked",
-    "pickRunning": "The pick is still running; read the task again later.",
-    "loadFailed": "The writing task could not be read",
-    "retry": "Retry",
-    "frames": "Frames {{count}}",
-    "framesEmpty": "No frames yet",
-    "frameSource": "drawn by {{source}}",
-    "frameHint": "Tick the passages this material contributes.",
-    "frameSave": "Save frame",
-    "framing": "Saving the frame…",
-    "frameMore": "{{count}} more passages in this frame",
-    "frameSaved": "The frame was saved.",
-    "frameFailed": "The frame could not be saved",
-    "approved": "Approved by {{by}} at revision {{rev}}",
-    "noApproval": "No approval yet",
-    "approvalInvalidated": "The frame changed, so the previous approval no longer applies.",
-    "ops": "Ops",
-    "opInterrupted": "a restart interrupted it; resume it or cancel it",
-    "opCancel": "Cancel",
-    "opResume": "Resume",
-    "opWorking": "Working…",
-    "opCancelledNotice": "Op {{id}} was cancelled and will not run again.",
-    "opAlreadyFinished": "The op had already finished; nothing was cancelled.",
-    "opResumedNotice": "Op {{id}} is running again.",
-    "opActionFailed": "The op could not be updated",
-    "opResumeFailed": "The resume failed: {{error}}",
-    "opCancelledLine": "cancelled; it will not be retried or resumed",
-    "writeRequest": "Write request",
-    "approve": "Approve",
-    "reject": "Reject",
-    "approving": "Approving…",
-    "rejecting": "Rejecting…",
-    "approvedNotice": "Approved. The agent can now write this page.",
-    "rejectedNotice": "Rejected. The agent can propose a revised request.",
-    "decisionFailed": "The write request could not be decided",
-    "writeResult": "Page write",
-    "writeDiff": "Diff (+{{added}} / -{{removed}})",
-    "writeStatus": {
-      "written": "written",
-      "skipped": "skipped",
-      "failed": "failed"
-    },
-    "action": {
-      "create": "new page",
-      "update": "update page"
-    },
-    "source": {
-      "agent": "the agent",
-      "human": "you",
-      "model": "the model"
-    },
-    "status": {
-      "idle": "idle",
-      "running": "running",
-      "needs_approval": "needs approval",
-      "done": "done",
-      "failed": "failed"
-    },
-    "opStatus": {
-      "requested": "requested",
-      "running": "running",
-      "done": "done",
-      "failed": "failed",
-      "cancelled": "cancelled"
     }
   }
 }

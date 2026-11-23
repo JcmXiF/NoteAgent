@@ -14,7 +14,6 @@ from typing import Literal
 
 from noteagent.agent.model import Message, ToolCall
 from noteagent.agent.run_marker import MARKER_TYPE
-from noteagent.agent.task_op import TASK_OP_RESULT_TYPE, render_task_op_result
 
 #: What a tool call says when the run never got a result back. The model can see
 #: that the call did not finish and decide whether to try again.
@@ -107,7 +106,7 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
                 )
             )
 
-    reset_start = _after_reset(records)
+    reset_start = context_start(records)
     start, summary = _after_compaction(records, reset_start)
 
     sections: dict[str, str] = {}
@@ -146,24 +145,11 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
             # a section the prompt still needs.
             continue
         if kind == "wait_completed":
-            # The job result is a message the model must see; it is not a turn
-            # the reader wrote, so it has no transcript row of its own. The
-            # interface shows it from the wait the session carries.
+            # Legacy: a job result old sessions still hold. Nothing writes one
+            # now; the read-only rendering keeps those transcripts usable.
             if in_context:
                 pieces.append(
                     _Piece(entry_id, Message("system", _job_result_text(entry)))
-                )
-            continue
-        if kind == TASK_OP_RESULT_TYPE:
-            # A finished task op is the conversation's next input: the model
-            # reads the bounded delta, and the reader sees it from the session
-            # state on reconnect. Nothing here is a turn the person wrote.
-            if in_context:
-                pieces.append(
-                    _Piece(
-                        entry_id,
-                        Message("system", render_task_op_result(entry)),
-                    )
                 )
             continue
         if kind == MARKER_TYPE:
@@ -265,7 +251,7 @@ def project(entries: Sequence[Mapping[str, object]]) -> Projection:
     )
 
 
-def _after_reset(records: Sequence[Mapping[str, object]]) -> int:
+def context_start(records: Sequence[Mapping[str, object]]) -> int:
     """Where the latest reset says the context starts, or zero."""
     start = 0
     for index, entry in enumerate(records):

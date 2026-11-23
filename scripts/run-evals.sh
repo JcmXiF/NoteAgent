@@ -2,8 +2,8 @@
 # Run the deterministic behaviour evals and keep the process output.
 #
 # The runner already keeps a failed case's temporary project, event log and
-# checks. This adds stdout/stderr beside them, so CI uploads one folder that
-# explains both what failed and how the run got there.
+# checks. This adds stdout/stderr beside them, so one folder explains both what
+# failed and how the run got there. It is a local helper; no workflow calls it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

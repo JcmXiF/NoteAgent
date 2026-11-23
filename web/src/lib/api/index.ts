@@ -11,7 +11,6 @@ export * as filesApi from "@/lib/api/files";
 export * as graphApi from "@/lib/api/graph";
 export * as inboxApi from "@/lib/api/inbox";
 export * as notesApi from "@/lib/api/notes";
-export * as planApi from "@/lib/api/plan";
 export * as projectsApi from "@/lib/api/projects";
 
 export { ApiError, errorMessage, isSseAborted, postSse, projectPath } from "@/lib/api/client";

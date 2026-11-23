@@ -31,7 +31,10 @@ def resolve_wiki_write_path(
     """
 
     if not is_safe_ingest_path(relative_path):
-        raise ValueError(f'unsafe ingest path: "{relative_path}"')
+        raise ValueError(
+            f'unsafe ingest path: "{relative_path}"; use a page path '
+            'under wiki/ such as "wiki/concepts/信息熵.md"'
+        )
 
     normalized = relative_path.replace("\\", "/")
     candidate = (layout.root / normalized).resolve()
@@ -41,7 +44,8 @@ def resolve_wiki_write_path(
         candidate.relative_to(wiki_root)
     except ValueError as err:
         raise ValueError(
-            f'resolved path escapes wiki/: "{relative_path}" -> {candidate}'
+            f'resolved path escapes wiki/: "{relative_path}" -> '
+            f'{candidate}; use a page path under wiki/'
         ) from err
 
     return candidate

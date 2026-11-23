@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager, suppress
-from typing import Literal
+from contextlib import asynccontextmanager, contextmanager, suppress
 
 from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from noteagent import __version__
@@ -73,20 +72,10 @@ from noteagent.api.pages import (
     page_view_payload,
     project_search_payload,
 )
-from noteagent.api.pipeline import (
-    pipeline_service,
-    pipeline_service_for,
-    prepare_active_project,
-)
-from noteagent.api.pipeline_events import iter_pipeline_events
-from noteagent.pipeline.confirm import NothingToWrite, confirmation_payload
-from noteagent.pipeline.lock import ProjectBusy
+from noteagent.api.pipeline import pipeline_materials, pipeline_store
+from noteagent.pipeline.captures import CaptureInbox
+from noteagent.pipeline.lock import ProjectBusy, ProjectLock
 from noteagent.pipeline.run import run_to_dict
-from noteagent.pipeline.service import (
-    PipelineBusy,
-    PipelineConflict,
-    PipelineService,
-)
 from noteagent.api.projects import (
     create_project,
     delete_project,
@@ -103,19 +92,31 @@ from noteagent.api.projects import (
     use_project,
 )
 from noteagent.api.rag_settings import rag_rebuild_payload, rag_status_payload
-from noteagent.api.resume import job_cleanup, job_completion, reconcile_session
 from noteagent.effects.journal import EffectJournal, effect_payload
 from noteagent.effects.restore import preview_restore, restore_run
 from noteagent.api.runtime_sse import iter_run_sse
 from noteagent.api.save import capture_from_api, run_save_payload
 from noteagent.api.search import run_search_payload
+from noteagent.api.nodes import (
+    NodeResult,
+    is_node_session,
+    node_tools,
+    resume_auto_frame,
+    run_auto_frame,
+    valid_node_id,
+)
+from noteagent.api.writing import writing_state_payload
+from noteagent.api.writing_events import iter_writing_events
+from noteagent.writing.state import (
+    WritingStateBusy,
+    WritingStateConflict,
+    WritingStateError,
+    WritingStateStore,
+)
 from noteagent.api.session_access import (
     active_layout,
     cancel_session,
-    cancel_wait,
-    claim_job,
-    enter_wait_for_job,
-    job_wait_for_body,
+    default_session_store,
     migrate_active_project_chats,
     migrate_sessions,
     open_session_store,
@@ -124,26 +125,11 @@ from noteagent.api.session_access import (
     resume_refusal,
     session_busy,
     session_runtime,
-    session_waits,
 )
-from noteagent.agent.store import summary_dict
+from noteagent.agent.store import SessionStore, summary_dict
 from noteagent.api.sessions import session_payload
-from noteagent.api.task import (
-    approve_task_request,
-    cancel_task_op,
-    frame_task_material,
-    pick_task_card,
-    record_task_page_edit,
-    recover_active_project_tasks,
-    resume_task_op,
-    search_task_cards,
-    task_service,
-    task_view_payload,
-)
-from noteagent.api.task_events import iter_task_events
 from noteagent.sessions.recovery import abandon_run, interrupted_run
-from noteagent.prompts.system import ensure_default_sections
-from noteagent.api.topic_gate import iter_ingest_confirmed_sse, iter_topic_map_sse
+from noteagent.prompts.system import sync_default_sections
 from noteagent.api.web_static import BuiltInterface, resolve_web_dist
 from noteagent.ingest.ingest_recovery import discard_recovery_job, recovery_payload
 from noteagent.ingest.revision_inbox import (
@@ -254,69 +240,6 @@ class CaptureDismissBody(BaseModel):
     """One page in the sign-in queue the reader is done with."""
 
     id: str = Field(..., min_length=1, max_length=80)
-
-
-class PipelineStartBody(BaseModel):
-    """What a person or a conversation asks one run to do."""
-
-    intent: str = Field(..., min_length=1, max_length=2000)
-    startedBy: Literal["human", "session"] = "human"
-    sessionId: str | None = Field(default=None, max_length=120)
-    queryMode: Literal["precise", "model"] = "precise"
-    materialMode: Literal["manual", "auto"] = "auto"
-
-    @field_validator("intent")
-    @classmethod
-    def _intent_is_not_blank(cls, value: str) -> str:
-        cleaned = " ".join(value.split())
-        if not cleaned:
-            raise ValueError("a pipeline run needs an intent")
-        return cleaned
-
-
-class TaskSearchBody(BaseModel):
-    """A person's web search, from the task view they were looking at."""
-
-    query: str = Field(..., min_length=1, max_length=500)
-    expectedRev: int = Field(..., ge=0)
-
-    @field_validator("query")
-    @classmethod
-    def _query_is_not_blank(cls, value: str) -> str:
-        cleaned = " ".join(value.split())
-        if not cleaned:
-            raise ValueError("a search needs a query")
-        return cleaned
-
-
-class TaskPickBody(BaseModel):
-    """A person's pick, from the card view they were looking at."""
-
-    cardId: str = Field(..., min_length=1, max_length=120)
-    expectedRev: int = Field(..., ge=0)
-
-
-class TaskFrameBody(BaseModel):
-    """A person's frame, from the material view they were looking at."""
-
-    docId: str = Field(..., min_length=1, max_length=500)
-    blocks: list[str] = Field(..., max_length=2000)
-    expectedRev: int = Field(..., ge=0)
-
-
-class TaskApproveBody(BaseModel):
-    """A person's decision on the pending write request.
-
-    The task id rules out a decision aimed at another project's task; the
-    revision is the one the confirmation panel read, so a task that moved since
-    then is refused rather than decided on.
-    """
-
-    taskId: str = Field(..., min_length=1, max_length=120)
-    rev: int = Field(..., ge=0)
-    frameId: str = Field(..., min_length=1, max_length=500)
-    spec: dict[str, object]
-    decision: Literal["approve", "reject"]
 
 
 class FolderOpenBody(BaseModel):
@@ -493,6 +416,24 @@ class ProjectFileDeleteBody(BaseModel):
     path: str = Field(..., min_length=1, max_length=500)
 
 
+class WritingChangesBody(BaseModel):
+    searches: list[dict[str, object]] | None = None
+    selectedPages: list[dict[str, object]] | None = None
+    frames: list[dict[str, object]] | None = None
+    draft: dict[str, object] | None = None
+
+
+class WritingSaveBody(BaseModel):
+    baseVersion: int = Field(..., ge=0)
+    changes: WritingChangesBody
+
+
+class NodeRunBody(BaseModel):
+    pageId: str = Field(..., min_length=1, max_length=200)
+    #: A caller may name the run so it can cancel it before the answer.
+    nodeId: str | None = Field(default=None, max_length=100)
+
+
 class RevisionInboxIgnoreBody(BaseModel):
     identity: str = Field(..., min_length=1, max_length=500)
     kind: str = Field(..., min_length=1, max_length=40)
@@ -526,6 +467,22 @@ class ClipCollectionBody(BaseModel):
     blocks: list[ClipBlockBody] = Field(default_factory=list)
     roundId: str = ""
     targetSlug: str = ""
+
+
+class GateDecisionBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=160)
+    action: str = "skip"
+    sectionIds: list[str] = Field(default_factory=list, max_length=40)
+
+
+class ClipsPutBody(BaseModel):
+    intent: str = ""
+    collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
+    topicMap: dict[str, object] | None = None
+    decisions: list[GateDecisionBody] | None = None
+    #: The board's answers, which a later plan carries over. Separate from the gate
+    #: above, which only ever holds the pass that was confirmed.
+    choices: list[GateDecisionBody] | None = None
 
 
 class NoteCreateBody(BaseModel):
@@ -596,59 +553,6 @@ class CompactBody(BaseModel):
 
 class SessionTitleBody(BaseModel):
     title: str = Field(default="", max_length=2_000)
-
-
-class GateDecisionBody(BaseModel):
-    slug: str = Field(..., min_length=1, max_length=160)
-    action: str = "skip"
-    sectionIds: list[str] = Field(default_factory=list, max_length=40)
-
-
-class PipelineApproveBody(BaseModel):
-    """Approval of a run's plan revision, with optional per-page overrides."""
-
-    planRevision: int = Field(..., ge=0)
-    overrides: list[GateDecisionBody] = Field(default_factory=list, max_length=24)
-
-
-class ClipsPutBody(BaseModel):
-    intent: str = ""
-    collections: list[ClipCollectionBody] = Field(default_factory=list, max_length=40)
-    topicMap: dict[str, object] | None = None
-    decisions: list[GateDecisionBody] | None = None
-    #: The board's answers, which a later plan carries over. Separate from the gate
-    #: above, which only ever holds the pass that was confirmed.
-    choices: list[GateDecisionBody] | None = None
-
-
-class TopicMapBody(BaseModel):
-    intent: str = ""
-    sourceIdentity: str = Field(default="", max_length=500)
-    #: The language the reader is using. Explanations are written for them, so they
-    #: follow this; page names follow the material.
-    language: str = Field(default="", max_length=20)
-    #: When this pass was proposed from the chat, the wait it belongs to. The
-    #: human started the job here, and the placement of these fields is what
-    #: lets the chat record that it entered and what it came back with.
-    sessionId: str = Field(default="", max_length=80)
-    waitId: str = Field(default="", max_length=120)
-
-
-class ConfirmedPageBody(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
-    slug: str = ""
-    wikiPath: str = ""
-    action: str = "skip"
-    sectionIds: list[str] = Field(default_factory=list)
-
-
-class IngestConfirmedBody(BaseModel):
-    intent: str = ""
-    confirmed: list[ConfirmedPageBody] = Field(..., min_length=1, max_length=20)
-    #: When this compile was proposed from the chat, the wait it belongs to.
-    #: The human confirmed the pages here, and the chat records the outcome.
-    sessionId: str = Field(default="", max_length=80)
-    waitId: str = Field(default="", max_length=120)
 
 
 class DeepSearchActBody(BaseModel):
@@ -729,15 +633,6 @@ async def _app_lifespan(_app: FastAPI):
     # A crash leaves a run's last marker at running; recover its terminal state
     # before the list and the session view can be read.
     recover_active_project_runs(_app.state.deps)
-    # A pipeline run a previous core left open is not still running, and
-    # originals that predate the material log get a record; both before any
-    # route can read them.
-    prepare_active_project(_app.state.deps)
-    # A writing task a previous core left mid-op is reconciled: active ops are
-    # marked interrupted (resumable or cancellable), and a completion that was
-    # never resumed is continued once, before any route reads the task.
-    recover_active_project_tasks(_app.state.deps)
-
     stop = asyncio.Event()
 
     async def _poll_inbox() -> None:
@@ -761,13 +656,23 @@ async def _app_lifespan(_app: FastAPI):
 logger = logging.getLogger(__name__)
 
 
-def _after_plan(deps: AppDeps, job_wait, layout: ProjectLayout, job_id: str) -> None:
-    """Close a planning job, then let a waiting run follow the new plan."""
-    job_cleanup(deps, job_wait, layout, job_id, "plan")
-    try:
-        pipeline_service_for(deps, layout).sync_waiting()
-    except Exception:  # noqa: BLE001 - the plan itself is already saved
-        logger.exception("a finished plan could not reach a waiting run")
+def _legacy_layout(deps: AppDeps) -> ProjectLayout:
+    """The legacy run files live in the active project; a test store has none."""
+    layout = active_layout(deps)
+    if layout is None:
+        raise CodedHTTPException(
+            409,
+            "old pipeline runs need the active project",
+            code="project.notConfigured",
+        )
+    return layout
+
+
+def _legacy_run_or_404(deps: AppDeps, run_id: str) -> ProjectLayout:
+    layout = _legacy_layout(deps)
+    if pipeline_store(layout).get(run_id) is None:
+        raise _pipeline_not_found(run_id)
+    return layout
 
 
 def _pipeline_not_found(run_id: str) -> CodedHTTPException:
@@ -809,68 +714,29 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """The versioned health the packaged core reports."""
         return {"status": "ok", "version": __version__}
 
-    @app.post("/api/v1/pipeline/runs", status_code=201)
-    def pipeline_start(body: PipelineStartBody) -> dict[str, object]:
-        """Start one run of the active project's pipeline."""
-        try:
-            run = pipeline_service(deps).start(
-                intent=body.intent,
-                started_by=body.startedBy,
-                session_id=body.sessionId or "",
-                query_mode=body.queryMode,
-                material_mode=body.materialMode,
-            )
-        except PipelineBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.busy"
-            ) from err
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        except ValueError as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.invalid"
-            ) from err
-        return run_to_dict(run)
-
     @app.get("/api/v1/pipeline/runs")
     def pipeline_runs() -> dict[str, object]:
-        """Every run of the active project, newest first."""
-        return {"runs": [run_to_dict(run) for run in pipeline_service(deps).list()]}
+        """Every old run of the active project, newest first; read only."""
+        layout = _legacy_layout(deps)
+        return {
+            "runs": [
+                run_to_dict(run) for run in pipeline_store(layout).list()
+            ]
+        }
 
     @app.get("/api/v1/pipeline/runs/{run_id}")
     def pipeline_run(run_id: str) -> dict[str, object]:
-        run = pipeline_service(deps).get(run_id)
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
-
-    @app.get("/api/v1/pipeline/runs/{run_id}/events")
-    def pipeline_run_events(run_id: str) -> StreamingResponse:
-        """The run's stage, plan, material and result events as they happen."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        return StreamingResponse(
-            iter_pipeline_events(service, run_id),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        layout = _legacy_run_or_404(deps, run_id)
+        return run_to_dict(pipeline_store(layout).get(run_id))
 
     @app.get("/api/v1/pipeline/runs/{run_id}/materials")
     def pipeline_run_materials(run_id: str) -> dict[str, object]:
         """The materials this run collected, with their current state."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
         return {
             "materials": [
-                state.payload() for state in service.materials_for_run(run_id)
+                state.payload()
+                for state in pipeline_materials(layout, clock=deps.clock).for_run(run_id)
             ]
         }
 
@@ -880,10 +746,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         material: str = Query(..., min_length=1, max_length=500),
     ) -> dict[str, object]:
         """The staged blocks behind one material, for the source view."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        blocks = service.material_blocks(material, run_id=run_id)
+        layout = _legacy_run_or_404(deps, run_id)
+        blocks = pipeline_materials(layout, clock=deps.clock).blocks(material, run_id=run_id)
         if blocks is None:
             raise CodedHTTPException(
                 404,
@@ -892,173 +756,28 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             )
         return {"material": material, "blocks": blocks}
 
-    @app.get("/api/v1/pipeline/runs/{run_id}/confirmation")
-    def pipeline_run_confirmation(run_id: str) -> dict[str, object]:
-        """The pages this run would write, while it waits for a person."""
-        try:
-            confirmation = pipeline_service(deps).confirmation(run_id)
-        except PipelineConflict as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.conflict"
-            ) from err
-        if confirmation is None:
-            raise _pipeline_not_found(run_id)
-        return confirmation_payload(confirmation)
-
-    @app.post("/api/v1/pipeline/runs/{run_id}/approve", status_code=202)
-    def pipeline_approve(
-        run_id: str, body: PipelineApproveBody
-    ) -> dict[str, object]:
-        """Approve a run's plan revision; the compile starts behind it."""
-        try:
-            run = pipeline_service(deps).approve(
-                run_id,
-                plan_revision=body.planRevision,
-                overrides=[item.model_dump() for item in body.overrides],
-            )
-        except PipelineBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.busy"
-            ) from err
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        except PipelineConflict as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.conflict"
-            ) from err
-        except NothingToWrite as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.nothingToWrite"
-            ) from err
-        except ValueError as err:
-            raise CodedHTTPException(
-                400, str(err), code="pipeline.invalid"
-            ) from err
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
-
-    @app.post("/api/v1/pipeline/runs/{run_id}/cancel")
-    def pipeline_cancel(run_id: str) -> dict[str, object]:
-        """Stop a run between its stages; a finished run comes back unchanged."""
-        try:
-            run = pipeline_service(deps).cancel(run_id)
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        if run is None:
-            raise _pipeline_not_found(run_id)
-        return run_to_dict(run)
-
     @app.get("/api/v1/pipeline/runs/{run_id}/restore/preview")
     def pipeline_restore_preview(run_id: str) -> dict[str, object]:
         """How the pages this run wrote stand now, before undoing them."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
-        return service.restore_preview(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
+        return preview_restore(layout, run_id)
 
     @app.post("/api/v1/pipeline/runs/{run_id}/restore")
     def pipeline_restore(
         run_id: str, body: RunRestoreBody
     ) -> dict[str, object]:
         """Undo the selected pages of a finished run."""
-        service = pipeline_service(deps)
-        if service.get(run_id) is None:
-            raise _pipeline_not_found(run_id)
+        layout = _legacy_run_or_404(deps, run_id)
         if body.runId != run_id:
             raise CodedHTTPException(
                 400,
                 f"run id in body does not match the path: {body.runId}",
                 code="pipeline.invalid",
             )
-        return service.restore(
+        return restore_run(
+            layout,
             run_id,
             [page.model_dump() for page in body.pages],
-        )
-
-    @app.get("/api/v1/task")
-    def kernel_task(
-        view: Literal[
-            "summary",
-            "cards",
-            "materials",
-            "frames",
-            "approval",
-            "result",
-            "overview",
-        ] = Query("summary"),
-    ) -> dict[str, object]:
-        """The active project's writing task, as a bounded view with its rev.
-
-        ``overview`` reads every view from one task load, at one revision, so
-        the interface never draws a mix of two writes' revisions. ``result`` is
-        the last approved page write with its diff, which the model's
-        ``inspect`` also offers.
-        """
-        return task_view_payload(deps, view)
-
-    @app.post("/api/v1/task/search")
-    def kernel_task_search(body: TaskSearchBody) -> dict[str, object]:
-        """A person's web search, on the same task, node and executor as the agent."""
-        return search_task_cards(deps, body.query, body.expectedRev)
-
-    @app.post("/api/v1/task/pick")
-    def kernel_task_pick(body: TaskPickBody) -> dict[str, object]:
-        """A person's card pick, on the same task and executor as the agent."""
-        return pick_task_card(deps, body.cardId, body.expectedRev)
-
-    @app.post("/api/v1/task/frame")
-    def kernel_task_frame(body: TaskFrameBody) -> dict[str, object]:
-        """A person's frame, on the same task and writer as the agent's."""
-        return frame_task_material(
-            deps, body.docId, body.blocks, body.expectedRev
-        )
-
-    @app.post("/api/v1/task/approve")
-    def kernel_task_approve(body: TaskApproveBody) -> dict[str, object]:
-        """A person's decision on the pending write request.
-
-        This is the only way an approval is written. No agent tool reaches it:
-        the model is offered compose_page and inspect, never approve.
-        """
-        return approve_task_request(
-            deps, body.taskId, body.rev, body.frameId, body.spec, body.decision
-        )
-
-    @app.post("/api/v1/task/ops/{op_id}/cancel")
-    def kernel_task_op_cancel(op_id: str) -> dict[str, object]:
-        """Stop an unfinished op; a cancelled op never saves, resumes or retries."""
-        return cancel_task_op(deps, op_id)
-
-    @app.post("/api/v1/task/ops/{op_id}/resume")
-    def kernel_task_op_resume(op_id: str) -> dict[str, object]:
-        """Re-run an op a restart interrupted; its completion resumes once."""
-        return resume_task_op(deps, op_id)
-
-    @app.get("/api/v1/task/events")
-    def kernel_task_events() -> StreamingResponse:
-        """The task's revision changes, from the current one onward.
-
-        The first event carries the revision as it stands, so a client that just
-        connected reads one snapshot and is current. Each event is only
-        ``{rev}``: an invalidation, never the task itself. There is no replay
-        and no ``Last-Event-ID``; reconnecting reads the task again.
-        """
-        service = task_service(deps)
-        return StreamingResponse(
-            iter_task_events(
-                deps.task_events, service.project_key, service.rev
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
         )
 
     @app.get("/api/v1/sessions")
@@ -1067,7 +786,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         store = project_sessions(deps)
         report = migrate_sessions(store)
         body: dict[str, object] = {
-            "sessions": [summary_dict(item) for item in store.list()]
+            "sessions": [
+                summary_dict(item)
+                for item in store.list()
+                if not is_node_session(item.id)
+            ]
         }
         if report is not None and (report.migrated or report.failed):
             body["migration"] = report.payload()
@@ -1084,7 +807,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         try:
             store.create(session_id, body.title)
             if deps.seed_system_sections:
-                ensure_default_sections(store, session_id, layout)
+                sync_default_sections(store, session_id, layout)
         except FileExistsError as err:
             raise CodedHTTPException(
                 409,
@@ -1103,7 +826,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.get("/api/v1/sessions/{session_id}")
@@ -1111,12 +833,10 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """One session's transcript, and the same log read as the model sees it."""
         layout = active_layout(deps)
         store = open_session_store(deps, session_id, layout=layout)
-        reconcile_session(deps, store, layout, session_id)
         return session_payload(
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.patch("/api/v1/sessions/{session_id}")
@@ -1145,7 +865,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             store,
             session_id,
             busy=session_busy(deps, session_id),
-            waits=session_waits(deps, store),
         )
 
     @app.delete("/api/v1/sessions/{session_id}", status_code=204)
@@ -1175,9 +894,7 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         if session_busy(deps, session_id):
             raise _session_busy_refusal(session_id)
         if deps.seed_system_sections:
-            ensure_default_sections(store, session_id, layout)
-        reconcile_session(deps, store, layout, session_id)
-        waits = session_waits(deps, store)
+            sync_default_sections(store, session_id, layout)
         try:
             runtime = session_runtime(deps, store, layout)
         except LlmConfigError as err:
@@ -1187,7 +904,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 runtime,
                 UserInput(session_id, body.content),
                 store=store,
-                waits=waits,
             ),
             media_type="text/event-stream",
             headers={
@@ -1246,7 +962,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 runtime,
                 RunResume(session_id, body.runId, claim=claim),
                 store=store,
-                waits=session_waits(deps, store),
             ),
             media_type="text/event-stream",
             headers={
@@ -1295,7 +1010,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 store,
                 session_id,
                 busy=session_busy(deps, session_id),
-                waits=session_waits(deps, store),
             ),
         }
 
@@ -1304,12 +1018,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Stop this session's run; an idle session has nothing to stop."""
         open_session_store(deps, session_id)
         return {"cancelled": cancel_session(deps, session_id)}
-
-    @app.post("/api/v1/sessions/{session_id}/wait/{wait_id}/cancel")
-    def kernel_wait_cancel(session_id: str, wait_id: str) -> dict[str, object]:
-        """Stop a wait the human has not entered, before the job starts."""
-        store = open_session_store(deps, session_id)
-        return cancel_wait(session_waits(deps, store), session_id, wait_id)
 
     @app.post("/api/v1/sessions/{session_id}/compact")
     def kernel_session_compact(
@@ -1336,7 +1044,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
                 store,
                 session_id,
                 busy=session_busy(deps, session_id),
-                waits=session_waits(deps, store),
             ),
         }
 
@@ -1423,9 +1130,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             result = use_project(body.name)
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
-        # An older project's originals predate the material log; give them their
-        # records when the project is opened, not only when the core starts.
-        prepare_active_project(deps)
         return result
 
     @app.post("/api/projects")
@@ -1446,7 +1150,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             result = open_existing_folder(body.path, name=body.name, mode=body.mode)
         except Exception as err:
             raise _project_http_error(err) from err
-        prepare_active_project(deps)
         return result
 
     @app.post("/api/projects/{name}/init")
@@ -1626,23 +1329,8 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
 
     @app.post("/api/projects/{name}/page/save")
     def project_page_save(name: str, body: PageSaveBody) -> dict[str, object]:
-        layout = require_project_layout(name)
         try:
-            # The task's executor holds the same page lock while it writes a
-            # composed page, so whichever writer comes second is refused. A
-            # real change is recorded on the writing task while that lock is
-            # still held: the page and its task record move together, and the
-            # edit removes any approval bound to the old page.
-            return page_save_payload(
-                layout,
-                body.model_dump(),
-                page_locks=deps.task_page_locks,
-                on_saved=(
-                    lambda path, revision: record_task_page_edit(
-                        deps, layout, path, revision
-                    )
-                ),
-            )
+            return page_save_payload(require_project_layout(name), body.model_dump())
         except FileNotFoundError as err:
             raise http_error(err, 404) from err
 
@@ -1735,32 +1423,249 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         """Everything waiting on the reader, counted in one place."""
         return attention_payload(require_project_layout(name), check=check)
 
+    def _writing_store(name: str) -> WritingStateStore:
+        return WritingStateStore(
+            require_project_layout(name), clock=deps.clock
+        )
+
+    def _state_busy(err: Exception) -> CodedHTTPException:
+        return CodedHTTPException(409, str(err), code="state.busy")
+
+    def _node_session_store(layout: ProjectLayout) -> SessionStore:
+        if deps.sessions is not None:
+            return deps.sessions
+        return default_session_store(deps, layout)
+
+    @contextmanager
+    def _node_errors():
+        try:
+            yield
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except LlmConfigError as err:
+            raise http_error(err, 503) from err
+
+    def _node_payload(result: NodeResult) -> dict[str, object]:
+        return {
+            "nodeRunId": result.node_run_id,
+            "sessionId": result.session_id,
+            "status": result.status,
+            "error": result.error,
+            "frames": [dict(frame) for frame in result.frames],
+        }
+
+    @app.get("/api/projects/{name}/writing/state")
+    @app.get("/api/v1/projects/{name}/writing/state")
+    def get_writing_state(name: str) -> dict[str, object]:
+        """The project's one writing state, or the empty state before a write."""
+        return writing_state_payload(require_project_layout(name))
+
+    @app.post("/api/projects/{name}/writing/state")
+    @app.post("/api/v1/projects/{name}/writing/state")
+    def save_writing_state(
+        name: str, body: WritingSaveBody
+    ) -> dict[str, object]:
+        """Apply a person's edits to the project's writing state."""
+        store = _writing_store(name)
+        try:
+            state = store.save_human(
+                body.baseVersion,
+                body.changes.model_dump(exclude_none=True),
+            )
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except WritingStateConflict as err:
+            raise CodedHTTPException(
+                409,
+                str(err),
+                code="state.conflict",
+                params={
+                    "stateVersion": str(
+                        getattr(err, "current_version", 0)
+                    )
+                },
+            ) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except (ValueError, WritingStateError) as err:
+            raise CodedHTTPException(
+                400, str(err), code="state.invalid"
+            ) from err
+        return state.to_dict()
+
+    @app.get("/api/projects/{name}/writing/archives")
+    @app.get("/api/v1/projects/{name}/writing/archives")
+    def list_writing_archives(name: str) -> dict[str, object]:
+        """The archived states, with enough to tell them apart."""
+        return {"items": _writing_store(name).archives()}
+
+    @app.post("/api/projects/{name}/writing/archive")
+    @app.post("/api/v1/projects/{name}/writing/archive")
+    def archive_writing_state(name: str) -> dict[str, object]:
+        """Put the current state away and continue from an empty one."""
+        try:
+            items = _writing_store(name).archive()
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        return {"items": items}
+
+    @app.post(
+        "/api/projects/{name}/writing/archives/{archive_id}/activate"
+    )
+    @app.post(
+        "/api/v1/projects/{name}/writing/archives/{archive_id}/activate"
+    )
+    def activate_writing_archive(
+        name: str, archive_id: str
+    ) -> dict[str, object]:
+        """Make an archived state current again."""
+        try:
+            state = _writing_store(name).activate(archive_id)
+        except WritingStateBusy as err:
+            raise _state_busy(err) from err
+        except ProjectBusy as err:
+            raise _state_busy(err) from err
+        except ValueError as err:
+            raise CodedHTTPException(
+                404, str(err), code="state.archiveNotFound"
+            ) from err
+        except WritingStateError as err:
+            raise CodedHTTPException(
+                422, str(err), code="state.invalid"
+            ) from err
+        return state.to_dict()
+
+    @app.get("/api/projects/{name}/writing/events")
+    @app.get("/api/v1/projects/{name}/writing/events")
+    @app.post("/api/projects/{name}/writing/events")
+    @app.post("/api/v1/projects/{name}/writing/events")
+    def writing_state_events(name: str) -> StreamingResponse:
+        """A ``state`` event whenever the state's version changes."""
+        layout = require_project_layout(name)
+        return StreamingResponse(
+            iter_writing_events(layout),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.post("/api/projects/{name}/nodes/auto-frame")
+    @app.post("/api/v1/projects/{name}/nodes/auto-frame")
+    def start_node_run(
+        name: str, body: NodeRunBody
+    ) -> dict[str, object]:
+        """Run the auto-frame node; the frames in the state are its result."""
+        layout = require_project_layout(name)
+        if body.nodeId and not valid_node_id(body.nodeId):
+            raise CodedHTTPException(
+                400,
+                f"not a node id: {body.nodeId}",
+                code="node.invalid",
+            )
+        try:
+            with _node_errors():
+                result = run_auto_frame(
+                    deps,
+                    _node_session_store(layout),
+                    layout,
+                    body.pageId,
+                    body.nodeId or "",
+                )
+        except ValueError as err:
+            raise CodedHTTPException(
+                400, str(err), code="node.invalid"
+            ) from err
+        return _node_payload(result)
+
+    @app.post("/api/projects/{name}/nodes/{node_id}/resume")
+    @app.post("/api/v1/projects/{name}/nodes/{node_id}/resume")
+    def resume_node_run(
+        name: str, node_id: str, body: RunIdBody
+    ) -> dict[str, object]:
+        """Continue the node run a crash left interrupted."""
+        if not valid_node_id(node_id):
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            )
+        layout = require_project_layout(name)
+        store = _node_session_store(layout)
+        try:
+            store.load(node_id)
+        except (FileNotFoundError, ValueError) as err:
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            ) from err
+        if interrupted_run(store, node_id, body.runId) is None:
+            raise CodedHTTPException(
+                409,
+                f"node {node_id} is not interrupted on run {body.runId}",
+                code="session.notInterrupted",
+                params={"id": node_id, "run": body.runId},
+            )
+        tools = node_tools(deps, layout)
+        refusal = resume_refusal(
+            deps,
+            store,
+            layout,
+            node_id,
+            body.runId,
+            tools=tools,
+        )
+        if refusal:
+            raise CodedHTTPException(
+                409,
+                refusal,
+                code="session.notResumable",
+                params={"id": node_id, "run": body.runId},
+            )
+        with _node_errors():
+            result = resume_auto_frame(
+                deps, store, layout, node_id, body.runId
+            )
+        return _node_payload(result)
+
+    @app.post("/api/projects/{name}/nodes/{node_id}/cancel")
+    @app.post("/api/v1/projects/{name}/nodes/{node_id}/cancel")
+    def cancel_node_run(
+        name: str, node_id: str
+    ) -> dict[str, object]:
+        """Stop the node run before its next model call."""
+        if not valid_node_id(node_id):
+            raise CodedHTTPException(
+                404,
+                f"no such node run: {node_id}",
+                code="node.notFound",
+            )
+        require_project_layout(name)
+        busy = deps.runs.is_busy(node_id)
+        if busy:
+            deps.runs.cancel(node_id)
+        return {"cancelled": busy}
+
     @app.post("/api/projects/{name}/capture-inbox/dismiss")
     def project_capture_dismiss(
         name: str, body: CaptureDismissBody
     ) -> dict[str, object]:
         """Put one sign-in page away; it comes back only if it is met again."""
         layout = require_project_layout(name)
-        service = PipelineService(
-            layout,
-            clock=deps.clock,
-            ids=deps.ids,
-            registry=deps.pipeline_registry,
-            keep_runs=deps.pipeline_keep_runs,
-        )
-        try:
-            changed = service.dismiss_capture(body.id)
-        except ProjectBusy as err:
-            raise CodedHTTPException(
-                409, str(err), code="pipeline.projectBusy"
-            ) from err
-        if not changed:
+        inbox = CaptureInbox(layout.capture_inbox)
+        if not inbox.dismiss(body.id):
             raise CodedHTTPException(
                 404,
                 f"no capture inbox item: {body.id}",
                 code="capture.notFound",
             )
-        return service.capture_payload()
+        return inbox.payload()
 
     @app.post("/api/projects/{name}/acquire/search")
     def project_acquire_search(name: str, body: AcquireSearchBody) -> dict[str, object]:
@@ -1889,25 +1794,23 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
     @app.put("/api/projects/{name}/clips")
     def project_clips_put(name: str, body: ClipsPutBody) -> dict[str, object]:
         layout = require_project_layout(name)
+        lock = ProjectLock(layout.project_lock, clock=deps.clock)
         # Selections are project state too: the write takes the one writer's
-        # place, so it cannot land in the middle of a pipeline run.
-        service = pipeline_service_for(deps, layout)
+        # place, so it cannot land in the middle of a page write.
         try:
-            payload = service.write_clips(
-                lambda: put_clips_payload(
-                    layout, body.model_dump(), clock=deps.clock
-                )
-            )
-            # A run waiting to be confirmed follows the board: a changed plan or
-            # answer gets a new revision, and a changed frame is planned again.
-            service.sync_waiting()
-            return payload
+            lock.acquire("clips")
         except ProjectBusy as err:
             raise CodedHTTPException(
                 409, str(err), code="pipeline.projectBusy"
             ) from err
+        try:
+            return put_clips_payload(
+                layout, body.model_dump(), clock=deps.clock
+            )
         except ValueError as err:
             raise http_error(err, 400) from err
+        finally:
+            lock.release("clips")
 
     @app.get("/api/projects/{name}/brief")
     def project_brief_get(name: str) -> dict[str, object]:
@@ -1969,99 +1872,6 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
             raise http_error(err, 404) from err
         except ValueError as err:
             raise http_error(err, 400) from err
-
-    @app.post("/api/projects/{name}/topic-map")
-    def project_topic_map(name: str, body: TopicMapBody) -> StreamingResponse:
-        layout = require_project_layout(name)
-
-        # A plan proposed by the chat is entered through the same original
-        # button; the wait is what connects that press to the conversation. A
-        # wrong wait is answered before a missing model, and nothing is written
-        # until the job can actually start.
-        job_wait = job_wait_for_body(
-            deps, layout, body.sessionId, body.waitId, "plan"
-        )
-
-        try:
-            ensure_llm_configured()
-        except LlmConfigError as err:
-            raise http_error(err, 503) from err
-
-        on_finished = None
-        if job_wait is not None:
-            job_id = enter_wait_for_job(deps, job_wait, "plan")
-            on_finished = job_completion(deps, job_wait, layout, job_id)
-        else:
-            # A direct press writes the same project; it is a collaboration job
-            # too, so it waits for the one the chat entered.
-            job_id = claim_job(deps)
-
-        return StreamingResponse(
-            iter_topic_map_sse(
-                layout,
-                intent=body.intent,
-                source_identity=body.sourceIdentity,
-                language=body.language,
-                waits=job_wait.waits if job_wait is not None else None,
-                session_id=job_wait.session_id if job_wait is not None else "",
-                wait_id=job_wait.wait_id if job_wait is not None else "",
-                on_finished=on_finished,
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-            background=BackgroundTask(_after_plan, deps, job_wait, layout, job_id),
-        )
-
-    @app.post("/api/projects/{name}/ingest-confirmed")
-    def project_ingest_confirmed(
-        name: str, body: IngestConfirmedBody
-    ) -> StreamingResponse:
-        layout = require_project_layout(name)
-
-        # A compile proposed by the chat is entered through the same original
-        # button, after the human has decided which pages to write. The wait is
-        # what connects that confirmation to the conversation.
-        job_wait = job_wait_for_body(
-            deps, layout, body.sessionId, body.waitId, "compile"
-        )
-
-        try:
-            ensure_llm_configured()
-        except LlmConfigError as err:
-            raise http_error(err, 503) from err
-
-        on_finished = None
-        if job_wait is not None:
-            job_id = enter_wait_for_job(deps, job_wait, "compile")
-            on_finished = job_completion(deps, job_wait, layout, job_id)
-        else:
-            job_id = claim_job(deps)
-
-        confirmed = [item.model_dump() for item in body.confirmed]
-        return StreamingResponse(
-            iter_ingest_confirmed_sse(
-                layout,
-                confirmed,
-                intent=body.intent,
-                waits=job_wait.waits if job_wait is not None else None,
-                session_id=job_wait.session_id if job_wait is not None else "",
-                wait_id=job_wait.wait_id if job_wait is not None else "",
-                on_finished=on_finished,
-            ),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-            background=BackgroundTask(
-                job_cleanup, deps, job_wait, layout, job_id, "compile"
-            ),
-        )
 
     # A write names its project, so these two cannot answer: saying so beats
     # letting a caller believe a capture was stored somewhere.

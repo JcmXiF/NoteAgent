@@ -316,97 +316,12 @@ export type SseHandlers = {
    * the answer.
    */
   onObservation?: (observation: ObservationPayload) => void;
-  /**
-   * `wait`: a collaboration node the run proposed, and where the human
-   * finishes it. The job starts in that interface, never here.
-   */
-  onWait?: (wait: WaitPayload) => void;
+  /** `state`: the writing state's version moved; the panel reads it again. */
+  onState?: (stateVersion: number) => void;
   /** Aborting this stops the reader; the backend cancels before its next model call. */
   signal?: AbortSignal;
   /** Message used when the stream ends without a `done` or `error` event. */
   emptyError?: string;
-};
-
-/**
- * The one collaboration node a session is waiting on.
- *
- * `completion` is a stable name for the action the human takes, not a sentence:
- * the core does not know which language the reader is using, so the interface
- * words it. `interface` is where the original button lives.
- */
-export type WaitPayload = {
-  waitId: string;
-  job: string;
-  interface: string;
-  status: string;
-  completion: string;
-  proposedAt: string;
-  /** The job the human started, once the wait has been entered. */
-  jobId?: string;
-  intent?: string;
-  reason?: string;
-  resultSummary?: string;
-  /** What a finished job produced, as bounded references. */
-  artifacts?: { kind: string; id: string; label?: string }[];
-  error?: string;
-};
-
-/**
- * One material of the writing task, as an event card reads it.
- *
- * `blocks` is absent from a chat card on purpose: the block index is the
- * reader's bounded view, and a card says what the material is and how much of
- * it there is.
- */
-export type ObservedMaterial = {
-  id: string;
-  title: string;
-  url?: string;
-  kind?: string;
-  fidelity: string;
-  state: string;
-  blockCount: number;
-  blocks?: { id: string; tag?: string; preview: string }[];
-  blocksOmitted?: number;
-};
-
-/**
- * One frame the assistant drew or inspected.
- *
- * A frame says which material it marks, who drew it, and how many of that
- * material's passages it covers. The block previews are bounded by the core;
- * a card reads the count, not the ids.
- */
-export type ObservedFrame = {
-  id: string;
-  docId: string;
-  source: string;
-  blockCount: number;
-  blocks?: { id: string; preview?: string }[];
-};
-
-/**
- * The page a write request proposes: its wiki name, title, action and the
- * sections it is written from, each naming the frame's blocks as evidence.
- */
-export type ObservedPageSpec = {
-  slug: string;
-  title: string;
-  action: string;
-  sections: { title: string; blocks: string[] }[];
-};
-
-/**
- * One write request, as `compose_page` records it in the task.
- *
- * It is the same object the confirmation panel reads from the task view: the
- * frame and canonical spec it is bound to, and the revision it was recorded at.
- */
-export type ObservedWriteRequest = {
-  frameId: string;
-  spec: ObservedPageSpec;
-  rev: number;
-  at: string;
 };
 
 /**
@@ -437,31 +352,11 @@ export type ObservationPayload = {
   omitted?: string;
   truncated?: boolean;
   not_source?: boolean;
-  needs_human?: boolean;
-  job?: string;
   fidelity?: string;
   http_status?: number;
   /** For a write action: which one it was, and whether it actually wrote. */
   action?: string;
   wrote_wiki?: boolean;
-  /** The writing task revision this result belongs to. */
-  rev?: number;
-  /** A long operation that has not reached an answer yet. */
-  status?: string;
-  /** The resource cards a search put in the writing task. */
-  cards?: {
-    id?: string;
-    title: string;
-    url: string;
-    snippet?: string;
-    site?: string;
-  }[];
-  /** The materials a pick or an inspect("materials") touched. */
-  materials?: ObservedMaterial[];
-  /** The frames a frame_blocks call or an inspect("frames") touched. */
-  frames?: ObservedFrame[];
-  /** The write request a compose_page recorded or inspect("approval") shows. */
-  request?: ObservedWriteRequest;
   /** What the tool's own runtime noticed: a cut, a timeout, a failure. */
   diagnostics?: { severity: string; code: string; message: string }[];
 };
@@ -481,7 +376,7 @@ export async function postSse<T>(
     onToken,
     onTokenReset,
     onObservation,
-    onWait,
+    onState,
     signal,
     emptyError = fallbackError,
   } = handlers;
@@ -527,9 +422,9 @@ export async function postSse<T>(
             if (typeof payload.tool === "string" && payload.tool) {
               onObservation?.(payload as unknown as ObservationPayload);
             }
-          } else if (parsed.event === "wait") {
-            if (typeof payload.waitId === "string" && payload.waitId) {
-              onWait?.(payload as unknown as WaitPayload);
+          } else if (parsed.event === "state") {
+            if (typeof payload.stateVersion === "number") {
+              onState?.(payload.stateVersion);
             }
           } else if (parsed.event === "token") {
             // A retraction carries no text of its own: it says the text already sent

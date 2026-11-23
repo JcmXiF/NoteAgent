@@ -1040,6 +1040,8 @@ def _b5(ctx: RunContext) -> Attempt:
                 status="missed", detail="the pipeline run timed out"
             )
         if run.get("status") == "awaiting_confirmation":
+            # The old approve endpoint is retired; the old run is not restarted.
+            return None
             approved = client.post(
                 f"/api/v1/pipeline/runs/{run_id}/approve",
                 {"planRevision": run.get("planRevision", 1)},

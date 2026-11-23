@@ -67,7 +67,7 @@ export function GettingStarted({
       // Compiling happens in the panel beside the workbench, so the step that
       // says "compile" has to show both halves of it rather than only a module.
       setRightOpen(true);
-      setSectionOpen("compile", true);
+      setSectionOpen("pipeline", true);
     }
     openModule("sources");
   };

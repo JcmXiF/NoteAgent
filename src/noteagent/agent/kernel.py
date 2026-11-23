@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from threading import Event, Lock
 
 from noteagent.agent.clock import Clock, Ids, SystemClock, UuidIds, iso_timestamp
@@ -29,7 +30,6 @@ from noteagent.agent.events import (
     RunEvent,
     StatusEvent,
     TokenEvent,
-    WaitEvent,
 )
 from noteagent.agent.model import (
     AssistantMessage,
@@ -41,23 +41,16 @@ from noteagent.agent.model import (
     ModelStreamError,
     ModelTextDelta,
     ToolCall,
+    Usage,
     collect,
 )
 from noteagent.agent.projection import project
-from noteagent.agent.propose import (
-    PROPOSE_NAME,
-    PROPOSE_TOOL,
-    Proposal,
-    ProposeError,
-    parse_proposal,
-)
 from noteagent.agent.run_marker import (
     CANCELLED,
     FAILED,
     FINISHED,
     INTERRUPTED,
     RUNNING,
-    WAITING,
     RunFingerprint,
     RunMarker,
     config_digest,
@@ -70,39 +63,24 @@ from noteagent.agent.run_marker import (
 from noteagent.agent.runtime import (
     BusyError,
     EventSink,
-    Resume,
     ResumeCheck,
-    Retry,
     RunCancelled,
     RunPaused,
     RunRef,
     RunRequest,
     RunResult,
     RunResume,
-    TaskOpResume,
     TraceSink,
     UserInput,
     busy_message,
 )
-from noteagent.agent.store import SessionSnapshot, SessionStore, WaitStore
-from noteagent.agent.task_op import has_task_op_result, task_op_result_entry
+from noteagent.agent.store import SessionSnapshot, SessionStore
 from noteagent.agent.tools import (
     Diagnostic,
     ToolContext,
     ToolRegistry,
     ToolResult,
     toolset_name,
-)
-from noteagent.agent.wait import (
-    WaitState,
-    completion_for,
-    is_active,
-    render_run_section,
-)
-from noteagent.agent.wait_store import (
-    SessionWaitStore,
-    current_wait,
-    has_resumed,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,8 +99,8 @@ MAX_TOOL_CALLS_PER_ROUND = 8
 SUMMARY_INSTRUCTIONS = (
     "Summarize the earlier part of this conversation so it can be left out of "
     "the context. Keep: the reader's goals, constraints, decisions and open "
-    "questions; important tool results (pages read or searched, job results); "
-    "the current task state, pending waits or jobs, and the next step; project "
+    "questions; important tool results (pages read or searched); "
+    "the current task state and the next step; project "
     "constraints that must not be forgotten. Drop: raw tool output, repeated "
     "material, and intermediate reasoning. Write a compact summary in the "
     "language of the conversation."
@@ -132,11 +110,18 @@ SUMMARY_INSTRUCTIONS = (
 #: transient; it is not a step budget.
 LEAK_RETRY = (
     "Your previous response contained tool-call markup instead of an answer. "
-    "Do not write tool-call markup. If the reader asked for a page/job, make "
-    "one valid, lone `propose` call now; otherwise answer in prose from the "
-    "evidence above; if a read tool is still needed, say that the tool budget "
-    "is exhausted and what is missing."
+    "Do not write tool-call markup. Answer in prose from the evidence above; "
+    "if a read tool is still needed, say that the tool budget is exhausted "
+    "and what is missing."
 )
+#: The one no-tools turn a run gets after spending its model-turn budget.
+MAX_TURNS_FINAL = (
+    "You have reached this run's model-turn limit. Answer the reader now "
+    "from the conversation and the tool results you already have. Do not "
+    "call tools."
+)
+#: The marker note and status code for that forced answer.
+MAX_TURNS_NOTE = "max_turns_exceeded"
 
 
 class RunRegistry:
@@ -187,15 +172,14 @@ class KernelRuntime:
         model: ModelClient,
         sessions: SessionStore,
         tools: ToolRegistry | None = None,
-        waits: WaitStore | None = None,
         clock: Clock | None = None,
         ids: Ids | None = None,
         registry: RunRegistry | None = None,
         trace: TraceSink | None = None,
         model_name: str = "",
         #: One safety bound for the whole run: model calls, not tool rounds.
-        #: Coding agents usually expose one turn budget and let the loop end on
-        #: a final answer or a control action.
+        #: Spending it forces one extra answer without tools, so the reader
+        #: still gets what the run has.
         max_turns: int = 50,
         compaction: CompactionLimits | None = None,
         #: Non-secret project/config digests a run marker records. The kernel
@@ -206,9 +190,6 @@ class KernelRuntime:
         self._trace = trace
         self._sessions = sessions
         self._tools = tools or ToolRegistry()
-        # A wait is read from the same log as the turns, so the default keeps
-        # the runtime and the session view looking at one record.
-        self._waits = waits if waits is not None else SessionWaitStore(sessions)
         self._clock = clock or SystemClock()
         self._ids = ids or UuidIds()
         self._registry = registry or RunRegistry()
@@ -217,14 +198,15 @@ class KernelRuntime:
         self._compaction = compaction or CompactionLimits()
         self._fingerprint = dict(fingerprint or {})
 
+    @property
+    def compaction_limits(self) -> CompactionLimits:
+        """The window and budgets this runtime compacts with."""
+        return self._compaction
+
     def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
-        if isinstance(request, Retry):
-            raise ValueError("no route opens a retry yet")
         session_id = request.session_id
         preclaimed = (
-            request.claim
-            if isinstance(request, (RunResume, TaskOpResume))
-            else None
+            request.claim if isinstance(request, RunResume) else None
         )
         cancel = (
             preclaimed
@@ -232,19 +214,18 @@ class KernelRuntime:
             else self._registry.claim(session_id)
         )
         pause = request.pause
-        run_id = self._ids.new_id("run")
+        if isinstance(request, RunResume):
+            # ``run_id`` names the interrupted run; the continuation is its own.
+            run_id = (
+                str(request.new_run_id or "")
+                or self._ids.new_id("run")
+            )
+        else:
+            run_id = str(request.run_id or "") or self._ids.new_id("run")
         sink = self._reporting(sink, RunRef(session_id, run_id))
         try:
             if isinstance(request, RunResume):
                 return self._run_crash_resume(
-                    request, sink, run_id, cancel, pause
-                )
-            if isinstance(request, TaskOpResume):
-                return self._run_task_op(
-                    request, sink, run_id, cancel, pause
-                )
-            if isinstance(request, Resume):
-                return self._run_resume(
                     request, sink, run_id, cancel, pause
                 )
             return self._run_user(request, sink, run_id, cancel, pause)
@@ -286,9 +267,6 @@ class KernelRuntime:
     def cancel(self, session_id: str) -> None:
         self._registry.cancel(session_id)
 
-    def wait_state(self, session_id: str) -> WaitState | None:
-        return self._waits.current(session_id)
-
     def is_busy(self, session_id: str) -> bool:
         return self._registry.is_busy(session_id)
 
@@ -308,56 +286,6 @@ class KernelRuntime:
             _check_cancel(cancel)
             self._sessions.append(
                 session_id, {"type": "message", "role": "user", "content": content}
-            )
-        except RunCancelled:
-            return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
-
-    def _run_resume(
-        self,
-        request: Resume,
-        sink: EventSink,
-        run_id: str,
-        cancel: Event,
-        pause: Event | None = None,
-    ) -> RunResult:
-        """Continue a session after the job it waited on came back.
-
-        A resume is a run like any other, except that its turn begins with the
-        job result the log now holds rather than with something a person said.
-        The marker makes a second delivery of the same completion a no-op.
-        """
-        session_id = request.session_id
-        try:
-            _check_cancel(cancel)
-            snapshot = self._sessions.load(session_id)
-            wait = current_wait(snapshot.entries)
-            if wait is None or wait.wait_id != request.wait_id:
-                raise ValueError(
-                    f"session {session_id} is not waiting on {request.wait_id}"
-                )
-            # A job that was cancelled still has a result: the cancellation.
-            # A wait the human stopped before starting has no job and no
-            # continuation to run.
-            finished = wait.status in ("completed", "failed") or (
-                wait.status == "cancelled" and bool(wait.job_id)
-            )
-            if not finished:
-                raise ValueError(
-                    f"wait {request.wait_id} is {wait.status}, not finished"
-                )
-            if has_resumed(snapshot.entries, request.wait_id):
-                # The completion was delivered twice: the job may only continue
-                # the conversation once.
-                sink(
-                    DoneEvent(
-                        {"id": session_id}, {"id": run_id, "status": "completed"}
-                    )
-                )
-                return RunResult(session_id, run_id, "completed")
-            self._sessions.append(
-                session_id,
-                {"type": "resume_started", "waitId": request.wait_id},
             )
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
@@ -428,51 +356,6 @@ class KernelRuntime:
         except RunCancelled:
             return self._cancelled_result(session_id, run_id, sink, "")
 
-    def _run_task_op(
-        self,
-        request: TaskOpResume,
-        sink: EventSink,
-        run_id: str,
-        cancel: Event,
-        pause: Event | None = None,
-    ) -> RunResult:
-        """Continue a session from the bounded delta of a finished task op.
-
-        The op already ran; this run is the conversation catching up. The delta
-        is committed first, so a duplicate delivery sees it and ends without a
-        second model call. The model then reads it as a system observation and
-        answers on the same session, which is what a reconnect by session id
-        sees.
-        """
-        session_id = request.session_id
-        op_id = request.op_id.strip()
-        if not op_id:
-            raise ValueError("a task op resume names the op it continues")
-        try:
-            _check_cancel(cancel)
-            snapshot = self._sessions.load(session_id)
-            if has_task_op_result(snapshot.entries, op_id):
-                sink(
-                    DoneEvent(
-                        {"id": session_id},
-                        {"id": run_id, "status": "completed"},
-                    )
-                )
-                return RunResult(session_id, run_id, "completed")
-            self._sessions.append(
-                session_id,
-                task_op_result_entry(
-                    op_id=op_id,
-                    kind=request.kind,
-                    status=request.status,
-                    rev=request.rev,
-                    result=request.result,
-                ),
-            )
-        except RunCancelled:
-            return self._cancelled_result(session_id, run_id, sink, "")
-        return self._run_loop(session_id, run_id, sink, cancel, pause=pause)
-
     def _resume_check(
         self,
         marker: RunMarker,
@@ -539,38 +422,71 @@ class KernelRuntime:
             overflow_retried = False
             leak_retry_used = False
             leak_retry_note = False
+            #: The provider's own prompt count from the last conversation
+            #: call, and the estimate for that same prompt. Their difference
+            #: sizes the messages appended since.
+            last_usage, last_prompt_estimate = self._usage_baseline(
+                session_id
+            )
 
+            forced_final = False
             while True:
                 _check_cancel(cancel)
                 _check_pause(pause)
-                model_calls += 1
-                if model_calls > self._max_turns:
-                    message = (
-                        "the run exceeded "
-                        f"{self._max_turns} model turns"
+                if not forced_final:
+                    model_calls += 1
+                    if model_calls > self._max_turns:
+                        # Spend the one extra call without tools: the reader
+                        # gets an answer from what the run already gathered.
+                        forced_final = True
+                        sink(
+                            StatusEvent(
+                                f"{MAX_TURNS_NOTE}: answering without tools",
+                                "think",
+                            )
+                        )
+                current_prompt = self._prompt(session_id)
+                prompt_tokens = None
+                if last_usage is not None and last_usage.input_tokens > 0:
+                    added_estimate = max(
+                        0,
+                        estimate_tokens(
+                            current_prompt,
+                            self._compaction.chars_per_token,
+                        )
+                        - last_prompt_estimate,
                     )
-                    self._mark(
-                        session_id,
-                        run_id,
-                        FAILED,
-                        note="max_turns_exceeded",
+                    prompt_tokens = (
+                        last_usage.input_tokens + added_estimate
                     )
-                    sink(ErrorEvent("max_turns_exceeded", message))
-                    return RunResult(
-                        session_id, run_id, "failed", error=message
-                    )
+                compacted = False
                 try:
-                    self._compact_if_needed(
-                        session_id, sink, cancel, pause=pause
+                    compacted = self._compact_if_needed(
+                        session_id,
+                        sink,
+                        cancel,
+                        pause=pause,
+                        prompt_tokens=prompt_tokens,
                     )
                 except ModelStreamError as err:
-                    return self._compaction_failure(
-                        session_id, run_id, sink, err
-                    )
-                messages = self._prompt(session_id)
+                    if not forced_final:
+                        return self._compaction_failure(
+                            session_id, run_id, sink, err
+                        )
+                    # A failed summary must not cost the reader the forced
+                    # answer; the model call below may still fit.
+                messages = (
+                    self._prompt(session_id) if compacted else current_prompt
+                )
                 if leak_retry_note:
                     messages = messages + (Message("system", LEAK_RETRY),)
-                offered = self._offered_tools()
+                if forced_final:
+                    messages = messages + (
+                        Message("system", MAX_TURNS_FINAL),
+                    )
+                    offered: tuple[dict[str, object], ...] = ()
+                else:
+                    offered = self._offered_tools()
                 model_request = ModelRequest(
                     model=self._model_name,
                     messages=messages,
@@ -593,7 +509,11 @@ class KernelRuntime:
                     if err.code == "cancelled":
                         # One cancellation path, whichever layer noticed first.
                         raise RunCancelled("run cancelled") from err
-                    if err.code == "tool_call_leak" and not leak_retry_used:
+                    if (
+                        err.code == "tool_call_leak"
+                        and not leak_retry_used
+                        and not forced_final
+                    ):
                         # The adapter could not recover a leaked tool call.
                         # Ask once more, in prose, with the failure named.
                         leak_retry_used = True
@@ -601,7 +521,11 @@ class KernelRuntime:
                         sink(TokenEvent("", reset=True))
                         partial.clear()
                         continue
-                    if err.code == "context_overflow" and not overflow_retried:
+                    if (
+                        err.code == "context_overflow"
+                        and not overflow_retried
+                        and not forced_final
+                    ):
                         overflow_retried = True
                         try:
                             compacted = self._compact_if_needed(
@@ -610,6 +534,7 @@ class KernelRuntime:
                                 cancel,
                                 force=True,
                                 pause=pause,
+                                prompt_tokens=prompt_tokens,
                             )
                         except ModelStreamError as summary_err:
                             return self._compaction_failure(
@@ -628,7 +553,9 @@ class KernelRuntime:
                         session_id,
                         run_id,
                         FAILED,
-                        note=err.code,
+                        note=(
+                            MAX_TURNS_NOTE if forced_final else err.code
+                        ),
                     )
                     sink(
                         ErrorEvent(
@@ -643,31 +570,36 @@ class KernelRuntime:
                 # say) gets its own compaction and retry.
                 overflow_retried = False
                 leak_retry_note = False
+                last_usage = assistant.usage
+                last_prompt_estimate = estimate_tokens(
+                    messages, self._compaction.chars_per_token
+                )
                 if assistant.tool_calls:
+                    if forced_final:
+                        message = (
+                            "the model tried to call tools after the "
+                            "turn limit"
+                        )
+                        self._mark(
+                            session_id,
+                            run_id,
+                            FAILED,
+                            note=MAX_TURNS_NOTE,
+                        )
+                        sink(ErrorEvent("model_error", message))
+                        return RunResult(
+                            session_id, run_id, "failed", error=message
+                        )
                     calls = assistant.tool_calls
-                    refusal: ToolResult | None = None
-                    if len(calls) == 1 and calls[0].name == PROPOSE_NAME:
-                        proposal, refusal = self._read_proposal(session_id, calls[0])
-                        if proposal is not None:
-                            return self._wait_for_proposal(
-                                session_id,
-                                run_id,
-                                sink,
-                                assistant,
-                                proposal,
-                            )
-                    # A refused proposal and an ordinary batch share one tail:
-                    # the preamble becomes a step, every call gets its result,
+                    # The preamble becomes a step, every call gets its result,
                     # and the next round reads the log.
                     sink(TokenEvent("", reset=True))
-                    self._commit_tool_calls(session_id, calls, assistant.content)
+                    self._commit_tool_calls(session_id, assistant)
                     # The preamble is now part of the tool-call entry, so a stop
                     # from here on must not commit it a second time.
                     partial.clear()
-                    results = (
-                        (refusal,)
-                        if refusal is not None
-                        else self._round_results(session_id, run_id, calls, cancel)
+                    results = self._round_results(
+                        session_id, run_id, calls, cancel
                     )
                     self._commit_results(session_id, calls, results, sink)
                     sink(StatusEvent("thinking", "think"))
@@ -680,7 +612,11 @@ class KernelRuntime:
                         session_id,
                         run_id,
                         FAILED,
-                        note="model_error",
+                        note=(
+                            MAX_TURNS_NOTE
+                            if forced_final
+                            else "model_error"
+                        ),
                     )
                     sink(ErrorEvent("model_error", message))
                     return RunResult(session_id, run_id, "failed", error=message)
@@ -691,13 +627,14 @@ class KernelRuntime:
                     "stopReason": assistant.stop_reason or "stop",
                 }
                 if assistant.usage is not None:
-                    entry["usage"] = {
-                        "inputTokens": assistant.usage.input_tokens,
-                        "outputTokens": assistant.usage.output_tokens,
-                        "cacheReadTokens": assistant.usage.cache_read_tokens,
-                    }
+                    entry["usage"] = _usage_entry(assistant.usage)
                 self._sessions.append(session_id, entry)
-                self._mark(session_id, run_id, FINISHED)
+                self._mark(
+                    session_id,
+                    run_id,
+                    FINISHED,
+                    note=MAX_TURNS_NOTE if forced_final else "",
+                )
                 sink(
                     DoneEvent(
                         {"id": session_id}, {"id": run_id, "status": "completed"}
@@ -720,8 +657,47 @@ class KernelRuntime:
             raise
 
     def _offered_tools(self) -> tuple[dict[str, object], ...]:
-        """The tools the model may call, with the control action beside them."""
-        return (PROPOSE_TOOL,) + self._tools.model_tools()
+        """The tools the model may call."""
+        return self._tools.model_tools()
+
+    def _usage_baseline(
+        self, session_id: str
+    ) -> tuple[Usage | None, int]:
+        """The last assistant call's usage, and the estimate for its prompt.
+
+        A run continued after a pause starts from the previous run's last
+        call, so the first compaction check still reads a real count.
+        """
+        snapshot = self._sessions.load(session_id)
+        entries = list(snapshot.entries)
+        for index in range(len(entries) - 1, -1, -1):
+            entry = entries[index]
+            if (
+                entry.get("type") != "message"
+                or entry.get("role") != "assistant"
+            ):
+                continue
+            raw = entry.get("usage")
+            if not isinstance(raw, Mapping):
+                continue
+            usage = Usage(
+                input_tokens=_token_count(raw.get("inputTokens")),
+                output_tokens=_token_count(raw.get("outputTokens")),
+                cache_read_tokens=_token_count(
+                    raw.get("cacheReadTokens")
+                ),
+            )
+            if usage.input_tokens <= 0:
+                continue
+            prefix = replace(
+                snapshot, entries=tuple(entries[: index + 1])
+            )
+            estimate = estimate_tokens(
+                self._prompt_from(prefix),
+                self._compaction.chars_per_token,
+            )
+            return usage, estimate
+        return None, 0
 
     def _mark(
         self,
@@ -758,81 +734,6 @@ class KernelRuntime:
         except Exception:
             logger.exception("the run marker could not be written")
 
-    def _read_proposal(
-        self, session_id: str, call: ToolCall
-    ) -> tuple[Proposal | None, ToolResult | None]:
-        """The checked proposal, or the observation that says why not."""
-        try:
-            proposal = parse_proposal(call.arguments)
-        except ProposeError as err:
-            return None, self._refused(
-                call, f"invalid proposal: {err}", "invalid_proposal"
-            )
-        active = self._waits.current(session_id)
-        if is_active(active):
-            assert active is not None
-            return None, self._refused(
-                call,
-                (
-                    f"this session is already waiting on {active.job}; "
-                    "finish or stop it first"
-                ),
-                "already_waiting",
-                job=active.job,
-            )
-        return proposal, None
-
-    def _record_wait(self, session_id: str, proposal: Proposal) -> WaitState:
-        """Commit the wait a checked proposal asks for, and return it."""
-        wait = WaitState(
-            wait_id=self._ids.new_id("wait"),
-            job=proposal.job,
-            interface=proposal.interface,
-            status="proposed",
-            proposed_at=iso_timestamp(self._clock),
-            completion=completion_for(proposal.job),
-            intent=proposal.intent,
-            reason=proposal.reason,
-        )
-        self._waits.propose(session_id, wait)
-        return wait
-
-    def _wait_for_proposal(
-        self,
-        session_id: str,
-        run_id: str,
-        sink: EventSink,
-        assistant: AssistantMessage,
-        proposal: Proposal,
-    ) -> RunResult:
-        """Commit the proposal's prose, record the wait, and end the run."""
-        text = assistant.content.strip()
-        if text:
-            self._sessions.append(
-                session_id,
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": text,
-                    "stopReason": "propose",
-                },
-            )
-        wait = self._record_wait(session_id, proposal)
-        self._mark(session_id, run_id, WAITING)
-        sink(WaitEvent(wait))
-        sink(
-            DoneEvent(
-                {"id": session_id},
-                {"id": run_id, "status": "waiting"},
-            )
-        )
-        return RunResult(
-            session_id,
-            run_id,
-            "waiting",
-            wait_id=wait.wait_id,
-        )
-
     def _round_results(
         self,
         session_id: str,
@@ -840,19 +741,7 @@ class KernelRuntime:
         calls: tuple[ToolCall, ...],
         cancel: Event,
     ) -> tuple[ToolResult, ...]:
-        """One result per call, in the model's order.
-
-        A batch that has propose beside another call is refused whole: the
-        control action is only meaningful alone, and running the rest would
-        leave the model believing half of it happened.
-        """
-        if any(call.name == PROPOSE_NAME for call in calls):
-            message = (
-                "propose must be alone in its batch; nothing in this batch was run"
-            )
-            return tuple(
-                self._refused(call, message, "propose_not_alone") for call in calls
-            )
+        """One result per call, in the model's order."""
         within = calls[:MAX_TOOL_CALLS_PER_ROUND]
         results = list(
             self._tools.dispatch_many(
@@ -883,48 +772,25 @@ class KernelRuntime:
             )
         return tuple(results)
 
-    def _refused(
-        self,
-        call: ToolCall,
-        message: str,
-        code: str,
-        *,
-        job: str = "",
-    ) -> ToolResult:
-        """A call that did not run, as both the model and the reader see it."""
-        meta: dict[str, object] = {"title": call.name, "error": True}
-        if call.name == PROPOSE_NAME:
-            meta["needs_human"] = True
-        if job:
-            meta["job"] = job
-        return ToolResult(
-            content=message,
-            meta=meta,
-            diagnostics=(Diagnostic("error", code, message),),
-        )
-
     def _commit_tool_calls(
-        self,
-        session_id: str,
-        calls: tuple[ToolCall, ...],
-        content: str,
+        self, session_id: str, assistant: AssistantMessage
     ) -> None:
-        self._sessions.append(
-            session_id,
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": content,
-                "toolCalls": [
-                    {
-                        "id": call.id,
-                        "name": call.name,
-                        "arguments": call.arguments,
-                    }
-                    for call in calls
-                ],
-            },
-        )
+        entry: dict[str, object] = {
+            "type": "message",
+            "role": "assistant",
+            "content": assistant.content,
+            "toolCalls": [
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                }
+                for call in assistant.tool_calls
+            ],
+        }
+        if assistant.usage is not None:
+            entry["usage"] = _usage_entry(assistant.usage)
+        self._sessions.append(session_id, entry)
 
     def _commit_results(
         self,
@@ -1065,14 +931,20 @@ class KernelRuntime:
         force: bool = False,
         instructions: str = "",
         pause: Event | None = None,
+        prompt_tokens: int | None = None,
     ) -> bool:
         _check_pause(pause)
         snapshot = self._sessions.load(session_id)
         cut_id = choose_cut(snapshot.entries, self._compaction)
         if cut_id is None:
             return False
-        prompt = self._prompt_from(snapshot)
-        tokens_before = estimate_tokens(prompt, self._compaction.chars_per_token)
+        if prompt_tokens is not None and prompt_tokens > 0:
+            tokens_before = prompt_tokens
+        else:
+            tokens_before = estimate_tokens(
+                self._prompt_from(snapshot),
+                self._compaction.chars_per_token,
+            )
         if not force and tokens_before < self._compaction.threshold_tokens:
             return False
         cut_index = next(
@@ -1093,11 +965,14 @@ class KernelRuntime:
         if old.summary.strip():
             context += "Earlier summary:\n" + old.summary.strip() + "\n\n"
         context += transcript
-        # The summary request has to fit the same window. Keep the opening
-        # (goals, constraints) and the end (the turns nearest the cut).
-        max_chars = (
-            self._compaction.threshold_tokens
-            * self._compaction.chars_per_token
+        # The summary input has its own cap, never above the compaction
+        # threshold. Keep the opening (goals, constraints) and the end.
+        summary_tokens = min(
+            self._compaction.summary_input_tokens,
+            self._compaction.threshold_tokens,
+        )
+        max_chars = max(1, summary_tokens) * (
+            self._compaction.chars_per_token
         )
         if len(context) > max_chars:
             head = max_chars // 4
@@ -1113,9 +988,6 @@ class KernelRuntime:
                 "\n\nAdditional instructions from the reader:\n"
                 + instructions.strip()
             )
-        run_section = render_run_section(current_wait(snapshot.entries))
-        if run_section.strip():
-            system += "\n\nCurrent run state:\n" + run_section
         sink(StatusEvent("compacting earlier turns", "think"))
         try:
             summary_message = collect(
@@ -1150,11 +1022,7 @@ class KernelRuntime:
             return False
         usage = None
         if summary_message.usage is not None:
-            usage = {
-                "inputTokens": summary_message.usage.input_tokens,
-                "outputTokens": summary_message.usage.output_tokens,
-                "cacheReadTokens": summary_message.usage.cache_read_tokens,
-            }
+            usage = _usage_entry(summary_message.usage)
         self._sessions.append(
             session_id,
             compaction_entry(summary, cut_id, tokens_before, usage),
@@ -1169,15 +1037,26 @@ class KernelRuntime:
         parts = [text for text in projection.sections.values() if text.strip()]
         if projection.summary.strip():
             parts.append("Summary of earlier conversation:\n" + projection.summary)
-        run_section = render_run_section(current_wait(snapshot.entries))
-        if run_section.strip():
-            parts.append(run_section)
         messages = list(
             trim_tool_results(projection.messages, self._compaction)
         )
         if parts:
             messages.insert(0, Message("system", "\n\n".join(parts)))
         return tuple(messages)
+
+
+def _usage_entry(usage: Usage) -> dict[str, object]:
+    """One turn's usage as the session entry spells it."""
+    return {
+        "inputTokens": usage.input_tokens,
+        "outputTokens": usage.output_tokens,
+        "cacheReadTokens": usage.cache_read_tokens,
+    }
+
+
+def _token_count(value: object) -> int:
+    """A token count a marker may carry, or zero when it is not one."""
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _tap(

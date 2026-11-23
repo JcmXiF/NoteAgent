@@ -44,22 +44,6 @@ export type PipelineRun = {
   result?: PipelineRunResult;
 };
 
-export type PipelineConfirmationPage = {
-  name: string;
-  slug: string;
-  wikiPath: string;
-  action: "write" | "mention" | "skip";
-  sectionIds: string[];
-  sections: { id: string; title: string }[];
-};
-
-export type PipelineConfirmation = {
-  runId: string;
-  intent: string;
-  planRevision: number;
-  pages: PipelineConfirmationPage[];
-};
-
 export type PipelineRestoreClassification =
   | "unchanged"
   | "changed_by_person"
@@ -112,14 +96,6 @@ export type PipelineRestoreResult = {
   failed: { path: string; error: string }[];
 };
 
-export type PipelineStartInput = {
-  intent: string;
-  startedBy?: PipelineStartedBy;
-  sessionId?: string;
-  queryMode?: PipelineQueryMode;
-  materialMode?: PipelineMaterialMode;
-};
-
 export type PipelineMaterialState =
   | "staged"
   | "framed"
@@ -140,11 +116,6 @@ export type PipelineMaterial = {
   fidelity: string;
 };
 
-/** Starts one run; the project refuses a second while the first is active. */
-export function startPipelineRun(input: PipelineStartInput): Promise<PipelineRun> {
-  return postJson<PipelineRun>("/v1/pipeline/runs", input);
-}
-
 export function fetchPipelineRuns(): Promise<{ runs: PipelineRun[] }> {
   return getJson<{ runs: PipelineRun[] }>("/v1/pipeline/runs");
 }
@@ -157,20 +128,7 @@ export function fetchPipelineMaterials(
   );
 }
 
-export function cancelPipelineRun(id: string): Promise<PipelineRun> {
-  return postJson<PipelineRun>(
-    `/v1/pipeline/runs/${encodeURIComponent(id)}/cancel`,
-    {},
-  );
-}
 
-export function fetchPipelineConfirmation(
-  runId: string,
-): Promise<PipelineConfirmation> {
-  return getJson<PipelineConfirmation>(
-    `/v1/pipeline/runs/${encodeURIComponent(runId)}/confirmation`,
-  );
-}
 
 export function fetchPipelineRestorePreview(
   runId: string,

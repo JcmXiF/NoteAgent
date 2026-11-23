@@ -9,41 +9,62 @@ would have refused, and a cancel reaches the same registry the query claimed.
 from __future__ import annotations
 
 import logging
-import threading
-from dataclasses import dataclass
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from noteagent.agent.jobs import JobBusyError
+from noteagent.agent.clock import Ids, UuidIds
+from noteagent.agent.compaction import (
+    DEFAULT_CONTEXT_WINDOW,
+    CompactionLimits,
+)
 from noteagent.agent.kernel import KernelRuntime, RunRegistry
+from noteagent.agent.model import ModelClient
 from noteagent.agent.projection import project
 from noteagent.agent.retry import RetryingModel
-from noteagent.agent.runtime import AgentRuntime
+from noteagent.agent.runtime import (
+    AgentRuntime,
+    EventSink,
+    RunRequest,
+    RunResult,
+    RunResume,
+    UserInput,
+)
 from noteagent.agent.run_marker import (
     RunFingerprint,
     config_digest,
     sections_digest,
 )
-from noteagent.agent.store import SessionStore, WaitStore
+from noteagent.agent.store import SessionStore
 from noteagent.agent.tools import ToolRegistry, toolset_name
-from noteagent.agent.wait import wait_payload
-from noteagent.agent.wait_store import SessionWaitStore
 from noteagent.api.deps import AppDeps
 from noteagent.api.errors import CodedHTTPException
 from noteagent.api.projects import get_active_layout
-from noteagent.api.task import task_service_for
-from noteagent.llm.config import load_llm_config
+from noteagent.llm.config import LlmConfigError, load_llm_config
 from noteagent.llm.model_gateway import OpenAIModelClient
 from noteagent.project.config import ProjectNotConfiguredError
 from noteagent.project.layout import ProjectLayout
+from noteagent.pipeline.lock import ProjectBusy
 from noteagent.project.run_fingerprint import project_fingerprint
 from noteagent.rag.status import STATUS_UNAVAILABLE, IndexStatus
 from noteagent.sessions.jsonl import JsonlSessionStore, SessionFormatError
 from noteagent.sessions.legacy import MigrationReport
 from noteagent.sessions.recovery import interrupted_run, recover_store
 from noteagent.sessions.trace import SessionTrace
-from noteagent.task.tools import task_tools
+from noteagent.skills import default_registry
+from noteagent.skills.tools import skill_tools
 from noteagent.util.refusal import Refusal
 from noteagent.wiki.agent_tools import wiki_tools
+from noteagent.writing.state import WritingStateStore
+from noteagent.writing.tools import (
+    compose_wiki_tool,
+    get_state_tool,
+    project_fetch,
+    project_web_search,
+    select_frame_tool,
+    select_page_tool,
+    web_search_tool,
+    write_wiki_tool,
+)
 
 if TYPE_CHECKING:
     from noteagent.rag.settings import RagSettings
@@ -63,7 +84,7 @@ def active_layout(deps: AppDeps) -> ProjectLayout | None:
         ) from err
 
 
-def _default_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
+def default_session_store(deps: AppDeps, layout: ProjectLayout) -> SessionStore:
     """The project's own store, with the clock and ids the app was built with."""
     return JsonlSessionStore(layout, clock=deps.clock, ids=deps.ids)
 
@@ -81,7 +102,7 @@ def _active_project_store(deps: AppDeps) -> SessionStore | None:
     except (OSError, ValueError) as err:
         logger.warning("the active project cannot be read at startup: %s", err)
         return None
-    return _default_store(deps, layout)
+    return default_session_store(deps, layout)
 
 
 def project_sessions(deps: AppDeps) -> SessionStore:
@@ -90,7 +111,7 @@ def project_sessions(deps: AppDeps) -> SessionStore:
         return deps.sessions
     layout = active_layout(deps)
     assert layout is not None
-    return _default_store(deps, layout)
+    return default_session_store(deps, layout)
 
 
 def migrate_sessions(store: SessionStore) -> MigrationReport | None:
@@ -156,7 +177,7 @@ def open_session_store(
     if store is None:
         resolved = layout or active_layout(deps)
         assert resolved is not None
-        store = _default_store(deps, resolved)
+        store = default_session_store(deps, resolved)
     if isinstance(store, JsonlSessionStore):
         # A conversation opened by its old id may not have been through a list
         # first; the marker makes this a file-existence check on later calls.
@@ -179,21 +200,43 @@ def open_session_store(
 
 
 def session_tools(deps: AppDeps, layout: ProjectLayout | None) -> ToolRegistry:
-    """The tools a kernel run offers: the injected set, or the project's own.
+    """The tools a kernel run offers: the injected set, or the project's wiki.
 
     The catalog is built per run because the active project can change while the
     server keeps running; a registry captured at startup would read the wrong
-    wiki after the reader switched projects. The wiki tools stay as they are:
-    the writing task's tools are composed beside them, not folded into them.
+    wiki after the reader switched projects.
     """
     if deps.tools is not None:
         return deps.tools
     if layout is None:
         # A test that injected its own store and no tools asked for a bare run.
         return ToolRegistry()
-    tools = list(wiki_tools(layout, rag=rag_backend(layout)).enabled())
-    tools.extend(task_tools(task_service_for(deps, layout)))
-    return ToolRegistry(tools)
+    tools = wiki_tools(layout, rag=rag_backend(layout))
+    tools.register(get_state_tool(layout))
+    tools.register(
+        web_search_tool(
+            layout,
+            deps.web_search or project_web_search(layout),
+            clock=deps.clock,
+            ids=deps.ids,
+        )
+    )
+    tools.register(
+        select_page_tool(
+            layout,
+            deps.web_fetch or project_fetch(layout),
+            clock=deps.clock,
+            ids=deps.ids,
+        )
+    )
+    tools.register(
+        select_frame_tool(layout, clock=deps.clock, ids=deps.ids)
+    )
+    tools.register(compose_wiki_tool(layout, clock=deps.clock))
+    tools.register(write_wiki_tool(layout, clock=deps.clock))
+    for tool in skill_tools(default_registry(layout.root)):
+        tools.register(tool)
+    return tools
 
 
 class UnavailableRag:
@@ -255,25 +298,94 @@ def rag_backend(
     return backend
 
 
-def session_runtime(
-    deps: AppDeps,
-    store: SessionStore,
-    layout: ProjectLayout | None,
-) -> AgentRuntime:
-    """The runtime a run crosses: the injected one, or the project's kernel.
+class WritingLeaseRuntime:
+    """A kernel run releases the writing state's lease when it ends.
 
-    A query and the resume that follows a job must be the same kind of run, so
-    they are built in one place. The registry is shared, which is what keeps a
-    job's continuation from starting a second loop beside a person's question.
+    The lease is the state's ``writer`` field, not the project lock: the run's
+    own tools take and release that lock for every state write, so the run
+    cannot hold it for its whole length. The first writing tool takes the lease
+    (a run that never writes the state creates nothing); this wrapper releases
+    it at the end. A person's save sees the lease and refuses; a crashed run's
+    lease goes stale after ``WRITER_TTL_S``.
     """
-    if deps.runtime is not None:
-        return deps.runtime
+
+    def __init__(
+        self,
+        inner: AgentRuntime,
+        store: WritingStateStore,
+        ids: Ids | None = None,
+    ) -> None:
+        self._inner = inner
+        self._store = store
+        self._ids = ids or UuidIds()
+
+    def execute(self, request: RunRequest, sink: EventSink) -> RunResult:
+        if isinstance(request, RunResume):
+            # ``run_id`` is the interrupted run; the continuation gets its own.
+            # Its lease was stranded by the crash, so release it first; the
+            # release refuses a different holder, so a live run is untouched.
+            try:
+                self._store.release_writer(request.run_id)
+            except ProjectBusy:
+                pass
+            run_id = str(request.new_run_id or "")
+            if not run_id:
+                run_id = self._ids.new_id("run")
+                request = replace(request, new_run_id=run_id)
+        else:
+            run_id = str(getattr(request, "run_id", "") or "")
+            if not run_id:
+                # The wrapper names the run before the kernel sees it, so the
+                # lease the tools take is exactly the one this block releases.
+                run_id = self._ids.new_id("run")
+                if isinstance(request, UserInput):
+                    request = replace(request, run_id=run_id)
+        try:
+            return self._inner.execute(request, sink)
+        finally:
+            try:
+                self._store.release_writer(run_id)
+            except ProjectBusy:
+                # A holder we cannot reach leaves only the stale lease behind.
+                pass
+
+    def cancel(self, session_id: str) -> None:
+        self._inner.cancel(session_id)
+
+    def is_busy(self, session_id: str) -> bool:
+        return self._inner.is_busy(session_id)
+
+    def compact(self, session_id: str, instructions: str = "") -> bool:
+        return self._inner.compact(session_id, instructions)
+
+
+def kernel_model(deps: AppDeps) -> tuple[ModelClient, str]:
+    """The model a kernel run uses, and the name its marker records."""
     model_name = str((deps.settings or {}).get("model") or "")
     model = deps.model
     if model is None:
         config = load_llm_config()
         model = RetryingModel(OpenAIModelClient(config))
         model_name = model_name or config.model
+    return model, model_name
+
+
+def _context_window() -> int:
+    """The configured window, or the default when no endpoint is configured."""
+    try:
+        return load_llm_config(require_api_key=False).context_window
+    except LlmConfigError:
+        return DEFAULT_CONTEXT_WINDOW
+
+
+def kernel_runtime(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+    tools: ToolRegistry,
+) -> KernelRuntime:
+    """A kernel with the model, log, registry and trace every run shares."""
+    model, model_name = kernel_model(deps)
     fingerprint = (
         project_fingerprint(layout, config=deps.settings or {})
         if layout is not None
@@ -282,27 +394,53 @@ def session_runtime(
     return KernelRuntime(
         model=model,
         sessions=store,
-        tools=session_tools(deps, layout),
-        waits=session_waits(deps, store),
+        tools=tools,
         clock=deps.clock,
         ids=deps.ids,
         registry=deps.runs,
         model_name=model_name,
         max_turns=deps.max_turns,
+        compaction=CompactionLimits(
+            context_tokens=_context_window()
+        ),
         # A run against a real project writes a content-free trace beside its
         # session; a test store with no project has nowhere to put one.
-        trace=SessionTrace(layout, clock=deps.clock) if layout is not None else None,
+        trace=SessionTrace(layout, clock=deps.clock)
+        if layout is not None
+        else None,
         # Non-secret digests a resume can compare; the kernel only records them.
         fingerprint=fingerprint,
     )
 
 
+def session_runtime(
+    deps: AppDeps,
+    store: SessionStore,
+    layout: ProjectLayout | None,
+) -> AgentRuntime:
+    """The runtime a run crosses: the injected one, or the project's kernel.
+
+    A query and its crash resume must be the same kind of run, so they are
+    built in one place. The registry is shared, which keeps a resumed run from
+    starting a second loop beside a person's question.
+    """
+    if deps.runtime is not None:
+        return deps.runtime
+    runtime: AgentRuntime = kernel_runtime(
+        deps, store, layout, session_tools(deps, layout)
+    )
+    if layout is not None:
+        runtime = WritingLeaseRuntime(
+            runtime,
+            WritingStateStore(layout, clock=deps.clock),
+            ids=deps.ids,
+        )
+    return runtime
+
+
 def _session_model_name(deps: AppDeps) -> str:
     """The model name a kernel run records, resolved as ``session_runtime`` does."""
-    name = str((deps.settings or {}).get("model") or "")
-    if deps.model is not None:
-        return name
-    return name or load_llm_config().model
+    return kernel_model(deps)[1]
 
 
 def resume_refusal(
@@ -311,6 +449,8 @@ def resume_refusal(
     layout: ProjectLayout | None,
     session_id: str,
     run_id: str,
+    *,
+    tools: ToolRegistry | None = None,
 ) -> str:
     """Why this interrupted run cannot continue here, or an empty string.
 
@@ -330,7 +470,9 @@ def resume_refusal(
     current = RunFingerprint.from_mapping(
         fingerprint,
         model=_session_model_name(deps),
-        toolset=toolset_name(session_tools(deps, layout)),
+        toolset=toolset_name(
+            tools if tools is not None else session_tools(deps, layout)
+        ),
         config_hash=config_digest(
             fingerprint.get("configHash", ""), projection.sections
         ),
@@ -363,152 +505,5 @@ def cancel_session(deps: AppDeps, session_id: str) -> bool:
     return busy
 
 
-def session_waits(deps: AppDeps, store: SessionStore) -> WaitStore:
-    """The waits a route reads: the injected set, or the session's own log."""
-    return deps.waits if deps.waits is not None else SessionWaitStore(store)
-
-
-@dataclass(frozen=True, slots=True)
-class JobWait:
-    """A job the chat proposed, with the session that records its lifecycle."""
-
-    store: SessionStore
-    waits: WaitStore
-    session_id: str
-    wait_id: str
-
-
-#: Two presses of the same original button can arrive together. The check and
-#: the entry are one step, so only one job id is ever handed out.
-_ENTER_LOCK = threading.Lock()
-
-
-def check_wait_for_job(job_wait: JobWait, job: str) -> None:
-    """Refuse a job that the named wait does not allow.
-
-    Split from the entry so an endpoint can answer "this wait is wrong" before
-    it answers "the model is not configured", and can validate without writing
-    an entry it may not be able to follow through.
-    """
-    wait = job_wait.waits.current(job_wait.session_id)
-    if wait is None or wait.wait_id != job_wait.wait_id:
-        raise CodedHTTPException(
-            404,
-            (
-                f"wait {job_wait.wait_id} is not the current wait of "
-                f"session {job_wait.session_id}"
-            ),
-            code="wait.notFound",
-            params={"wait": job_wait.wait_id},
-        )
-    if wait.job != job:
-        raise CodedHTTPException(
-            409,
-            f"wait {job_wait.wait_id} is for {wait.job}, not {job}",
-            code="wait.wrongJob",
-            params={"wait": job_wait.wait_id, "job": wait.job},
-        )
-    if wait.status != "proposed":
-        raise CodedHTTPException(
-            409,
-            f"wait {job_wait.wait_id} is already {wait.status}",
-            code="wait.alreadyStarted",
-            params={"wait": job_wait.wait_id, "status": wait.status},
-        )
-
-
-def job_wait_for_body(
-    deps: AppDeps,
-    layout: ProjectLayout | None,
-    session_id: str,
-    wait_id: str,
-    job: str,
-) -> JobWait | None:
-    """The wait a job endpoint's body names, after checking it may be entered.
-
-    Both ids travel together: a wait without its session cannot be found, and a
-    session without a wait is not a proposal. A wrong wait is answered before
-    the model configuration, and nothing is written until the job can start.
-    """
-    if not (session_id or wait_id):
-        return None
-    if not (session_id and wait_id):
-        raise CodedHTTPException(
-            400,
-            "a waited-on job needs both its session and its wait",
-            code="wait.contextIncomplete",
-        )
-    store = open_session_store(deps, session_id, layout=layout)
-    job_wait = JobWait(
-        store,
-        session_waits(deps, store),
-        session_id,
-        wait_id,
-    )
-    check_wait_for_job(job_wait, job)
-    return job_wait
-
-
-def claim_job(deps: AppDeps) -> str:
-    """Take the one collaboration-job slot, or refuse with ``job.busy``.
-
-    A direct plan or compile press is a collaboration job too: it writes the
-    same project, so it must wait for a job the chat already entered.
-    """
-    job_id = deps.ids.new_id("job")
-    try:
-        deps.job_gate.claim(job_id)
-    except JobBusyError as err:
-        raise CodedHTTPException(409, str(err), code="job.busy") from err
-    return job_id
-
-
-def enter_wait_for_job(deps: AppDeps, job_wait: JobWait, job: str) -> str:
-    """Record that the human started the waited-on job, once.
-
-    The job id is minted here so reconciliation can ask the job system what
-    happened when a completion event was lost. A wait that is not proposed is
-    refused: the same button must not start a second job.
-    """
-    with _ENTER_LOCK:
-        check_wait_for_job(job_wait, job)
-        # The wait stays proposed when the slot is taken: the reader can press
-        # again once the other collaboration job has finished.
-        job_id = claim_job(deps)
-        try:
-            job_wait.waits.enter(job_wait.session_id, job_wait.wait_id, job_id)
-        except Exception:
-            deps.job_gate.release(job_id)
-            raise
-        return job_id
-
-
-def cancel_wait(
-    waits: WaitStore, session_id: str, wait_id: str
-) -> dict[str, object]:
-    """Stop a proposed wait, and say what the wait is now.
-
-    Only ``proposed`` can be stopped here. Once the human has entered the node,
-    the job belongs to its own interface, and cancelling it in the chat would
-    leave that interface running something the conversation thinks is over.
-    """
-    wait = waits.current(session_id)
-    if wait is None or wait.wait_id != wait_id:
-        raise CodedHTTPException(
-            404,
-            f"wait {wait_id} is not the current wait of session {session_id}",
-            code="wait.notFound",
-            params={"wait": wait_id},
-        )
-    if wait.status == "cancelled":
-        return {"cancelled": False, "wait": wait_payload(wait)}
-    if wait.status != "proposed":
-        raise CodedHTTPException(
-            409,
-            f"wait {wait_id} is {wait.status}; stop it in its own interface",
-            code="wait.notCancelable",
-            params={"wait": wait_id, "status": wait.status},
-        )
-    waits.cancel(session_id, wait_id, "stopped from the chat")
-    stopped = waits.current(session_id) or wait
-    return {"cancelled": True, "wait": wait_payload(stopped)}
+#: The wait routes and the job gate are gone; the old
+#: wait entries stay readable in the transcript.

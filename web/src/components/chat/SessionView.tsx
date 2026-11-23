@@ -4,120 +4,24 @@ import { SendHorizontal, Square } from "lucide-react";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { SaveRemark } from "@/components/chat/SaveRemark";
 import { SessionCards } from "@/components/chat/SessionCards";
-import { WaitCard } from "@/components/chat/WaitCard";
 import { Button } from "@/components/ui/button";
 import {
   ApiError,
   errorMessage,
   type ObservationPayload,
-  type WaitPayload,
 } from "@/lib/api/client";
 import {
   fetchSession,
   postSessionCancel,
   postSessionQuery,
-  postSessionWaitCancel,
 } from "@/lib/api/sessions";
-import type {
-  SessionPayload,
-  TaskOpResultPayload,
-} from "@/lib/api/types";
+import type { SessionPayload } from "@/lib/api/types";
 import { questionBefore } from "@/lib/chat";
-import { useLayoutStore, type PaneSlot } from "@/stores/layout-store";
-import { useTaskStore } from "@/stores/task-store";
+import type { PaneSlot } from "@/stores/layout-store";
+import { useWritingStore } from "@/stores/writing-store";
 import { cn } from "@/lib/utils";
 
 type Activity = "think" | "tool" | "answer";
-
-/**
- * The tools whose result lands in the shared writing task.
- *
- * A tool observation is how the chat learns the task moved while the agent was
- * talking; the task panel reads the same task, so it is refreshed rather than
- * left showing the state it had when it mounted.
- */
-const TASK_TOOLS = new Set([
-  "web_search",
-  "pick_card",
-  "frame_blocks",
-  "compose_page",
-  "inspect",
-]);
-
-function touchesTask(observation: ObservationPayload): boolean {
-  return (
-    TASK_TOOLS.has(observation.tool) ||
-    observation.request !== undefined ||
-    typeof observation.rev === "number" ||
-    observation.cards !== undefined ||
-    observation.materials !== undefined ||
-    observation.frames !== undefined
-  );
-}
-
-/** Read the one task again; the panel draws whatever the agent just changed. */
-function refreshTask(): void {
-  void useTaskStore.getState().load();
-}
-
-/**
- * Open the task panel on the request a chat card points at.
- *
- * The panel is where the person's gate lives: the chat card opens and refreshes
- * it instead of keeping a second, inert copy of the proposal.
- */
-function openTaskPanel(): void {
-  const layout = useLayoutStore.getState();
-  layout.setRightOpen(true);
-  layout.setSectionOpen("task", true);
-  refreshTask();
-}
-
-/**
- * The task op that resumed this conversation after its executor finished.
- *
- * It is the same bounded delta the model read: which op, how it ended, the task
- * revision and one short result. The task panel carries the full result and its
- * diff; this is the chat's notice that the long op came back.
- */
-function ResumedOpCard({ op }: { op: TaskOpResultPayload }) {
-  const { t } = useTranslation();
-  const result = op.result ?? {};
-  const detail =
-    result.summary ||
-    result.error ||
-    (result.page ? String(result.page) : "") ||
-    (result.material?.title ? String(result.material.title) : "");
-  return (
-    <section
-      aria-label={t("chat.resumedOp", {
-        kind: op.kind,
-        status: t(`task.opStatus.${op.status}`, {
-          defaultValue: op.status,
-        }),
-        rev: op.rev,
-      })}
-      className="mb-3 rounded-md border bg-muted/30 px-2 py-1.5 text-[11px]"
-    >
-      <p className="font-medium">
-        {t("chat.resumedOp", {
-          kind: op.kind,
-          status: t(`task.opStatus.${op.status}`, {
-            defaultValue: op.status,
-          }),
-          rev: op.rev,
-        })}
-      </p>
-      {result.page ? (
-        <p className="truncate text-foreground">{String(result.page)}</p>
-      ) : null}
-      {detail ? <p className="text-muted-foreground">{String(detail)}</p> : null}
-      <p className="text-[10px] text-muted-foreground">
-        {t("chat.resumedOpHint")}
-      </p>
-    </section>
-  );
-}
 
 /**
  * A session as the JSONL log reads: what was asked, what was answered.
@@ -130,7 +34,6 @@ export function SessionView({
   sessionId,
   slot,
   onOpenLink = () => {},
-  onOpenInterface = () => {},
   onSessionChanged = () => {},
 }: {
   sessionId: string;
@@ -138,8 +41,6 @@ export function SessionView({
   slot: PaneSlot;
   /** A wiki link in an answer; absent leaves the link inert. */
   onOpenLink?: (target: string) => void;
-  /** Opening the interface a wait points at, carrying the wait it needs. */
-  onOpenInterface?: (wait: WaitPayload, sessionId: string) => void;
   /** A turn or a name changed; the list's row should say so. */
   onSessionChanged?: (session: SessionPayload) => void;
 }) {
@@ -155,17 +56,13 @@ export function SessionView({
   /** The cards the run reported while it was running; the committed answer
    * carries the same list after the stream ends. */
   const [observations, setObservations] = useState<ObservationPayload[]>([]);
-  /** The wait the session already had when it was read, or the last one. */
-  const [wait, setWait] = useState<WaitPayload | null>(null);
-  /** A wait proposed while this run is still streaming. */
-  const [liveWait, setLiveWait] = useState<WaitPayload | null>(null);
-  const [stoppingWait, setStoppingWait] = useState(false);
-  const [waitError, setWaitError] = useState("");
   /**
    * A run this tab can see but does not own: another tab asked, and this one
    * may only wait. The core decides, so this is only what the last read said.
    */
   const [runningElsewhere, setRunningElsewhere] = useState(false);
+  /** Local writing-state edits the agent cannot see unless they are saved. */
+  const writingDirty = useWritingStore((state) => state.dirty);
 
   /**
    * Whether a send is in flight, and which session it belongs to.
@@ -188,13 +85,9 @@ export function SessionView({
     currentSession.current = sessionId;
   }, [sessionId]);
 
-  /** The session the view now shows, and the wait that came with it. */
+  /** The session the view now shows. */
   const adoptSession = (next: SessionPayload) => {
     setSession(next);
-    setWait(next.wait ?? null);
-    // A resumed op means the executor moved the task while this view was away;
-    // the panel should show the result it now holds, not its mount-time copy.
-    if (next.state.taskOp) refreshTask();
   };
 
   useEffect(() => {
@@ -202,12 +95,6 @@ export function SessionView({
     setSession(null);
     setError("");
     setRunningElsewhere(false);
-    setWait(null);
-    setLiveWait(null);
-    setWaitError("");
-    // A stop belongs to the session it was asked in; switching sessions must
-    // not leave the next session's wait looking permanently stopped.
-    setStoppingWait(false);
     fetchSession(sessionId).then(
       (next) => {
         if (!alive) return;
@@ -226,7 +113,17 @@ export function SessionView({
 
   const send = async () => {
     const question = draft.trim();
-    if (!question || sendingRef.current || runningElsewhere) return;
+    if (!question || sendingRef.current) return;
+    if (writingDirty) {
+      // A run that is already going cannot see local edits; the person has
+      // to save first. A fresh send can still carry them after they choose.
+      const busy = runningElsewhere || Boolean(session?.state.busy);
+      const message = busy
+        ? t("writing.unsavedBusy")
+        : t("writing.unsaved");
+      if (!window.confirm(message)) return;
+    }
+    if (runningElsewhere) return;
     const mine = sessionId;
     const live = () => mounted.current && currentSession.current === mine;
     sendingRef.current = true;
@@ -236,8 +133,6 @@ export function SessionView({
     setStreaming("");
     setActivity("think");
     setObservations([]);
-    setLiveWait(null);
-    setWaitError("");
     setRunningElsewhere(false);
     setSending(true);
     try {
@@ -256,14 +151,6 @@ export function SessionView({
           if (!live()) return;
           setActivity("tool");
           setObservations((current) => [...current, observation]);
-          // The agent's tool result is an observation of the same shared task:
-          // a compose that just opened the gate must reach an already-mounted
-          // panel without waiting for a remount.
-          if (touchesTask(observation)) refreshTask();
-        },
-        onWait: (proposed) => {
-          if (!live()) return;
-          setLiveWait(proposed);
         },
       });
       if (live()) {
@@ -298,28 +185,6 @@ export function SessionView({
         setSending(false);
         setPendingQuestion(null);
         setStreaming("");
-        setLiveWait(null);
-      }
-    }
-  };
-
-  const stopWait = async (target: WaitPayload) => {
-    if (stoppingWait) return;
-    setStoppingWait(true);
-    setWaitError("");
-    try {
-      await postSessionWaitCancel(sessionId, target.waitId);
-      const next = await fetchSession(sessionId);
-      if (mounted.current && currentSession.current === sessionId) {
-        adoptSession(next);
-      }
-    } catch (reason) {
-      if (mounted.current && currentSession.current === sessionId) {
-        setWaitError(errorMessage(reason, t("chat.wait.stopFailed")));
-      }
-    } finally {
-      if (mounted.current && currentSession.current === sessionId) {
-        setStoppingWait(false);
       }
     }
   };
@@ -338,10 +203,6 @@ export function SessionView({
   if (!session) {
     return <p className="p-3 text-xs text-muted-foreground">{t("chat.loading")}</p>;
   }
-
-  // The streamed wait arrives before the session is re-read; once it is, the
-  // committed wait is the same one and the live copy can go away.
-  const shownWait = liveWait ?? wait;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -381,11 +242,7 @@ export function SessionView({
               <>
                 <ChatMarkdown body={turn.content} onOpenLink={onOpenLink} />
                 {turn.cards?.length ? (
-                  <SessionCards
-                    observations={turn.cards}
-                    onOpen={onOpenLink}
-                    onReviewTask={openTaskPanel}
-                  />
+                  <SessionCards observations={turn.cards} onOpen={onOpenLink} />
                 ) : null}
                 {!turn.isStep &&
                 turn.stopReason !== "aborted" &&
@@ -411,28 +268,6 @@ export function SessionView({
           </article>
         ))}
 
-        {session.state.taskOp ? (
-          <ResumedOpCard op={session.state.taskOp} />
-        ) : null}
-
-        {shownWait ? (
-          <WaitCard
-            wait={shownWait}
-            onOpen={(target) => onOpenInterface(target, sessionId)}
-            onStop={
-              sending
-                ? undefined
-                : () => {
-                    void stopWait(shownWait);
-                  }
-            }
-            stopping={stoppingWait}
-          />
-        ) : null}
-        {waitError ? (
-          <p className="mb-2 text-[11px] text-destructive">{waitError}</p>
-        ) : null}
-
         {pendingQuestion ? (
           <p className="mt-3 mb-1.5 rounded-md bg-muted px-2.5 py-1.5 text-[13px] whitespace-pre-wrap">
             {pendingQuestion}
@@ -444,11 +279,7 @@ export function SessionView({
             <p className="mb-1 text-[11px] text-muted-foreground">
               {t(`chat.activity.${activity}`)}
             </p>
-            <SessionCards
-              observations={observations}
-              onOpen={onOpenLink}
-              onReviewTask={openTaskPanel}
-            />
+            <SessionCards observations={observations} onOpen={onOpenLink} />
             {streaming ? (
               <ChatMarkdown body={streaming} onOpenLink={onOpenLink} />
             ) : null}

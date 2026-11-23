@@ -7,8 +7,8 @@ beforeEach(() => {
 
 describe("what a section reports", () => {
   it("keeps a count for the heading to show", () => {
-    useSectionCounts.getState().setCount("plan", 3);
-    expect(useSectionCounts.getState().counts.plan).toBe(3);
+    useSectionCounts.getState().setCount("pipeline", 3);
+    expect(useSectionCounts.getState().counts.pipeline).toBe(3);
   });
 
   it("says nothing for an empty section", () => {
@@ -21,17 +21,17 @@ describe("what a section reports", () => {
   });
 
   it("leaves the other sections alone", () => {
-    useSectionCounts.getState().setCount("plan", 2);
-    useSectionCounts.getState().setCount("compile", 5);
-    useSectionCounts.getState().setCount("plan", null);
-    expect(useSectionCounts.getState().counts).toEqual({ compile: 5 });
+    useSectionCounts.getState().setCount("pipeline", 2);
+    useSectionCounts.getState().setCount("selection", 5);
+    useSectionCounts.getState().setCount("pipeline", null);
+    expect(useSectionCounts.getState().counts).toEqual({ selection: 5 });
   });
 
   it("does not report the same number twice", () => {
     // The heading is rendering while this is called on every render of a body.
-    useSectionCounts.getState().setCount("plan", 2);
+    useSectionCounts.getState().setCount("pipeline", 2);
     const before = useSectionCounts.getState().counts;
-    useSectionCounts.getState().setCount("plan", 2);
+    useSectionCounts.getState().setCount("pipeline", 2);
     expect(useSectionCounts.getState().counts).toBe(before);
   });
 });

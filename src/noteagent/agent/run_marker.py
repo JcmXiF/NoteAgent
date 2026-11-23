@@ -22,6 +22,7 @@ RUNNING = "running"
 FINISHED = "finished"
 FAILED = "failed"
 CANCELLED = "cancelled"
+#: A state old markers may still carry; no run enters it now.
 WAITING = "waiting"
 INTERRUPTED = "interrupted"
 ABANDONED = "abandoned"
@@ -294,14 +295,6 @@ def infer_terminal(
     if kind == "message" and last.get("role") == "toolResult":
         return TerminalInference(
             INTERRUPTED, last_id, "tool result without next turn"
-        )
-
-    if kind in ("wait_proposed", "wait_entered"):
-        return TerminalInference(WAITING, last_id, "wait")
-
-    if kind == "wait_completed":
-        return TerminalInference(
-            INTERRUPTED, last_id, "job result waiting for resume"
         )
 
     if kind == "message" and last.get("role") == "user":

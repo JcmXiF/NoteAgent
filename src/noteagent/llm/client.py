@@ -20,7 +20,25 @@ from noteagent.util.redact import redact
 
 
 class LlmError(RuntimeError):
-    """Raised when an LLM HTTP call fails."""
+    """Raised when an LLM HTTP call fails.
+
+    A failed call still costs tokens, so the error carries what the provider
+    reported: the finish reason (a truncated turn says ``length``) and the
+    usage, when the failure carried them.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        finish_reason: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.finish_reason = finish_reason
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +80,9 @@ class LlmTurn:
     logprobs: tuple[TokenLogprob, ...] = ()
     #: A reasoning model's thinking, when the provider sends it separately.
     reasoning: str = ""
+    #: What the provider reported for this call; zero when it sent no usage.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _extract_content_delta(
@@ -157,6 +178,20 @@ def _extract_logprobs(payload: dict[str, Any]) -> tuple[TokenLogprob, ...]:
                     top.append((name, float(value)))
         out.append(TokenLogprob(token, float(logprob), tuple(top)))
     return tuple(out)
+
+
+def _usage(payload: dict[str, Any]) -> tuple[int, int]:
+    """The provider's token counts, or zeros when it sent none."""
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+    return _count(usage.get("prompt_tokens")), _count(
+        usage.get("completion_tokens")
+    )
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _empty_content_detail(payload: dict[str, Any]) -> str:
@@ -315,6 +350,9 @@ class LlmClient:
             "max_tokens": self.config.max_tokens,
             "stream": stream,
         }
+        if stream:
+            # Ask for the usage the provider would otherwise only send first.
+            body["stream_options"] = {"include_usage": True}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -383,10 +421,14 @@ class LlmClient:
         reasoning = message.get("reasoning_content")
         if not isinstance(reasoning, str):
             reasoning = ""
+        input_tokens, output_tokens = _usage(payload)
         if not content.strip() and not tool_calls:
             raise LlmError(
                 "LLM returned empty message content "
-                f"({_empty_content_detail(payload)})"
+                f"({_empty_content_detail(payload)})",
+                finish_reason=finish,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
             )
         return LlmTurn(
             content=content or "",
@@ -394,6 +436,8 @@ class LlmClient:
             finish_reason=finish,
             logprobs=_extract_logprobs(payload),
             reasoning=reasoning.strip(),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     def _complete_stream(
@@ -411,6 +455,7 @@ class LlmClient:
         chunks: list[str] = []
         calls: dict[int, dict[str, str]] = {}
         finish = ""
+        usage: dict[str, Any] = {}
         try:
             with httpx.Client(timeout=self.config.timeout_seconds) as client:
                 with client.stream(
@@ -433,6 +478,9 @@ class LlmClient:
                             f"{self._redacted(body[:800])}"
                         )
                     for event in iter_sse_payloads(response):
+                        raw_usage = event.get("usage")
+                        if isinstance(raw_usage, dict):
+                            usage = raw_usage
                         choices = event.get("choices") or []
                         if not choices or not isinstance(choices[0], dict):
                             continue
@@ -479,12 +527,20 @@ class LlmClient:
             if slot["name"]
         )
         content = "".join(chunks)
+        input_tokens, output_tokens = _usage({"usage": usage})
         if not content.strip() and not tool_calls:
-            raise LlmError("LLM stream returned empty content")
+            raise LlmError(
+                "LLM stream returned empty content",
+                finish_reason=finish,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
         return LlmTurn(
             content=content,
             tool_calls=tool_calls,
             finish_reason=finish,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
 def iter_sse_payloads(

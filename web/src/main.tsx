@@ -5,7 +5,6 @@ import { createRoot } from "react-dom/client";
 import { watchSystemTheme } from "@/lib/theme";
 import "@/stores/ui-store";
 import { startClipsSync } from "@/stores/clips-store";
-import { startCompileSync } from "@/stores/compile-store";
 import { startAcquireSync } from "@/stores/acquire-store";
 import { startBrowseSync } from "@/stores/browse-store";
 import { startNotePageSync } from "@/stores/note-page-store";
@@ -24,7 +23,6 @@ watchSystemTheme();
 // The workbench list and the selections both follow the active project; wired
 // here so no view has to own it.
 startClipsSync();
-startCompileSync();
 startAcquireSync();
 startNotePageSync();
 startBrowseSync();

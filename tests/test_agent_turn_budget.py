@@ -1,4 +1,4 @@
-"""One coding-agent-style turn bound: no low tool-round cap, no forced answer."""
+"""One model-turn bound: the cap forces one final answer without tools."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 import httpx
 from agent_fakes import FixedClock, SequentialIds
 
-from noteagent.agent.events import ErrorEvent, TokenEvent, WaitEvent
-from noteagent.agent.kernel import LEAK_RETRY, KernelRuntime
+from noteagent.agent.events import ErrorEvent, StatusEvent, TokenEvent
+from noteagent.agent.kernel import LEAK_RETRY, MAX_TURNS_FINAL, KernelRuntime
 from noteagent.agent.model import ModelErrorEvent
 from noteagent.agent.runtime import UserInput
 from noteagent.agent.tools import ToolResult, ToolSpec, ToolRegistry
@@ -83,46 +83,77 @@ class TurnBudgetTests(unittest.TestCase):
             if entry["type"] == "message"
         ]
 
-    def test_a_lone_propose_is_allowed(self) -> None:
+    def markers(self) -> list[dict[str, object]]:
+        return [
+            entry
+            for entry in self.store.load("s1").entries
+            if entry["type"] == "run_marker"
+        ]
+
+    def test_a_normal_answer_completes(self) -> None:
         from noteagent.agent.faux import FauxModelClient
 
-        model = FauxModelClient(
-            FauxModelClient.tool_call(
-                "p1",
-                "propose",
-                json.dumps(
-                    {"job": "plan", "interface": "source"}
-                ),
-            ).script
-        )
-        runtime = self.runtime(model)
+        model = FauxModelClient(FauxModelClient.text("答案").script)
         events = []
 
-        result = runtime.execute(UserInput("s1", "整理"), events.append)
+        result = self.runtime(model).execute(
+            UserInput("s1", "问题"), events.append
+        )
 
-        self.assertEqual(result.status, "waiting")
+        self.assertEqual(result.status, "completed")
         self.assertEqual(len(model.requests), 1)
-        wait = runtime.wait_state("s1")
-        self.assertIsNotNone(wait)
-        assert wait is not None
-        self.assertEqual(wait.status, "proposed")
-        self.assertTrue(
-            any(isinstance(event, WaitEvent) for event in events)
-        )
-        self.assertFalse(
-            any(
-                entry.get("role") == "toolResult"
-                for entry in self.store.load("s1").entries
-            )
-        )
+        self.assertEqual(self.messages()[-1]["content"], "答案")
+        self.assertEqual(self.markers()[-1]["state"], "finished")
+        self.assertEqual(self.markers()[-1].get("note", ""), "")
 
-    def test_max_turns_is_a_hard_bound(self) -> None:
+    def test_a_turn_cap_forces_a_final_answer(self) -> None:
         from noteagent.agent.faux import FauxModelClient
 
         call = FauxModelClient.tool_call(
             "t1", "echo", '{"text": "again"}'
         ).script
-        model = FauxModelClient(call, call, call)
+        model = FauxModelClient(
+            call, call, FauxModelClient.text("最终答案").script
+        )
+        events = []
+
+        result = self.runtime(model, max_turns=2).execute(
+            UserInput("s1", "问题"), events.append
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(model.requests), 3)
+        self.assertEqual(model.requests[-1].tools, ())
+        self.assertTrue(
+            any(
+                message.role == "system"
+                and MAX_TURNS_FINAL in message.content
+                for message in model.requests[-1].messages
+            )
+        )
+        self.assertEqual(self.messages()[-1]["content"], "最终答案")
+        self.assertFalse(
+            [event for event in events if isinstance(event, ErrorEvent)]
+        )
+        self.assertTrue(
+            any(
+                isinstance(event, StatusEvent)
+                and "max_turns_exceeded" in event.message
+                for event in events
+            )
+        )
+        self.assertEqual(self.markers()[-1]["state"], "finished")
+        self.assertEqual(
+            self.markers()[-1]["note"], "max_turns_exceeded"
+        )
+
+    def test_a_leak_on_the_forced_call_is_not_retried(self) -> None:
+        from noteagent.agent.faux import FauxModelClient
+
+        call = FauxModelClient.tool_call(
+            "t1", "echo", '{"text": "again"}'
+        ).script
+        model = FauxModelClient(call, call, _leak())
         events = []
 
         result = self.runtime(model, max_turns=2).execute(
@@ -130,12 +161,36 @@ class TurnBudgetTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "failed")
-        self.assertEqual(len(model.requests), 2)
+        self.assertEqual(len(model.requests), 3)
         errors = [event for event in events if isinstance(event, ErrorEvent)]
-        self.assertEqual(errors[-1].code, "max_turns_exceeded")
+        self.assertEqual(errors[-1].code, "tool_call_leak")
+        self.assertEqual(self.markers()[-1]["state"], "failed")
         self.assertEqual(
-            [entry["role"] for entry in self.messages()],
-            ["user", "assistant", "toolResult", "assistant", "toolResult"],
+            self.markers()[-1]["note"], "max_turns_exceeded"
+        )
+
+    def test_a_cap_whose_final_answer_is_empty_fails(self) -> None:
+        from noteagent.agent.faux import FauxModelClient
+
+        call = FauxModelClient.tool_call(
+            "t1", "echo", '{"text": "again"}'
+        ).script
+        model = FauxModelClient(
+            call, call, FauxModelClient.text("").script
+        )
+        events = []
+
+        result = self.runtime(model, max_turns=2).execute(
+            UserInput("s1", "问题"), events.append
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(model.requests), 3)
+        errors = [event for event in events if isinstance(event, ErrorEvent)]
+        self.assertEqual(errors[-1].code, "model_error")
+        self.assertEqual(self.markers()[-1]["state"], "failed")
+        self.assertEqual(
+            self.markers()[-1]["note"], "max_turns_exceeded"
         )
 
     def test_a_leak_is_retried_once(self) -> None:

@@ -3,27 +3,25 @@
 Every case drives the real HTTP API: a question is asked over SSE, the log and
 the session view are read back, and the model is the only scripted part. The
 cases cover the behaviour a change to the agent harness is most likely to break:
-reading the wiki, searching it, proposing work, entering a wait and resuming,
-refusing a mixed batch, the tool-round budget, compaction, tool errors,
-cancellation, and bringing old chats into the new store.
+reading the wiki, searching it, the tool-round budget, compaction, tool
+errors, cancellation, and bringing old chats into the new store.
 """
 
 from __future__ import annotations
 
 import json
 import threading
-from unittest.mock import patch
 
 from evals.harness import Case, CaseRun, Exchange
+from evals.report import COMPACTION, PUBLISH, STATE, TOOL_CONTRACT
+from evals.writing import WRITING_CASES
 
 from noteagent.agent.faux import FauxModelClient
 from noteagent.agent.model import (
     AssistantMessage,
     ModelDoneEvent,
-    ModelEvent,
     ModelStartEvent,
     ModelTextDelta,
-    ModelToolCallEnd,
     TextBlock,
     ToolCall,
 )
@@ -38,21 +36,6 @@ def _messages(entries):
 def _last_message(entries):
     messages = _messages(entries)
     return messages[-1] if messages else {}
-
-
-PLAN_PAYLOAD = {
-    "intent": "熵",
-    "candidates": [
-        {"title": "Entropy", "slug": "concepts/entropy", "coverage": "write"}
-    ],
-    "primary": {
-        "title": "Entropy",
-        "slug": "concepts/entropy",
-        "coverage": "write",
-    },
-    "alsoInSources": [],
-    "notes": "",
-}
 
 
 def _tokens(reply: Exchange) -> str:
@@ -70,26 +53,6 @@ def _only_event(reply: Exchange, kind: str) -> dict[str, object]:
     return items[0]
 
 
-def _tool_batch(*calls: tuple[str, str, str]) -> list[ModelEvent]:
-    """One model turn that asks for several tools at once."""
-    events: list[ModelEvent] = [ModelStartEvent("faux")]
-    events.extend(
-        ModelToolCallEnd(ToolCall(call_id, name, arguments))
-        for call_id, name, arguments in calls
-    )
-    events.append(ModelDoneEvent(AssistantMessage(stop_reason="tool_calls")))
-    return events
-
-
-def _propose_script(
-    job: str, interface: str, **fields: str
-) -> list[ModelEvent]:
-    arguments = {"job": job, "interface": interface, **fields}
-    return FauxModelClient.tool_call(
-        "w1", "propose", json.dumps(arguments, ensure_ascii=False)
-    ).script
-
-
 def wiki_read_and_answer(run: CaseRun) -> None:
     """A question about a page becomes a card, then an answer that read it."""
     model = FauxModelClient(
@@ -102,37 +65,37 @@ def wiki_read_and_answer(run: CaseRun) -> None:
     session = api.create_session()
     reply = api.query(session, "什么是熵？")
 
-    run.equal("the query is answered", reply.status_code, 200)
+    run.equal("the query is answered", reply.status_code, 200, TOOL_CONTRACT)
     run.equal(
         "the answer is streamed as the model writes it",
         _tokens(reply),
-        "熵衡量不确定性。",
+        "熵衡量不确定性。", PUBLISH,
     )
     card = _only_event(reply, "observation")
-    run.equal("the card names the page", card.get("slug"), "concepts/entropy")
+    run.equal("the card names the page", card.get("slug"), "concepts/entropy", TOOL_CONTRACT)
     run.equal(
         "the card names the file it opened",
         card.get("path"),
-        "wiki/concepts/entropy.md",
+        "wiki/concepts/entropy.md", TOOL_CONTRACT,
     )
     run.check(
         "the card leaves the page's words with the model",
         "熵衡量不确定性" not in json.dumps(card, ensure_ascii=False),
-        "the observation carried the page body",
+        "the observation carried the page body", TOOL_CONTRACT,
     )
     done = _only_event(reply, "done")
-    run.equal("the run completed", done["run"]["status"], "completed")
+    run.equal("the run completed", done["run"]["status"], "completed", TOOL_CONTRACT)
 
     entries = api.entries(session)
     run.equal(
         "the log holds the question, the tool pair and the answer",
         [entry.get("role") for entry in _messages(entries)],
-        ["user", "assistant", "toolResult", "assistant"],
+        ["user", "assistant", "toolResult", "assistant"], STATE,
     )
     run.check(
         "the tool result carries the page to the model",
         "熵衡量不确定性" in str(_messages(entries)[2].get("content") or ""),
-        "the page body never reached the model",
+        "the page body never reached the model", TOOL_CONTRACT,
     )
     trace = api.trace(session)
     run.check(
@@ -142,12 +105,12 @@ def wiki_read_and_answer(run: CaseRun) -> None:
             and item.get("tool") == "wiki_read"
             for item in trace
         ),
-        "the trace has no tool_result record",
+        "the trace has no tool_result record", TOOL_CONTRACT,
     )
     run.check(
         "the trace keeps the page's title out",
         "Entropy" not in json.dumps(trace, ensure_ascii=False),
-        "the trace carried the page title",
+        "the trace carried the page title", TOOL_CONTRACT,
     )
 
 
@@ -164,27 +127,27 @@ def search_and_answer(run: CaseRun) -> None:
     reply = api.query(session, "熵和信息有什么关系？")
 
     card = _only_event(reply, "observation")
-    run.equal("the card is a wiki search", card.get("scope"), "wiki")
-    run.equal("the card repeats the query", card.get("query"), "不确定性")
+    run.equal("the card is a wiki search", card.get("scope"), "wiki", TOOL_CONTRACT)
+    run.equal("the card repeats the query", card.get("query"), "不确定性", TOOL_CONTRACT)
     run.check(
         "the search found both pages",
         isinstance(card.get("hits"), int) and card["hits"] >= 2,
-        f"hits was {card.get('hits')!r}",
+        f"hits was {card.get('hits')!r}", TOOL_CONTRACT,
     )
     run.check(
         "the card carries locators, not excerpts",
         "excerpt" not in card,
-        "the observation carried search excerpts",
+        "the observation carried search excerpts", TOOL_CONTRACT,
     )
     run.equal(
         "the answer is the model's text",
         _tokens(reply),
-        "熵和信息都围绕不确定性。",
+        "熵和信息都围绕不确定性。", PUBLISH,
     )
     run.equal(
         "the run completed",
         _only_event(reply, "done")["run"]["status"],
-        "completed",
+        "completed", TOOL_CONTRACT,
     )
     follow_up = model.requests[-1].messages
     run.check(
@@ -193,189 +156,20 @@ def search_and_answer(run: CaseRun) -> None:
             message.role == "tool" and "[[concepts/entropy]]" in message.content
             for message in follow_up
         ),
-        "the search result never reached the model",
+        "the search result never reached the model", TOOL_CONTRACT,
     )
-
-
-def propose_plan(run: CaseRun) -> None:
-    """A proposal stops the run at a wait the human can enter elsewhere."""
-    model = FauxModelClient(
-        _propose_script(
-            "plan",
-            "source",
-            intent="熵",
-            reason="先把资料排成页",
-        )
-    )
-    api = run.start(model)
-    session = api.create_session()
-    reply = api.query(session, "整理一下熵的资料")
-
-    wait = _only_event(reply, "wait")
-    run.equal("the wait proposes a plan", wait.get("job"), "plan")
-    run.equal("the plan belongs to the source screen", wait.get("interface"), "source")
-    run.equal("the wait is only proposed", wait.get("status"), "proposed")
-    run.equal("the human's action is named", wait.get("completion"), "start_plan")
-    run.equal("the intent travels with the wait", wait.get("intent"), "熵")
-    done = _only_event(reply, "done")
-    run.equal("the run ends waiting", done["run"]["status"], "waiting")
-
-    view = api.get_session(session)
-    run.equal(
-        "the session view carries the same wait",
-        view["wait"]["waitId"],
-        wait["waitId"],
-    )
-    run.equal("the session is not busy", view["state"]["busy"], False)
-    entries = api.entries(session)
-    run.equal(
-        "the log holds one proposed wait",
-        [entry.get("type") for entry in entries if entry.get("type") == "wait_proposed"],
-        ["wait_proposed"],
-    )
-    run.equal(
-        "a proposal is not a tool call",
-        [entry for entry in entries if entry.get("role") == "toolResult"],
-        [],
-    )
-    run.equal(
-        "the proposal took one model turn",
-        len(model.requests),
-        1,
-    )
-
-
-def wait_resume(run: CaseRun) -> None:
-    """A job entered from its own screen completes the wait and resumes the chat."""
-    model = FauxModelClient(
-        _propose_script("plan", "source", intent="熵"),
-        FauxModelClient.text("计划完成，继续。").script,
-    )
-    api = run.start(model)
-    session = api.create_session()
-    asked = api.query(session, "整理一下熵的资料")
-    wait = _only_event(asked, "wait")
-
-    # The plan job is provider-backed. It is replaced at its own boundary so
-    # the wait and resume path runs without a network or a key; everything
-    # between the endpoint and the session is the real implementation.
-    with (
-        patch("noteagent.api.app.ensure_llm_configured"),
-        patch(
-            "noteagent.api.topic_gate.run_topic_map_job",
-            return_value=PLAN_PAYLOAD,
-        ),
-    ):
-        planned = api.request(
-            "POST",
-            "/api/projects/demo/topic-map",
-            json={
-                "intent": "熵",
-                "sessionId": session,
-                "waitId": wait["waitId"],
-            },
-        )
-
-    run.equal("the plan job ran", planned.status_code, 200)
-    result = _only_event(planned, "job_result")
-    run.equal("the job succeeded", result.get("status"), "succeeded")
-    run.equal(
-        "the result says what the plan found",
-        result.get("summary"),
-        "planned 1 page(s): 1 write, 0 mention, 0 skip",
-    )
-    api.wait_for(
-        lambda: any(
-            entry.get("role") == "assistant"
-            and entry.get("content") == "计划完成，继续。"
-            for entry in api.entries(session)
-        ),
-        "the chat resumed after the plan",
-    )
-
-    entries = api.entries(session)
-    completed = next(
-        entry for entry in entries if entry.get("type") == "wait_completed"
-    )
-    run.equal("the completion names its wait", completed.get("waitId"), wait["waitId"])
-    run.equal("the completion names the job", completed.get("job"), "plan")
-    run.equal("the wait completed", completed.get("status"), "completed")
-    run.equal(
-        "the result names the planned page",
-        completed.get("artifacts"),
-        [{"kind": "write", "id": "concepts/entropy", "label": "Entropy"}],
-    )
-    run.equal(
-        "the continuation ran once",
-        len(
-            [
-                entry
-                for entry in entries
-                if entry.get("type") == "resume_started"
-            ]
-        ),
-        1,
-    )
-    view = api.get_session(session)
-    run.equal("the view reads the wait as completed", view["wait"]["status"], "completed")
-    run.equal("the continuation was the second model turn", len(model.requests), 2)
-
-
-def mixed_propose_rejected(run: CaseRun) -> None:
-    """A proposal beside another call is refused whole; the run recovers."""
-    model = FauxModelClient(
-        _tool_batch(
-            ("p1", "propose", '{"job": "plan", "interface": "source"}'),
-            ("t1", "wiki_read", '{"slug": "concepts/entropy"}'),
-        ),
-        FauxModelClient.text("这次没有启动作业。").script,
-    )
-    api = run.start(model)
-    session = api.create_session()
-    reply = api.query(session, "先计划再读一下熵")
-
-    cards = reply.events_of("observation")
-    run.equal("both calls are answered", len(cards), 2)
-    for card in cards:
-        run.check(
-            f"{card.get('tool')} is refused",
-            card.get("error") is True,
-            "a refused call was not marked as an error",
-        )
-        diagnostics = card.get("diagnostics") or []
-        run.equal(
-            "the refusal names the mixed batch",
-            diagnostics[0].get("code") if diagnostics else None,
-            "propose_not_alone",
-        )
-    run.equal("no wait is proposed", reply.events_of("wait"), [])
-    run.equal(
-        "the run still answers",
-        _only_event(reply, "done")["run"]["status"],
-        "completed",
-    )
-    entries = api.entries(session)
-    run.equal(
-        "nothing was dispatched or recorded as a wait",
-        [entry.get("type") for entry in entries if entry.get("type") == "wait_proposed"],
-        [],
-    )
-    run.equal(
-        "the answer is the last entry",
-        _last_message(entries).get("content"),
-        "这次没有启动作业。",
-    )
-    run.equal("the session is not waiting", api.get_session(session)["wait"], None)
 
 
 def turn_budget(run: CaseRun) -> None:
-    """One coding-agent-style turn bound, not a tool-round budget."""
+    """The model-turn bound forces one final answer without tools."""
+    answer = "已到轮次上限，基于已有材料回答。"
     scripts = [
         FauxModelClient.tool_call(
             f"t{index}", "wiki_read", '{"slug": "concepts/entropy"}'
         ).script
-        for index in range(3)
+        for index in range(2)
     ]
+    scripts.append(FauxModelClient.text(answer).script)
     model = FauxModelClient(*scripts)
     api = run.start(model, max_turns=2)
     session = api.create_session()
@@ -384,38 +178,54 @@ def turn_budget(run: CaseRun) -> None:
     run.equal(
         "two tool rounds ran",
         len(reply.events_of("observation")),
-        2,
+        2, TOOL_CONTRACT,
     )
     run.equal(
-        "the model was called twice",
+        "the model was called three times",
         len(model.requests),
-        2,
+        3, TOOL_CONTRACT,
     )
-    errors = reply.events_of("error")
-    run.equal("the turn bound is an error", len(errors), 1)
-    if errors:
-        run.equal(
-            "the error code", errors[0].get("code"), "max_turns_exceeded"
-        )
-    entries = api.entries(session)
     run.equal(
-        "the partial log is kept",
-        [
-            entry.get("role")
-            for entry in entries
-            if entry.get("type") == "message"
-        ],
-        ["user", "assistant", "toolResult", "assistant", "toolResult"],
+        "the forced call offers no tools",
+        model.requests[-1].tools,
+        (), TOOL_CONTRACT,
+    )
+    run.equal(
+        "no error ends the run",
+        len(reply.events_of("error")),
+        0, TOOL_CONTRACT,
     )
     run.check(
-        "no final answer was written",
-        not any(
-            entry.get("role") == "assistant"
-            and not entry.get("toolCalls")
-            and entry.get("content")
-            for entry in entries
+        "the cap is reported",
+        any(
+            "max_turns_exceeded" in str(event.get("message") or "")
+            for event in reply.events_of("status")
         ),
-        "a final assistant message was written",
+        "no status event mentioned the turn cap",
+        TOOL_CONTRACT,
+    )
+    entries = api.entries(session)
+    messages = [
+        entry for entry in entries if entry.get("type") == "message"
+    ]
+    run.equal(
+        "the answer is kept",
+        [entry.get("role") for entry in messages],
+        [
+            "user",
+            "assistant",
+            "toolResult",
+            "assistant",
+            "toolResult",
+            "assistant",
+        ],
+        STATE,
+    )
+    run.equal(
+        "the forced answer is written",
+        messages[-1].get("content"),
+        answer,
+        STATE,
     )
 
 
@@ -448,36 +258,41 @@ def compaction_threshold(run: CaseRun) -> None:
 
     reply = api.query(session, "现在总结一下")
 
-    run.equal("the answer is committed", _only_event(reply, "done")["run"]["status"], "completed")
+    run.equal(
+        "the answer is committed",
+        _only_event(reply, "done")["run"]["status"],
+        "completed",
+        COMPACTION,
+    )
     entries = api.entries(session)
     compaction = next(
         entry for entry in entries if entry.get("type") == "compaction"
     )
-    run.equal("the summary is the model's text", compaction.get("summary"), summary)
+    run.equal("the summary is the model's text", compaction.get("summary"), summary, COMPACTION)
     run.check(
         "the cut keeps a later entry",
         isinstance(compaction.get("firstKeptEntryId"), str)
         and bool(compaction.get("firstKeptEntryId")),
-        "the compaction entry names no first kept entry",
+        "the compaction entry names no first kept entry", COMPACTION,
     )
     run.check(
         "the prompt was over the threshold",
         isinstance(compaction.get("tokensBefore"), int)
         and compaction["tokensBefore"] >= 24_000,
-        f"tokensBefore was {compaction.get('tokensBefore')!r}",
+        f"tokensBefore was {compaction.get('tokensBefore')!r}", COMPACTION,
     )
     run.equal(
         "the session view derives the summary",
         api.get_session(session)["derived"]["summary"],
-        summary,
+        summary, COMPACTION,
     )
 
-    run.equal("the summary took one model turn", len(model.requests), 2)
+    run.equal("the summary took one model turn", len(model.requests), 2, COMPACTION)
     summary_request = model.requests[0]
     run.equal(
         "the summary request is bounded",
         summary_request.max_tokens,
-        2_000,
+        2_000, COMPACTION,
     )
     run.check(
         "the summary request reads the old transcript",
@@ -485,7 +300,7 @@ def compaction_threshold(run: CaseRun) -> None:
             message.role == "user" and "old question 0" in message.content
             for message in summary_request.messages
         ),
-        "the oldest turns were missing from the summary request",
+        "the oldest turns were missing from the summary request", COMPACTION,
     )
     answer_request = model.requests[1]
     run.check(
@@ -496,12 +311,12 @@ def compaction_threshold(run: CaseRun) -> None:
             and summary in message.content
             for message in answer_request.messages
         ),
-        "the answer prompt did not carry the summary",
+        "the answer prompt did not carry the summary", COMPACTION,
     )
     run.equal(
         "the answer is the last entry",
         _last_message(entries).get("content"),
-        "现在总结如下。",
+        "现在总结如下。", STATE,
     )
 
 
@@ -546,43 +361,43 @@ def tool_error_recovers(run: CaseRun) -> None:
     reply = api.query(session, "读一下熵")
 
     cards = reply.events_of("observation")
-    run.equal("both calls are answered", len(cards), 2)
-    run.check("the failed call is an error card", cards[0].get("error") is True)
+    run.equal("both calls are answered", len(cards), 2, TOOL_CONTRACT)
+    run.check("the failed call is an error card", cards[0].get("error") is True, "", TOOL_CONTRACT)
     diagnostics = cards[0].get("diagnostics") or []
     run.equal(
         "the failed call names its problem",
         diagnostics[0].get("code") if diagnostics else None,
-        "handler_error",
+        "handler_error", TOOL_CONTRACT,
     )
     run.check(
         "the failure is explained to the model",
         "page store is unavailable" in str(diagnostics[0].get("message") or ""),
-        "the handler's failure never reached the model",
+        "the handler's failure never reached the model", TOOL_CONTRACT,
     )
-    run.equal("the retry is a normal card", cards[1].get("error"), None)
-    run.equal("the retry opened the page", cards[1].get("slug"), "concepts/entropy")
+    run.equal("the retry is a normal card", cards[1].get("error"), None, TOOL_CONTRACT)
+    run.equal("the retry opened the page", cards[1].get("slug"), "concepts/entropy", TOOL_CONTRACT)
     run.equal(
         "the run recovered and answered",
         _only_event(reply, "done")["run"]["status"],
-        "completed",
+        "completed", TOOL_CONTRACT,
     )
     entries = api.entries(session)
     results = [entry for entry in entries if entry.get("role") == "toolResult"]
-    run.equal("both results are in the log", len(results), 2)
+    run.equal("both results are in the log", len(results), 2, STATE)
     run.check(
         "the failed result carries the reason",
         "the page store is unavailable" in str(results[0].get("content") or ""),
-        "the tool error was not committed",
+        "the tool error was not committed", TOOL_CONTRACT,
     )
     run.check(
         "the retry carries the page",
         "熵衡量不确定性" in str(results[1].get("content") or ""),
-        "the retried result was empty",
+        "the retried result was empty", TOOL_CONTRACT,
     )
     run.equal(
         "the answer is the last entry",
         _last_message(entries).get("content"),
-        "第一次失败，第二次读到了熵。",
+        "第一次失败，第二次读到了熵。", STATE,
     )
 
 
@@ -628,7 +443,7 @@ def cancel_keeps_partial(run: CaseRun) -> None:
     run.check(
         "the answer started streaming",
         model.started.wait(timeout=5),
-        "the model was never asked",
+        "the model was never asked", TOOL_CONTRACT,
     )
     cancelled = api.cancel(session)
     model.release.set()
@@ -637,29 +452,39 @@ def cancel_keeps_partial(run: CaseRun) -> None:
     run.check(
         "the query request finished",
         not worker.is_alive(),
-        "the query stayed blocked after the cancel",
+        "the query stayed blocked after the cancel", TOOL_CONTRACT,
     )
     run.equal(
         "the stop was accepted",
         cancelled.json().get("cancelled"),
-        True,
+        True, TOOL_CONTRACT,
     )
     reply = holder.get("reply")
     if not isinstance(reply, Exchange):
         raise AssertionError(f"the query never answered: {holder.get('error')}")
     error = _only_event(reply, "error")
-    run.equal("the run ends cancelled", error.get("code"), "cancelled")
-    run.equal("only the written part was streamed", _tokens(reply), "部分")
+    run.equal("the run ends cancelled", error.get("code"), "cancelled", TOOL_CONTRACT)
+    run.equal("only the written part was streamed", _tokens(reply), "部分", PUBLISH)
 
     entries = api.entries(session)
     run.equal(
         "the log keeps the question and the aborted answer",
         [entry.get("role") for entry in _messages(entries)],
-        ["user", "assistant"],
+        ["user", "assistant"], STATE,
     )
-    run.equal("the partial is what was streamed", _last_message(entries).get("content"), "部分")
-    run.equal("the partial is marked aborted", _last_message(entries).get("stopReason"), "aborted")
-    run.equal("the session is idle again", api.get_session(session)["state"]["busy"], False)
+    run.equal(
+        "the partial is what was streamed",
+        _last_message(entries).get("content"),
+        "部分",
+        STATE,
+    )
+    run.equal(
+        "the partial is marked aborted",
+        _last_message(entries).get("stopReason"),
+        "aborted",
+        STATE,
+    )
+    run.equal("the session is idle again", api.get_session(session)["state"]["busy"], False, STATE)
 
 
 def old_chats_migrate(run: CaseRun) -> None:
@@ -699,44 +524,44 @@ def old_chats_migrate(run: CaseRun) -> None:
 
     listed = api.request("GET", "/api/v1/sessions")
     body = listed.json()
-    run.equal("the old chat was migrated", body["migration"]["migrated"], 1)
+    run.equal("the old chat was migrated", body["migration"]["migrated"], 1, STATE)
     run.equal(
         "the list shows the migrated session",
         [(item["id"], item["title"]) for item in body["sessions"]],
-        [("c-1", "熵")],
+        [("c-1", "熵")], STATE,
     )
     view = api.get_session("c-1")
     run.equal(
         "the transcript keeps both messages",
         [message["role"] for message in view["messages"]],
-        ["user", "assistant"],
+        ["user", "assistant"], STATE,
     )
     run.equal(
         "the answer keeps its cards",
         view["messages"][1]["cards"][0]["slug"],
-        "concepts/entropy",
+        "concepts/entropy", STATE,
     )
     entries = api.entries("c-1")
     run.equal(
         "the new store holds the messages",
         [entry.get("role") for entry in _messages(entries)],
-        ["user", "assistant"],
+        ["user", "assistant"], STATE,
     )
     run.equal(
         "the cards moved into the entry",
         entries[1]["meta"]["cards"][0]["slug"],
-        "concepts/entropy",
+        "concepts/entropy", STATE,
     )
     run.check(
         "the old file is left in place",
         (run.layout.chats_dir / "c-1.json").is_file(),
-        "the migration removed the old chat",
+        "the migration removed the old chat", STATE,
     )
     again = api.request("GET", "/api/v1/sessions").json()
     run.check(
         "a second list does not migrate again",
         "migration" not in again,
-        "the second list reported another migration",
+        "the second list reported another migration", STATE,
     )
 
 
@@ -752,23 +577,8 @@ CASES: tuple[Case, ...] = (
         search_and_answer,
     ),
     Case(
-        "propose_plan",
-        "A plan proposal ends the run at a wait the source screen can enter.",
-        propose_plan,
-    ),
-    Case(
-        "wait_resume",
-        "A plan entered from its own screen completes the wait and resumes the chat.",
-        wait_resume,
-    ),
-    Case(
-        "mixed_propose_rejected",
-        "A proposal beside another call is refused whole and the run recovers.",
-        mixed_propose_rejected,
-    ),
-    Case(
         "turn_budget",
-        "A run stops at its single turn bound, not a tool-round budget.",
+        "The turn bound forces one final answer without tools.",
         turn_budget,
     ),
     Case(
@@ -791,6 +601,7 @@ CASES: tuple[Case, ...] = (
         "An old chat is listed and read as a session, cards included.",
         old_chats_migrate,
     ),
+    *WRITING_CASES,
 )
 
 __all__ = ["CASES"]

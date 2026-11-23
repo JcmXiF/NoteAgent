@@ -2,12 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import i18n from "@/i18n";
 import { SessionViewHost } from "@/components/chat/SessionViewHost";
-import { useLayoutStore, sectionIsOpen } from "@/stores/layout-store";
+import { useLayoutStore } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
 import { useSessionsStore } from "@/stores/sessions-store";
-import { useWaitContextStore } from "@/stores/wait-context-store";
 
 vi.mock("@/lib/api/sessions", () => ({
   fetchSession: vi.fn(),
@@ -40,14 +38,7 @@ function payload(id: string): SessionPayload {
         createdAt: "2026-11-10T09:00:00Z",
       },
     ],
-    wait: {
-      waitId: "w1",
-      job: "plan",
-      interface: "source",
-      status: "proposed",
-      completion: "start_plan",
-      proposedAt: "2026-11-10T09:00:00Z",
-    },
+
     derived: { sections: {}, summary: "", messages: [], diagnostics: [] },
   };
 }
@@ -69,7 +60,6 @@ beforeEach(() => {
     migrationFailed: 0,
   });
   useLayoutStore.setState({ rightOpen: false, rightFolds: {} });
-  useWaitContextStore.setState({ pending: null });
   useNavStore.setState({ seq: 0, intent: null });
   vi.mocked(fetchSession).mockResolvedValue(payload("s1"));
   host = document.createElement("div");
@@ -97,28 +87,6 @@ describe("the session shell", () => {
 
     expect(fetchSession).toHaveBeenCalledWith("s1");
     expect(host.textContent).toContain("安排一下");
-  });
-
-  it("arms the wait and opens its section from the deep link", async () => {
-    await draw();
-
-    const open = [...host.querySelectorAll("button")].find((item) =>
-      item.textContent?.includes(i18n.t("chat.wait.open.source")),
-    );
-    expect(open).not.toBeUndefined();
-    await act(async () => {
-      open?.click();
-    });
-
-    expect(useWaitContextStore.getState().pending).toEqual({
-      sessionId: "s1",
-      waitId: "w1",
-      job: "plan",
-      interface: "source",
-    });
-    const layout = useLayoutStore.getState();
-    expect(layout.rightOpen).toBe(true);
-    expect(sectionIsOpen(layout, "plan", "chat")).toBe(true);
   });
 
   it("opens the session a navigation intent names", async () => {

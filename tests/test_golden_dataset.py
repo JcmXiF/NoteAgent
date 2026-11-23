@@ -45,14 +45,6 @@ def query(
             "max_tool_rounds": 4,
             "no_error": True,
         }
-        if type == "task":
-            trace = {
-                "tools_any": ["search", "wiki_read"],
-                "wait": "proposed",
-                "propose_valid": True,
-                "max_tool_rounds": 4,
-                "no_error": True,
-            }
     return {
         "id": id,
         "type": type,
@@ -284,32 +276,6 @@ class InvalidQueryTests(unittest.TestCase):
         self.load_bad(query(key_points=["one"]))
         self.load_bad(query(key_points=["a", "b", "c", "d", "e", "f"]))
 
-    def test_a_task_must_propose(self) -> None:
-        self.load_bad(
-            query(
-                type="task",
-                trace={
-                    "tools_any": ["search"],
-                    "wait": "absent",
-                    "max_tool_rounds": 4,
-                    "no_error": True,
-                },
-            )
-        )
-
-    def test_a_non_task_must_not_propose(self) -> None:
-        self.load_bad(
-            query(
-                type="fact",
-                trace={
-                    "tools_any": ["search"],
-                    "wait": "proposed",
-                    "max_tool_rounds": 4,
-                    "no_error": True,
-                },
-            )
-        )
-
     def test_a_bad_wait_is_refused(self) -> None:
         self.load_bad(
             query(
@@ -321,6 +287,32 @@ class InvalidQueryTests(unittest.TestCase):
                 }
             )
         )
+
+
+class TaskTraceTests(unittest.TestCase):
+    def test_a_task_may_skip_the_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_golden(
+                Path(tmp),
+                queries=[
+                    query(
+                        type="task",
+                        difficulty="easy",
+                        trace={
+                            "tools_any": ["search"],
+                            "wait": "absent",
+                            "max_tool_rounds": 4,
+                            "no_error": True,
+                        },
+                    )
+                ],
+                refresh=False,
+            )
+            golden = load_golden(
+                root, check_hashes=False, require_counts=False
+            )
+
+        self.assertIsNone(golden.queries[0].expected_trace.propose_valid)
 
 
 class ProposeVariantTests(unittest.TestCase):
@@ -360,22 +352,6 @@ class ProposeVariantTests(unittest.TestCase):
                 )
 
         self.assertIn("propose_interface", str(caught.exception))
-
-    def test_a_non_task_cannot_name_a_propose(self) -> None:
-        bad = query()
-        bad["expected_trace"] = {
-            **bad["expected_trace"],
-            "propose_job": "plan",
-            "propose_interface": "source",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            root = make_golden(Path(tmp), queries=[bad], refresh=False)
-            with self.assertRaises(GoldenError) as caught:
-                load_golden(
-                    root, check_hashes=False, require_counts=False
-                )
-
-        self.assertIn("only for tasks", str(caught.exception))
 
 
 class ManifestTests(unittest.TestCase):

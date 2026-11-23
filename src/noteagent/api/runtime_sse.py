@@ -21,7 +21,7 @@ from noteagent.agent.runtime import (
     RunCancelled,
     RunRequest,
 )
-from noteagent.agent.store import SessionStore, WaitStore
+from noteagent.agent.store import SessionStore
 from noteagent.api.sessions import session_payload
 from noteagent.api.sse import KEEPALIVE_SECONDS
 
@@ -35,7 +35,6 @@ def iter_run_sse(
     request: RunRequest,
     *,
     store: SessionStore,
-    waits: WaitStore | None = None,
 ) -> Iterator[bytes]:
     """Run *request*, forwarding status/token/observation/done/error."""
     events: queue.Queue[RunEvent | None] = queue.Queue(maxsize=QUEUE_SIZE)
@@ -100,7 +99,7 @@ def iter_run_sse(
             if isinstance(item, DoneEvent):
                 try:
                     session = session_payload(
-                        store, request.session_id, waits=waits
+                        store, request.session_id
                     )
                 except Exception as err:
                     seq += 1

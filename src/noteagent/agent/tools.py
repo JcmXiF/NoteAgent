@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Event
 from typing import Literal, TypeAlias
 
@@ -23,12 +23,9 @@ from noteagent.agent.model import ToolCall
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tool_schema import ToolArgumentError, validate_arguments
 
-#: What a call is allowed to touch. ``write`` is local state written by the
-#: core itself (the writing task), never the web and never a wiki page.
-SideEffect: TypeAlias = Literal["read", "network", "human", "write"]
-
-#: The side effects the contract knows; a spec outside this set is refused.
-SIDE_EFFECTS: tuple[SideEffect, ...] = ("read", "network", "human", "write")
+#: What a call is allowed to touch. ``state`` is the project's writing state and
+#: ``disk`` is a wiki page write; both are serialized, not network acts.
+SideEffect: TypeAlias = Literal["read", "network", "state", "disk"]
 
 #: The names a model may be offered.
 TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -52,27 +49,10 @@ OBSERVATION_FIELDS = (
     "omitted",
     "truncated",
     "not_source",
-    "needs_human",
-    "job",
     "fidelity",
     "http_status",
     "action",
     "wrote_wiki",
-    # A writing-task result: the cards it found, the revision they belong to,
-    # and whether a long op is still requested/running.
-    "cards",
-    "rev",
-    "status",
-    # A writing-task material (or several), with its identity and state; the
-    # block index is a reader's view, not a chat card's payload.
-    "materials",
-    # A writing-task frame (or several): which material, who drew it, and how
-    # many blocks it covers. The block previews stay in the bounded view.
-    "frames",
-    # The pending write request a compose_page recorded: the frame, the
-    # canonical page spec and the revision it is bound to. It is bounded by the
-    # spec's own section/block caps, and it is what the confirmation card shows.
-    "request",
 )
 
 
@@ -158,27 +138,9 @@ class ToolSpec:
     enabled: bool = True
     argument_hint: str = ""
 
-    def __post_init__(self) -> None:
-        if self.side_effect not in SIDE_EFFECTS:
-            raise ValueError(f"unknown tool side effect: {self.side_effect!r}")
-
 
 class UnknownToolError(LookupError):
     """A name the registry does not hold."""
-
-
-class ToolError(Exception):
-    """A handler refusing a call, with a situation the model can act on.
-
-    A plain exception is the handler's own fault; this one names a situation
-    the model is expected to recover from (``conflict``, ``op_failed``, ...).
-    The registry keeps the code in the error observation, so the loop's one
-    failure channel carries it too; no tool invents a second result shape.
-    """
-
-    def __init__(self, message: str, *, code: str = "handler_error") -> None:
-        super().__init__(message)
-        self.code = code
 
 
 class ToolRegistry:
@@ -236,44 +198,95 @@ class ToolRegistry:
         the model decides whether to correct it. A cancellation is the one thing
         that is not an observation, because the run must end rather than read it.
         """
+        check_cancelled(context.cancel)
         prepared = self._prepare(name, arguments)
         if isinstance(prepared, ToolResult):
             return prepared
         spec, values = prepared
-        call = _PendingCall(spec)
-        call.start(values, context)
-        return self._finish(spec, call.outcome(spec.timeout_s, context.cancel))
+        call, stop = self._start(spec, values, context)
+        return self._finish(
+            spec, call.outcome(spec.timeout_s, context.cancel, stop)
+        )
 
     def dispatch_many(
         self, calls: Sequence[ToolCall], context: ToolContext
     ) -> tuple[ToolResult, ...]:
-        """Run one round's calls at the same time, answering in the asked order.
+        """Run one round's calls, answering in the asked order.
 
-        The model writes its calls in the order it means them; the log keeps that
-        order even when a later call finishes first, so the prompt and the cards
-        read the same way on every replay.
+        Read/network calls run at the same time. A round that includes a state
+        call runs in the model's order instead: a state write must
+        not race the read that follows it or another state write beside it.
+        The model writes its calls in the order it means them; the log keeps
+        that order even when a later call finishes first, so the prompt and the
+        cards read the same way on every replay.
         """
         if not calls:
             return ()
+        check_cancelled(context.cancel)
         prepared = [self._prepare(call.name, call.arguments) for call in calls]
-        pending: dict[int, tuple[_PendingCall, ToolSpec]] = {}
+        if any(
+            isinstance(item, tuple)
+            and item[0].side_effect in {"state", "disk"}
+            for item in prepared
+        ):
+            results: list[ToolResult] = []
+            for item in prepared:
+                if isinstance(item, ToolResult):
+                    results.append(item)
+                    continue
+                spec, values = item
+                call, stop = self._start(spec, values, context)
+                results.append(
+                    self._finish(
+                        spec,
+                        call.outcome(
+                            spec.timeout_s, context.cancel, stop
+                        ),
+                    )
+                )
+            return tuple(results)
+        pending: dict[int, tuple[_PendingCall, ToolSpec, Event]] = {}
         results: list[ToolResult | None] = [None] * len(calls)
         for index, item in enumerate(prepared):
             if isinstance(item, ToolResult):
                 results[index] = item
                 continue
             spec, values = item
-            call = _PendingCall(spec)
-            call.start(values, context)
-            pending[index] = (call, spec)
-        for index, (call, spec) in pending.items():
-            results[index] = self._finish(
-                spec, call.outcome(spec.timeout_s, context.cancel)
-            )
+            call, stop = self._start(spec, values, context)
+            pending[index] = (call, spec, stop)
+        for index, (call, spec, stop) in pending.items():
+            try:
+                results[index] = self._finish(
+                    spec,
+                    call.outcome(spec.timeout_s, context.cancel, stop),
+                )
+            except RunCancelled:
+                # A sibling that has not finished must stop too, or it could
+                # still commit after the round was abandoned.
+                for _call, _spec, other in pending.values():
+                    other.set()
+                raise
         finished = [result for result in results if result is not None]
         if len(finished) != len(calls):  # pragma: no cover - defensive
             raise RuntimeError("a tool call produced no result")
         return tuple(finished)
+
+    def _start(
+        self,
+        spec: ToolSpec,
+        values: Mapping[str, object],
+        context: ToolContext,
+    ) -> tuple["_PendingCall", Event]:
+        """Start one call with an event that stops this call only.
+
+        The run's own event ends the whole run; this per-call event also stops
+        the handler thread on a timeout, so a call that already reported a
+        timeout cannot go on to write.
+        """
+        stop = Event()
+        call = _PendingCall(spec)
+        call.start(values, replace(context, cancel=stop))
+        return call, stop
 
     def _prepare(
         self, name: str, arguments: str | Mapping[str, object]
@@ -342,13 +355,20 @@ class _PendingCall:
         self._started_at = time.monotonic()
         self._thread.start()
 
-    def outcome(self, timeout_s: float, cancel: Event | None = None) -> ToolResult:
+    def outcome(
+        self,
+        timeout_s: float,
+        cancel: Event | None = None,
+        stop: Event | None = None,
+    ) -> ToolResult:
         # The budget starts when the call does, not when its turn in the batch
         # comes up: a fast tool behind a slow sibling must still be bounded.
         deadline = self._started_at + timeout_s
         while self._thread.is_alive():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if stop is not None:
+                    stop.set()
                 return _error(
                     self._spec.name,
                     f"tool {self._spec.name} timed out after {timeout_s:g}s",
@@ -359,6 +379,8 @@ class _PendingCall:
             # rest of its timeout; the stop is checked between short waits.
             self._thread.join(min(0.05, remaining))
             if self._thread.is_alive() and cancel is not None and cancel.is_set():
+                if stop is not None:
+                    stop.set()
                 raise RunCancelled("the run was cancelled")
         failure = self._failure
         if failure is not None:
@@ -366,12 +388,10 @@ class _PendingCall:
                 raise failure
             if not isinstance(failure, Exception):
                 raise failure
-            named = getattr(failure, "code", "")
-            code = named if isinstance(named, str) and named else "handler_error"
             return _error(
                 self._spec.name,
-                f"tool {self._spec.name} failed ({code}): {failure}",
-                code=code,
+                f"tool error: {failure}",
+                code="handler_error",
             )
         if self._result is None:
             return _error(
@@ -390,8 +410,7 @@ class _PendingCall:
 
 def toolset_name(tools: "ToolRegistry") -> str:
     """A stable name for what a run could do, recorded on its marker."""
-    names = ["propose"]
-    names.extend(tool.name for tool in tools.enabled())
+    names = [tool.name for tool in tools.enabled()]
     return "tools:" + ",".join(names)
 
 
@@ -413,6 +432,12 @@ def _arguments(
             code="invalid_arguments",
         )
     return dict(data)
+
+
+def check_cancelled(cancel: Event | None) -> None:
+    """A call whose run was cancelled, or whose time ran out, never runs."""
+    if cancel is not None and cancel.is_set():
+        raise RunCancelled("the run was cancelled")
 
 
 def _error(

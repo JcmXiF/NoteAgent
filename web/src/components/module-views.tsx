@@ -19,6 +19,8 @@ import { NotesSidebar } from "@/components/notes/NotesSidebar";
 import { NotesView } from "@/components/notes/NotesView";
 import { GraphSidebar } from "@/components/graph/GraphSidebar";
 import { GraphView } from "@/components/graph/GraphView";
+import { WritingStateSidebar } from "@/components/writing/WritingStateSidebar";
+import { WritingStateView } from "@/components/writing/WritingStateView";
 import { NotAvailable } from "@/components/layout/NotAvailable";
 import type { PaneSlot } from "@/stores/layout-store";
 
@@ -44,6 +46,7 @@ const VIEWS: Partial<Record<ModuleId, ModuleViews>> = {
   notes: { Sidebar: NotesSidebar, Content: NotesView },
   browse: { Sidebar: BrowseSearch, Content: BrowseView },
   graph: { Sidebar: GraphSidebar, Content: GraphView },
+  writing: { Sidebar: WritingStateSidebar, Content: WritingStateView },
 };
 
 export function moduleViews(id: ModuleId): ModuleViews {

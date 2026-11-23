@@ -150,6 +150,7 @@ class EffectJournal:
     def query(
         self,
         *,
+        ident: str = "",
         run_id: str = "",
         session_id: str = "",
         kind: str = "",
@@ -159,7 +160,7 @@ class EffectJournal:
         matches = [
             (index, effect)
             for index, effect in enumerate(self._read())
-            if _matches(effect, run_id, session_id, kind, status)
+            if _matches(effect, ident, run_id, session_id, kind, status)
         ]
         matches.sort(key=lambda pair: (pair[1].at, pair[0]))
         return tuple(effect for _index, effect in matches)
@@ -167,6 +168,7 @@ class EffectJournal:
     def latest(
         self,
         *,
+        ident: str = "",
         run_id: str = "",
         session_id: str = "",
         kind: str = "",
@@ -174,6 +176,7 @@ class EffectJournal:
     ) -> Effect | None:
         """The last matching effect, or ``None``."""
         matches = self.query(
+            ident=ident,
             run_id=run_id,
             session_id=session_id,
             kind=kind,
@@ -354,13 +357,15 @@ def _effect(raw: object) -> Effect | None:
 
 def _matches(
     effect: Effect,
+    ident: str,
     run_id: str,
     session_id: str,
     kind: str,
     status: str,
 ) -> bool:
     return (
-        (not run_id or effect.run_id == run_id)
+        (not ident or effect.ident == ident)
+        and (not run_id or effect.run_id == run_id)
         and (not session_id or effect.session_id == session_id)
         and (not kind or effect.kind == kind)
         and (not status or effect.status == status)

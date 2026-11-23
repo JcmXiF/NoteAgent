@@ -17,23 +17,46 @@ from noteagent.agent.projection import pair_start
 from noteagent.agent.store import Entry
 
 
+#: The conservative window a project gets before it names its own.
+DEFAULT_CONTEXT_WINDOW = 32_000
+
+
 @dataclass(frozen=True, slots=True)
 class CompactionLimits:
     """How much history the prompt may carry, and how it is shed."""
 
-    #: The model's window. v1 has no model catalog, so this is a project default.
-    context_tokens: int = 32_000
+    #: The model's window; the composition root sets it from ``LlmConfig``.
+    context_tokens: int = DEFAULT_CONTEXT_WINDOW
     #: Room for the answer and for the estimate being wrong.
     reserve_tokens: int = 8_000
     #: Recent history that stays verbatim after a summary.
     keep_recent_tokens: int = 12_000
     #: The summary request's own output limit.
     max_summary_tokens: int = 2_000
+    #: A hard cap on the transcript sent to the summarizer, in tokens.
+    summary_input_tokens: int = 24_000
     #: A provider token is roughly this many characters. The estimate only has
-    #: to be close enough to decide *when* to compact, not to bill anyone.
+    #: to be close enough to size the cut and the summary input, not to decide
+    #: compaction: that reads the provider's own prompt count when it exists.
     chars_per_token: int = 4
     #: How much of an old tool result survives deterministic trimming.
     tool_result_chars: int = 800
+
+    def __post_init__(self) -> None:
+        """Keep the recent window and summary output inside the threshold.
+
+        A window configured below the defaults would otherwise leave a tail
+        larger than the threshold and re-summarize the same prefix every turn.
+        """
+        limit = self.threshold_tokens
+        if self.keep_recent_tokens >= limit:
+            object.__setattr__(
+                self, "keep_recent_tokens", max(1, limit // 2)
+            )
+        if self.max_summary_tokens >= limit:
+            object.__setattr__(
+                self, "max_summary_tokens", max(1, limit // 4)
+            )
 
     @property
     def threshold_tokens(self) -> int:
@@ -94,9 +117,7 @@ def choose_cut(entries: Sequence[Entry], limits: CompactionLimits) -> str | None
     """The first entry the prompt keeps, or ``None`` when nothing can be shed.
 
     The recent window is measured from the tail. A cut that lands on a tool
-    result moves back to the call it answers, so a pair is never split. The
-    latest job result is kept even when it sits outside the recent window,
-    because the model must still know what the last collaboration job did.
+    result moves back to the call it answers, so a pair is never split.
     """
     if not entries:
         return None
@@ -113,16 +134,9 @@ def choose_cut(entries: Sequence[Entry], limits: CompactionLimits) -> str | None
 
     cut = pair_start(entries, recent_start)
 
-    # ADR-0005: the turns from the wait's proposal through its result are what
-    # a resume needs; keep them even when they sit outside the recent window.
-    anchor = _last_wait_start(entries)
-    if anchor is None:
-        anchor = _last_job_result(entries)
-    if anchor is not None and anchor < cut:
-        cut = anchor
-
-    # The cut must name a message (or a job result). A cut on a compaction or a
-    # silent event would start the next prompt after the live request.
+    # The cut must name a message (or an old job result). A cut on a
+    # compaction or a silent event would start the next prompt after the
+    # live request.
     cut = _message_boundary(entries, cut)
     if cut is None or cut <= 0:
         return None
@@ -202,20 +216,6 @@ def _entry_tokens(entry: Entry, chars_per_token: int) -> int:
     if chars <= 0:
         return 0
     return max(1, math.ceil(chars / max(1, chars_per_token)))
-
-
-def _last_wait_start(entries: Sequence[Entry]) -> int | None:
-    for index in range(len(entries) - 1, -1, -1):
-        if entries[index].get("type") == "wait_proposed":
-            return index
-    return None
-
-
-def _last_job_result(entries: Sequence[Entry]) -> int | None:
-    for index in range(len(entries) - 1, -1, -1):
-        if entries[index].get("type") == "wait_completed":
-            return index
-    return None
 
 
 def _message_boundary(entries: Sequence[Entry], index: int) -> int | None:

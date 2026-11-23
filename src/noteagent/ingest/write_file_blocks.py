@@ -50,12 +50,14 @@ from noteagent.util.run_log import RunLogger
 
 __all__ = [
     "HARD_WRITE_CODES",
+    "PageWriteResult",
     "WriteContext",
     "WriteFileBlocksResult",
     "WriteWarning",
     "WrittenFile",
     "format_write_result",
     "write_file_blocks",
+    "write_wiki_page",
 ]
 
 
@@ -115,6 +117,15 @@ class WriteFileBlocksResult:
 
     written: tuple[WrittenFile, ...]
     warnings: tuple[WriteWarning, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PageWriteResult:
+    """One page write: the file that landed and the effect it left."""
+
+    file: WrittenFile | None
+    warnings: tuple[WriteWarning, ...] = ()
+    effect_id: str = ""
 
 
 def _is_log_path(relative_path: str) -> bool:
@@ -178,6 +189,154 @@ def _append_effect(
         message = f'failed to record effect for "{target}": {err}'
         warnings.append(WriteWarning("effect_failed", message, target))
         logger.warning(message, path=target)
+
+
+def write_wiki_page(
+    layout: ProjectLayout,
+    relative_path: str,
+    content: str,
+    *,
+    absolute: Path | None = None,
+    mode: str = "create",
+    write_context: WriteContext | None = None,
+    journal: EffectJournal | None = None,
+    run_logger: RunLogger | None = None,
+    source_identity: str = "",
+    display_path: str = "",
+    reserved_effect_id: str = "",
+) -> PageWriteResult:
+    """Write one wiki page from final Markdown, with its history and effect.
+
+    This is the seam below the compile's merge/frontmatter work: ``content`` is
+    the final page, frontmatter included, and the caller assembles it. The
+    function owns the parts every writer must get right — the atomic write, the
+    replaced version in page history, and the effect row a restore follows. It
+    needs no plan and no confirmation. Callers own their own dedupe policy; the
+    compile's same-run check stays in ``write_file_blocks``.
+
+    ``journal`` is created when a ``write_context`` is given and no journal is
+    supplied. A write without a context still keeps page history, but touches no
+    effect journal — the old write path's behaviour.
+
+    ``display_path`` is the caller's name for the page in warnings; it defaults
+    to ``relative_path``. ``reserved_effect_id`` names the effect this write
+    appends when it changes the page, so a retried write can find the effect
+    it already committed; an unchanged write has no effect to name.
+    """
+
+    logger = run_logger or RunLogger.disabled()
+    relative = relative_path.replace("\\", "/")
+    shown = display_path or relative_path
+    target = absolute or resolve_wiki_write_path(layout, relative)
+    text = to_lf(content)
+    if text and not text.endswith("\n"):
+        text = text + "\n"
+
+    if write_context is None:
+        journal = None
+    elif journal is None:
+        journal = EffectJournal(layout)
+
+    warnings: list[WriteWarning] = []
+    replaced = ""
+    after_ref = ""
+    reserved = reserved_effect_id
+    effect_id = ""
+    page_written = False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # The file's own bytes, read again for the store: what is kept is the
+        # version this write replaces, not the merged or normalised text the new
+        # content was worked out from.
+        replaced = (
+            keep_before(layout, target.read_text(encoding="utf-8"))
+            if target.exists()
+            else ""
+        )
+        after_ref = blob_digest(text)
+        effect_id = (
+            (reserved or journal.new_id())
+            if journal is not None and replaced != after_ref
+            else ""
+        )
+        bytes_written = write_text(target, text)
+        page_written = True
+        entry = note_agent_write(
+            layout,
+            relative,
+            before=replaced,
+            after_text=text,
+            mode=mode,
+            effect_id=effect_id,
+            run_id=write_context.run_id if write_context is not None else "",
+            plan_revision=(
+                write_context.plan_revision if write_context is not None else ""
+            ),
+        )
+        if (
+            entry is not None
+            and journal is not None
+            and write_context is not None
+            and effect_id
+        ):
+            _append_effect(
+                journal,
+                write_context,
+                ident=effect_id,
+                target=relative,
+                before=replaced,
+                after=entry.after,
+                warnings=warnings,
+                logger=logger,
+            )
+        logger.page_write(
+            path=relative,
+            mode=mode,
+            bytes_written=bytes_written,
+            source_identity=source_identity or None,
+        )
+    except OSError as err:
+        if page_written:
+            warning_code = "history_failed"
+            msg = (
+                f'wrote "{shown}", but its history could not be recorded: '
+                f"{err}"
+            )
+        else:
+            warning_code = "failed"
+            msg = f'failed to write "{shown}": {err}'
+        warnings.append(WriteWarning(warning_code, msg, relative))
+        logger.warning(msg, path=relative)
+        if journal is not None and write_context is not None:
+            _append_effect(
+                journal,
+                write_context,
+                ident=effect_id,
+                target=relative,
+                before=replaced,
+                after=after_ref if page_written else "",
+                status=FAILED,
+                error=msg,
+                warnings=warnings,
+                logger=logger,
+            )
+        return PageWriteResult(
+            file=None,
+            warnings=tuple(warnings),
+            effect_id=effect_id,
+        )
+
+    written_file = WrittenFile(
+        relative_path=relative,
+        absolute_path=target,
+        bytes_written=bytes_written,
+        mode=mode,
+    )
+    return PageWriteResult(
+        file=written_file,
+        warnings=tuple(warnings),
+        effect_id=effect_id,
+    )
 
 
 def write_file_blocks(
@@ -393,79 +552,29 @@ def write_file_blocks(
             )
             continue
 
-        replaced = ""
-        after_ref = ""
-        page_written = False
-        try:
-            absolute.parent.mkdir(parents=True, exist_ok=True)
-
-            if is_log:
-                mode = "append" if absolute.exists() else "create"
+        if is_log:
+            mode = "append" if absolute.exists() else "create"
+            entry = content.strip()
+            try:
+                absolute.parent.mkdir(parents=True, exist_ok=True)
                 existing = (
-                    absolute.read_text(encoding="utf-8") if absolute.exists() else ""
+                    absolute.read_text(encoding="utf-8")
+                    if absolute.exists()
+                    else ""
                 )
-                entry = content.strip()
                 if existing.strip():
                     next_text = existing.rstrip() + "\n\n" + entry + "\n"
                 else:
                     next_text = entry + "\n"
                 write_text(absolute, next_text)
-                # An append reports the entry it added; the page writers report the
-                # whole file, which is what `bytes_written` means for them.
-                bytes_written = len(entry.encode("utf-8"))
-            else:
-                mode = base_mode
-                # The file's own bytes, read again for the store: what is kept is
-                # the version this write replaces, not the merged or normalised
-                # text the new content was worked out from.
-                replaced = (
-                    keep_before(layout, absolute.read_text(encoding="utf-8"))
-                    if absolute.exists()
-                    else ""
-                )
-                after_ref = blob_digest(content)
-                effect_id = (
-                    journal.new_id()
-                    if journal is not None and replaced != after_ref
-                    else ""
-                )
-                bytes_written = write_text(absolute, content)
-                page_written = True
-                entry = note_agent_write(
-                    layout,
-                    relative,
-                    before=replaced,
-                    after_text=content,
-                    mode=mode,
-                    effect_id=effect_id,
-                    run_id=(
-                        write_context.run_id
-                        if write_context is not None
-                        else ""
-                    ),
-                    plan_revision=(
-                        write_context.plan_revision
-                        if write_context is not None
-                        else ""
-                    ),
-                )
-                if (
-                    entry is not None
-                    and journal is not None
-                    and write_context is not None
-                    and effect_id
-                ):
-                    _append_effect(
-                        journal,
-                        write_context,
-                        ident=effect_id,
-                        target=relative,
-                        before=replaced,
-                        after=entry.after,
-                        warnings=warnings,
-                        logger=logger,
-                    )
-
+            except OSError as err:
+                msg = f'failed to write "{block.path}": {err}'
+                warnings.append(WriteWarning("failed", msg, relative))
+                logger.warning(msg, path=relative)
+                continue
+            # An append reports the entry it added; the page writers report the
+            # whole file, which is what `bytes_written` means for them.
+            bytes_written = len(entry.encode("utf-8"))
             written.append(
                 WrittenFile(
                     relative_path=relative,
@@ -480,34 +589,23 @@ def write_file_blocks(
                 bytes_written=bytes_written,
                 source_identity=source_identity or None,
             )
-        except OSError as err:
-            if page_written:
-                warning_code = "history_failed"
-                msg = (
-                    f'wrote "{block.path}", but its history could not be '
-                    f"recorded: {err}"
-                )
-            else:
-                warning_code = "failed"
-                msg = f'failed to write "{block.path}": {err}'
-            warnings.append(WriteWarning(warning_code, msg, relative))
-            logger.warning(msg, path=relative)
-            if (
-                not is_log
-                and journal is not None
-                and write_context is not None
-            ):
-                _append_effect(
-                    journal,
-                    write_context,
-                    target=relative,
-                    before=replaced,
-                    after=after_ref if page_written else "",
-                    status=FAILED,
-                    error=msg,
-                    warnings=warnings,
-                    logger=logger,
-                )
+            continue
+
+        page = write_wiki_page(
+            layout,
+            relative,
+            content,
+            absolute=absolute,
+            mode=base_mode,
+            write_context=write_context,
+            journal=journal,
+            run_logger=logger,
+            source_identity=source_identity,
+            display_path=block.path,
+        )
+        warnings.extend(page.warnings)
+        if page.file is not None:
+            written.append(page.file)
 
     return WriteFileBlocksResult(
         written=tuple(written),

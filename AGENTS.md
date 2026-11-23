@@ -15,16 +15,7 @@ Single-context: `docs/GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/a
 ### Development
 
 One-command checks: `node scripts/check.mjs`; details in `docs/development.md`.
-Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; tool
-contracts: `docs/tool-contract.md`.
-
-### Coding standards
-
-Task invariants and judgement rules that tests cannot express:
-`docs/agents/coding-standards.md`. Mechanical rules stay in source-scan tests.
-
-### Ticket worktrees
-
-`node scripts/agent-worktree.mjs new <slug>` / `rm <slug>` creates and removes
-`.claude/worktrees/<slug>`; it links node_modules, `.scratch` and the local docs. See
-`docs/development.md`.
+Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; writing tools:
+`src/noteagent/writing/tools.py`; the assembled tool registry:
+`src/noteagent/api/session_access.py`. `docs/tool-contract.md` is the historical
+propose-era contract.

@@ -112,6 +112,21 @@ class ProjectLayout:
         return self.meta / "deep-search.json"
 
     @property
+    def writing(self) -> Path:
+        """The writing state's own folder: the one truth the writing tools share."""
+        return self.meta / "writing"
+
+    @property
+    def writing_state(self) -> Path:
+        """The writing state's index; page content lands beside it as it grows."""
+        return self.writing / "state.json"
+
+    @property
+    def writing_pages(self) -> Path:
+        """The selected pages' blocks, one file each, beside the state index."""
+        return self.writing / "pages"
+
+    @property
     def pipeline(self) -> Path:
         """The pipeline's own state: runs and the staging area, per project."""
         return self.meta / "pipeline"
@@ -129,21 +144,6 @@ class ProjectLayout:
     def materials_log(self) -> Path:
         """Every material transition, append-only. The state is read from it."""
         return self.meta / "materials.jsonl"
-
-    @property
-    def task(self) -> Path:
-        """The one writing task of this project: its state and its lock."""
-        return self.meta / "task"
-
-    @property
-    def task_file(self) -> Path:
-        """The task as one atomically replaced JSON document."""
-        return self.task / "task.json"
-
-    @property
-    def task_lock(self) -> Path:
-        """Who is writing the task; one core process holds it at a time."""
-        return self.task / "task.lock"
 
     @property
     def capture_inbox(self) -> Path:

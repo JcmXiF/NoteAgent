@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterable
@@ -26,9 +27,10 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from evals.report import CaseResult, Check
+from evals.report import UNCATEGORIZED, CaseResult, Check
 from evals.sse import parse_sse
-from evals.support import FixedClock, SequentialIds
+from evals.support import FixedClock, SequentialIds, remove_tree
+from evals.trace import TraceEvidence, TraceSpec, evidence_from_entries, first_error
 
 from noteagent.agent.model import ModelClient
 from noteagent.agent.tools import ToolRegistry
@@ -37,7 +39,7 @@ from noteagent.api.app import create_app
 from noteagent.api.deps import AppDeps
 from noteagent.project.init import init_project
 from noteagent.sessions.jsonl import JsonlSessionStore
-from noteagent.util.tempdir import temporary_tree
+from noteagent.writing.tools import WebFetchFn, WebSearchFn
 
 #: The pages every case starts with. They are ordinary wiki pages: the tools
 #: find them the same way they find a reader's pages.
@@ -84,6 +86,8 @@ class Case:
     name: str
     title: str
     run: Callable[["CaseRun"], None]
+    #: The tool path this story expects; ``None`` keeps the trace as evidence only.
+    trace: TraceSpec | None = None
 
 
 class Api:
@@ -93,6 +97,8 @@ class Api:
         self.case = case
         self.client = client
         self.exchanges: list[Exchange] = []
+        #: The chat session the trace checks; the last query wins unless a case sets it.
+        self.main_session: str | None = None
 
     def request(
         self,
@@ -131,6 +137,7 @@ class Api:
         return str(reply.json()["id"])
 
     def query(self, session_id: str, content: str) -> Exchange:
+        self.main_session = session_id
         return self.request(
             "POST",
             f"/api/v1/sessions/{session_id}/query",
@@ -196,6 +203,8 @@ class CaseRun:
         workdir: Path,
         *,
         pages: Iterable[tuple[str, str, str]] | None = None,
+        raw_pages: Iterable[tuple[str, bytes]] | None = None,
+        brief: str | None = None,
     ) -> None:
         self.repo = workdir / "repo"
         self.repo.mkdir(parents=True)
@@ -207,11 +216,27 @@ class CaseRun:
         self.app: FastAPI | None = None
         self.api: Api | None = None
         self._store: JsonlSessionStore | None = None
+        self._deps: AppDeps | None = None
         self._patchers: list[Any] = []
         try:
             self._activate()
-            for slug, title, body in (_PAGES if pages is None else pages):
-                self.write_page(slug, title, body)
+            # Raw pages, when given, are the seed; ``pages`` then only feeds
+            # the judge, because the original bytes already hold a title.
+            if raw_pages is not None:
+                for slug, text in raw_pages:
+                    self.write_raw_page(slug, text)
+            else:
+                for slug, title, body in (
+                    _PAGES if pages is None else pages
+                ):
+                    self.write_page(slug, title, body)
+            if brief is not None and brief.strip():
+                self.layout.brief.parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                self.layout.brief.write_text(
+                    brief.strip() + "\n", encoding="utf-8"
+                )
         except Exception:
             # The patches point at this case's temporary folder. A case that
             # cannot finish starting must not leave the next one looking there.
@@ -227,6 +252,8 @@ class CaseRun:
             {
                 "NOTEAGENT_PROJECT": str(self.layout.root),
                 "NOTEAGENT_HOME": "",
+                # Keep the user's own skills and settings out of every case.
+                "NOTEAGENT_CONFIG_DIR": str(self.repo / "config"),
             },
         )
         env.start()
@@ -245,9 +272,14 @@ class CaseRun:
         self,
         model: ModelClient,
         *,
+        #: The name the kernel records and sends on the model request. Scripted
+        #: cases are faux; a live arm must pass the configured model's name.
+        model_name: str = "faux",
         tools: ToolRegistry | None = None,
         seed_system_sections: bool = False,
         max_turns: int = 50,
+        web_search: WebSearchFn | None = None,
+        web_fetch: WebFetchFn | None = None,
     ) -> Api:
         if self.api is not None:
             raise RuntimeError("a case starts one app")
@@ -256,43 +288,93 @@ class CaseRun:
             ids=self.ids,
             model=model,
             tools=tools,
-            settings={"model": "faux"},
+            settings={"model": model_name},
             seed_system_sections=seed_system_sections,
             max_turns=max_turns,
+            web_search=web_search,
+            web_fetch=web_fetch,
         )
+        self._deps = deps
         self.app = create_app(deps)
         self.api = Api(self, TestClient(self.app))
         return self.api
 
+    def restart(self) -> Api:
+        """Close the app and open it again on the same temporary project.
+
+        This is an app restart, not a process restart: the temporary project
+        (wiki, state, session store, event logs) persists, while the in-memory
+        app is rebuilt from the same dependencies.
+        """
+        if self.api is None or self._deps is None:
+            raise RuntimeError("a case must start before it can restart")
+        exchanges = list(self.api.exchanges)
+        main_session = self.api.main_session
+        try:
+            self.api.client.close()
+        except Exception:  # noqa: BLE001 - closing is best effort
+            pass
+        self.app = create_app(self._deps)
+        self.api = Api(self, TestClient(self.app))
+        self.api.exchanges.extend(exchanges)
+        self.api.main_session = main_session
+        return self.api
+
+    def evidence(self, session_id: str) -> TraceEvidence:
+        """Read the trace evidence from one finished session."""
+        return evidence_from_entries(self.store.load(session_id).entries)
+
     def write_page(self, slug: str, title: str, body: str) -> None:
-        path = self.layout.wiki / f"{slug}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        self._page_path(slug).write_text(
             f'---\ntitle: "{title}"\n---\n\n{body}\n',
             encoding="utf-8",
         )
 
-    def check(self, name: str, condition: object, detail: str = "") -> bool:
+    def write_raw_page(self, slug: str, text: bytes) -> None:
+        """Seed a page byte for byte, its own frontmatter included."""
+        self._page_path(slug).write_bytes(text)
+
+    def _page_path(self, slug: str) -> Path:
+        path = self.layout.wiki / f"{slug}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def check(
+        self,
+        name: str,
+        condition: object,
+        detail: str = "",
+        category: str = UNCATEGORIZED,
+    ) -> bool:
         passed = bool(condition)
         self.checks.append(
-            Check(name, passed, "" if passed else detail)
+            Check(name, passed, "" if passed else detail, category)
         )
         return passed
 
-    def equal(self, name: str, actual: object, expected: object) -> bool:
+    def equal(
+        self,
+        name: str,
+        actual: object,
+        expected: object,
+        category: str = UNCATEGORIZED,
+    ) -> bool:
         return self.check(
-            name, actual == expected, f"expected {expected!r}, got {actual!r}"
+            name,
+            actual == expected,
+            f"expected {expected!r}, got {actual!r}",
+            category,
         )
 
     def note(self, text: str) -> None:
         self.log.append(text)
 
     def close(self) -> None:
-        # Close the HTTP client before the temporary project goes away: its
-        # transport and any streamed response hold sockets, and on Windows a
-        # reader inside the app can keep an event log open for an instant.
         if self.api is not None:
-            self.api.client.close()
+            try:
+                self.api.client.close()
+            except Exception:  # noqa: BLE001 - closing is best effort
+                pass
         for patcher in reversed(self._patchers):
             patcher.stop()
         self._patchers.clear()
@@ -301,24 +383,37 @@ class CaseRun:
 def run_case(case: Case, artifacts_root: Path) -> CaseResult:
     """Run one case in its own temporary project, keeping a failure's evidence."""
     started = time.monotonic()
+    tmp = Path(
+        tempfile.mkdtemp(prefix=f"noteagent-eval-{case.name}-")
+    )
     run: CaseRun | None = None
     error = ""
-    with temporary_tree(
-        prefix=f"noteagent-eval-{case.name}-"
-    ) as tmp:
+    try:
         try:
-            run = CaseRun(Path(tmp))
+            run = CaseRun(tmp)
             case.run(run)
         except Exception:
             error = traceback.format_exc()
+        checks = list(run.checks) if run is not None else []
+        evidence: TraceEvidence | None = None
+        if (
+            run is not None
+            and case.trace is not None
+            and run.api is not None
+            and run.api.main_session
+        ):
+            evidence = run.evidence(run.api.main_session)
+            checks.extend(case.trace.checks(evidence))
+        first_failure = first_error(checks, evidence, case.trace, error)
         result = CaseResult(
             case.name,
             case.title,
-            tuple(run.checks) if run is not None else (),
+            tuple(checks),
             error,
             time.monotonic() - started,
             tuple(run.api.exchanges) if run is not None and run.api else (),
             tuple(run.log) if run is not None else (),
+            first_failure,
         )
         if not result.passed:
             try:
@@ -331,9 +426,11 @@ def run_case(case: Case, artifacts_root: Path) -> CaseResult:
                         + f"\nthe failure artifacts could not be kept: {err}"
                     ).strip(),
                 )
+        return result
+    finally:
         if run is not None:
             run.close()
-    return result
+        remove_tree(tmp)
 
 
 def _preserve(

@@ -17,7 +17,6 @@ from noteagent.agent.tools import (
     Diagnostic,
     OutputLimits,
     ToolContext,
-    ToolError,
     ToolRegistry,
     ToolResult,
     ToolSpec,
@@ -123,22 +122,6 @@ class DispatchTests(unittest.TestCase):
         self.assertIn("the page exploded", result.content)
         self.assertEqual(result.diagnostics[0].code, "handler_error")
 
-    def test_a_coded_refusal_keeps_its_code_for_the_model(self) -> None:
-        def refused(_arguments, _context):
-            raise ToolError(
-                "the task changed; call inspect before deciding",
-                code="conflict",
-            )
-
-        registry = ToolRegistry([_spec(refused)])
-
-        result = registry.dispatch("echo", '{"text": "hi"}', ToolContext("s1"))
-
-        self.assertTrue(result.meta["error"])
-        self.assertEqual(result.diagnostics[0].code, "conflict")
-        self.assertIn("conflict", result.content)
-        self.assertIn("call inspect before deciding", result.content)
-
     def test_a_handler_that_runs_too_long_is_stopped_and_reported(self) -> None:
         release = threading.Event()
 
@@ -157,6 +140,48 @@ class DispatchTests(unittest.TestCase):
         self.assertTrue(result.meta["error"])
         self.assertTrue(result.meta["timeout"])
         self.assertIn("timed out", result.content)
+
+    def test_a_timed_out_handler_sees_its_call_stopped(self) -> None:
+        release = threading.Event()
+        effects: list[str] = []
+
+        def slow(arguments, context):
+            release.wait(2)
+            if context.cancel is not None and context.cancel.is_set():
+                return ToolResult(content="stopped")
+            effects.append(str(arguments["text"]))
+            return ToolResult(content="late")
+
+        registry = ToolRegistry([_spec(slow, timeout_s=0.05)])
+
+        result = registry.dispatch(
+            "echo", '{"text": "write"}', ToolContext("s1")
+        )
+        release.set()
+        time.sleep(0.1)
+
+        self.assertTrue(result.meta["timeout"])
+        self.assertEqual(effects, [])
+
+    def test_a_cancelled_run_never_starts_the_handler(self) -> None:
+        ran: list[bool] = []
+
+        def handler(_arguments, _context):
+            ran.append(True)
+            return ToolResult(content="ran")
+
+        cancel = threading.Event()
+        cancel.set()
+        registry = ToolRegistry([_spec(handler)])
+
+        with self.assertRaises(RunCancelled):
+            registry.dispatch(
+                "echo",
+                '{"text": "hi"}',
+                ToolContext("s1", cancel=cancel),
+            )
+
+        self.assertEqual(ran, [])
 
     def test_a_cancelled_call_is_not_turned_into_an_error_observation(self) -> None:
         def stopped(_arguments, _context):
@@ -202,107 +227,49 @@ class ObservationTests(unittest.TestCase):
             {"tool": "wiki_read", "path": "wiki/entropy.md", "slug": "entropy"},
         )
 
-    def test_a_task_result_passes_cards_and_its_revision_but_not_the_task(self) -> None:
-        result = ToolResult(
-            content="cards stay with the model",
-            meta={
-                "rev": 3,
-                "status": "running",
-                "cards": [{"id": "card-1", "url": "https://example.com"}],
-                "materials": [{"id": "raw/web/entropy.html", "state": "staged"}],
-                "material": "not a whitelisted field",
-                "ops": [{"id": "op-1"}],
-                "expectedRev": 2,
-            },
-        )
-
-        card = result.observation("web_search")
-
-        self.assertEqual(
-            card,
-            {
-                "tool": "web_search",
-                "rev": 3,
-                "status": "running",
-                "cards": [{"id": "card-1", "url": "https://example.com"}],
-                "materials": [{"id": "raw/web/entropy.html", "state": "staged"}],
-            },
-        )
-
-    def test_a_frame_result_passes_its_frames_and_revision_but_not_the_task(self) -> None:
-        result = ToolResult(
-            content="frames stay with the model",
-            meta={
-                "rev": 4,
-                "frames": [
-                    {
-                        "id": "frame-1",
-                        "docId": "raw/web/entropy.html",
-                        "source": "human",
-                        "blockCount": 2,
-                    }
-                ],
-                "blockIds": ["b1", "b2"],
-                "ops": [{"id": "op-1"}],
-                "expectedRev": 3,
-            },
-        )
-
-        card = result.observation("inspect")
-
-        self.assertEqual(
-            card,
-            {
-                "tool": "inspect",
-                "rev": 4,
-                "frames": [
-                    {
-                        "id": "frame-1",
-                        "docId": "raw/web/entropy.html",
-                        "source": "human",
-                        "blockCount": 2,
-                    }
-                ],
-            },
-        )
-
-    def test_a_compose_result_passes_its_write_request_but_not_the_task(self) -> None:
-        request = {
-            "frameId": "frame-1",
-            "spec": {
-                "slug": "entropy",
-                "title": "Entropy",
-                "action": "create",
-                "sections": [{"title": "What it is", "blocks": ["b1"]}],
-            },
-            "rev": 3,
-            "at": "2026-11-10T09:05:00Z",
-        }
-        result = ToolResult(
-            content="the request stays with the model",
-            meta={
-                "rev": 3,
-                "status": "needs_approval",
-                "request": request,
-                "ops": [{"id": "op-1"}],
-                "expectedRev": 2,
-            },
-        )
-
-        card = result.observation("compose_page")
-
-        self.assertEqual(
-            card,
-            {
-                "tool": "compose_page",
-                "rev": 3,
-                "status": "needs_approval",
-                "request": request,
-            },
-        )
-
 
 class ParallelDispatchTests(unittest.TestCase):
+    def test_a_cancelled_batch_stops_every_handler(self) -> None:
+        cancel = threading.Event()
+        started = threading.Event()
+        wrote: list[str] = []
+
+        def trigger(_arguments, _context):
+            cancel.set()
+            started.set()
+            return ToolResult(content="trigger")
+
+        def writer(_arguments, context):
+            started.wait(1)
+            for _ in range(100):
+                time.sleep(0.01)
+                if (
+                    context.cancel is not None
+                    and context.cancel.is_set()
+                ):
+                    return ToolResult(content="stopped")
+            wrote.append("wrote")
+            return ToolResult(content="late")
+
+        registry = ToolRegistry(
+            [
+                _spec(trigger, name="trigger"),
+                _spec(writer, name="writer"),
+            ]
+        )
+
+        with self.assertRaises(RunCancelled):
+            registry.dispatch_many(
+                [
+                    ToolCall("1", "trigger", '{"text": "x"}'),
+                    ToolCall("2", "writer", '{"text": "x"}'),
+                ],
+                ToolContext("s1", cancel=cancel),
+            )
+        time.sleep(0.1)
+
+        self.assertEqual(wrote, [])
+
     def test_calls_in_one_batch_run_at_the_same_time_and_keep_their_order(self) -> None:
         together = threading.Barrier(2, timeout=2)
 
@@ -354,6 +321,39 @@ class ParallelDispatchTests(unittest.TestCase):
         )
 
         self.assertEqual([result.content for result in results], ["slow", "fast"])
+
+    def test_a_round_with_a_state_call_runs_in_order(self) -> None:
+        events: list[str] = []
+
+        def first(_arguments, _context):
+            events.append("first-start")
+            time.sleep(0.05)
+            events.append("first-end")
+            return ToolResult(content="first")
+
+        def second(_arguments, _context):
+            events.append("second")
+            return ToolResult(content="second")
+
+        registry = ToolRegistry(
+            [
+                _spec(first, name="first", side_effect="state"),
+                _spec(second, name="second"),
+            ]
+        )
+
+        results = registry.dispatch_many(
+            [
+                ToolCall("1", "first", '{"text": "x"}'),
+                ToolCall("2", "second", '{"text": "x"}'),
+            ],
+            ToolContext("s1"),
+        )
+
+        self.assertEqual(
+            [result.content for result in results], ["first", "second"]
+        )
+        self.assertEqual(events, ["first-start", "first-end", "second"])
 
     def test_one_bad_call_does_not_take_down_the_others(self) -> None:
         def broken(_arguments, _context):

@@ -1,8 +1,8 @@
-"""Load, validate and refresh the v2 golden set.
+"""Load, validate and refresh the golden set.
 
-The golden data is local: a corpus snapshot, twenty single-turn queries with
-ground truth, and a manifest carrying the hashes and counts. This module is the
-only reader; the runner and the judge depend on the dataclasses here so a
+The V3 quality set carries the corpus snapshot and single-turn queries with
+ground truth; the manifest carries the hashes and counts. This module is the
+only reader; the V3 set and the trace rules depend on the dataclasses here so a
 malformed case fails before a provider is called.
 """
 
@@ -19,12 +19,18 @@ from typing import Any
 
 import yaml
 
-from noteagent.agent.wait import JOB_SOURCES
 from noteagent.ingest.frontmatter import parse_page, unquote_scalar
 
 TYPES = ("fact", "synthesis", "gap", "task")
 DIFFICULTIES = ("easy", "medium", "hard")
 WAIT_STATES = ("absent", "proposed")
+
+#: The job/interface pairs the old proposals used. Kept so the recorded dataset
+#: still parses; new runs write no waits.
+JOB_SOURCES = {
+    "plan": ("source", "plan_board"),
+    "compile": ("plan_board", "compile_board"),
+}
 DEFAULT_GOLDEN = Path(".scratch/agent-eval/golden")
 
 _QUERY_KEYS = (
@@ -230,6 +236,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
     golden_path.write_text(
         yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
+        newline="\n",
     )
 
     corpus_path = corpus_root / "manifest.yaml"
@@ -248,6 +255,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
     corpus_path.write_text(
         yaml.safe_dump(corpus_manifest, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
+        newline="\n",
     )
     return golden_path, corpus_path
 
@@ -255,7 +263,7 @@ def write_manifest(root: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m evals.golden.dataset",
-        description="Validate the local v2 golden set.",
+        description="Validate the local golden set.",
     )
     parser.add_argument("command", nargs="?", default="check")
     parser.add_argument("--golden", default=str(DEFAULT_GOLDEN))
@@ -318,7 +326,7 @@ def _query(item: Any, index: int, path: Path) -> GoldenQuery:
     if not 2 <= len(key_points) <= 5:
         raise GoldenError(f"{where} key_points must be 2-5")
     trace = _trace(
-        item.get("expected_trace"), qtype, qid, f"{where} expected_trace"
+        item.get("expected_trace"), f"{where} expected_trace"
     )
     forbidden = _strings(item.get("forbidden"), f"{where} forbidden")
     raw_sources = _strings(
@@ -342,9 +350,7 @@ def _query(item: Any, index: int, path: Path) -> GoldenQuery:
     )
 
 
-def _trace(
-    value: Any, qtype: str, qid: str, where: str
-) -> ExpectedTrace:
+def _trace(value: Any, where: str) -> ExpectedTrace:
     if not isinstance(value, Mapping):
         raise GoldenError(f"{where} must be a mapping")
     _reject_unknown(value, _TRACE_KEYS, where)
@@ -387,26 +393,6 @@ def _trace(
             raise GoldenError(
                 f"{where} propose_interface must be one of "
                 f"{', '.join(allowed)} for {propose_job}"
-            )
-    if qtype == "task":
-        if wait != "proposed":
-            raise GoldenError(f"{where}: a task must expect wait proposed")
-        if propose is not True:
-            raise GoldenError(
-                f"{where}: a task must expect propose_valid true"
-            )
-    else:
-        if wait != "absent":
-            raise GoldenError(
-                f"{where}: a non-task must expect wait absent"
-            )
-        if propose is not None:
-            raise GoldenError(
-                f"{where}: propose_valid is only for tasks"
-            )
-        if propose_job is not None:
-            raise GoldenError(
-                f"{where}: propose_job/interface are only for tasks"
             )
     return ExpectedTrace(
         tools_any=tools,

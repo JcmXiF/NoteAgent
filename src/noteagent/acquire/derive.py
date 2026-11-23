@@ -14,6 +14,7 @@ from lxml import html as lxml_html
 
 from noteagent.acquire.media.captions import PLACEHOLDER_CAPTION
 from noteagent.acquire.media.data_uri import decode_data_uri
+from noteagent.acquire.types import Capture
 
 PREVIEW_MAX = 80
 _SKIP_TAGS = frozenset({"script", "style", "noscript"})
@@ -97,6 +98,47 @@ def blocks_payload(
         block.to_dict()
         for block in extract_derived_blocks(html, caption_lookup=caption_lookup)
     ]
+
+
+def blocks_for_capture(
+    capture: Capture, kind: str | None = None
+) -> list[dict[str, str]]:
+    """The block payload for a capture, whatever original it carries.
+
+    The adapters are imported here so a caller that only has HTML does not load
+    the PDF/office/image parsers with it. ``kind`` is derived from the capture
+    when the caller does not already have it.
+    """
+    if kind is None:
+        from noteagent.acquire.write_raw import capture_kind
+
+        kind = capture_kind(capture)
+    if kind == "pdf":
+        from noteagent.acquire.adapters.pdf_source import PdfSourceAdapter
+
+        return [
+            block.to_dict()
+            for block in PdfSourceAdapter().derive_bytes(capture.pdf_bytes)
+        ]
+    if kind == "office":
+        from noteagent.acquire.adapters.office_source import OfficeSourceAdapter
+
+        return [
+            block.to_dict()
+            for block in OfficeSourceAdapter()
+            .derive_bytes(capture.office_bytes)
+            .blocks
+        ]
+    if kind == "image":
+        from noteagent.acquire.adapters.image_source import ImageSourceAdapter
+
+        return [
+            block.to_dict()
+            for block in ImageSourceAdapter()
+            .derive_bytes(capture.image_bytes)
+            .blocks
+        ]
+    return blocks_payload(capture.html)
 
 
 def _parse(html: str) -> lxml_html.HtmlElement | None:

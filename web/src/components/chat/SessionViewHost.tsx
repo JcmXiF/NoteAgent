@@ -1,19 +1,15 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { SessionView } from "@/components/chat/SessionView";
-import type { WaitPayload } from "@/lib/api/client";
 import { useDocsStore } from "@/stores/docs-store";
-import { useLayoutStore, type PaneSlot } from "@/stores/layout-store";
+import type { PaneSlot } from "@/stores/layout-store";
 import { useNavStore } from "@/stores/nav-store";
 import { useSessionsStore } from "@/stores/sessions-store";
-import { useWaitContextStore } from "@/stores/wait-context-store";
 
 /**
- * The session in front, and the two links that leave it.
+ * The session in front, and the link that leaves it.
  *
- * A wiki link opens the page in this pane. A wait's deep link arms the wait for
- * the plan or compile button and brings that section into view; the button
- * itself then carries the wait into the job.
+ * A wiki link opens the page in this pane.
  */
 export function SessionViewHost({ slot }: { slot: PaneSlot }) {
   const { t } = useTranslation();
@@ -28,21 +24,6 @@ export function SessionViewHost({ slot }: { slot: PaneSlot }) {
       useSessionsStore.getState().open(intent.conversationId);
     }
   }, [seq, intent]);
-
-  const openInterface = (wait: WaitPayload, sessionId: string) => {
-    useWaitContextStore.getState().arm({
-      sessionId,
-      waitId: wait.waitId,
-      job: wait.job,
-      interface: wait.interface,
-    });
-    const layout = useLayoutStore.getState();
-    layout.setRightOpen(true);
-    layout.setSectionOpen(
-      wait.interface === "compile_board" ? "compile" : "plan",
-      true,
-    );
-  };
 
   if (!currentId) {
     return (
@@ -61,7 +42,6 @@ export function SessionViewHost({ slot }: { slot: PaneSlot }) {
       onOpenLink={(target) => {
         followLink(target, slot);
       }}
-      onOpenInterface={openInterface}
       onSessionChanged={(session) =>
         useSessionsStore.getState().touch(session)
       }

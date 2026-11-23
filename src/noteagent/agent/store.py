@@ -1,4 +1,4 @@
-"""Where a transcript lives, and where the one wait on a session lives.
+"""Where a transcript lives.
 
 The store is append-only from the runtime's point of view: an entry is committed
 at a boundary and never rewritten. How the bytes are laid out is the storage
@@ -11,8 +11,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from noteagent.agent.jobs import JobResult
-from noteagent.agent.wait import WaitState
 
 #: One committed line of a transcript. The typed variants arrive with the
 #: projection, which is the only thing that interprets them.
@@ -80,24 +78,4 @@ class SessionStore(Protocol):
         ...
 
     def delete(self, session_id: str) -> None:
-        ...
-
-
-@runtime_checkable
-class WaitStore(Protocol):
-    """The wait events a session has committed, read as its current wait."""
-
-    def current(self, session_id: str) -> WaitState | None:
-        ...
-
-    def propose(self, session_id: str, wait: WaitState) -> None:
-        ...
-
-    def enter(self, session_id: str, wait_id: str, job_id: str) -> None:
-        ...
-
-    def finish(self, session_id: str, wait_id: str, result: JobResult) -> None:
-        ...
-
-    def cancel(self, session_id: str, wait_id: str, reason: str = "") -> None:
         ...

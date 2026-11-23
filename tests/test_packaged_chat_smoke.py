@@ -25,7 +25,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "smoke_packaged_chat.
 
 @unittest.skipIf(fastapi is None, "fastapi not installed")
 class PackagedChatSmokeTests(unittest.TestCase):
-    def test_the_flow_answers_proposes_and_stops_its_wait(self) -> None:
+    def test_the_flow_answers_and_continues(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = {
@@ -52,7 +52,7 @@ class PackagedChatSmokeTests(unittest.TestCase):
             0,
             (result.stdout or "") + (result.stderr or ""),
         )
-        self.assertIn("wait cancelled", result.stdout)
+        self.assertIn("chat flow ok", result.stdout)
         self.assertIn("SMOKE OK", result.stdout)
 
 

@@ -1,7 +1,7 @@
 """Turn a run's evidence into per-assertion results.
 
 The assertions read only what the run recorded: the tool names in the trace,
-the assistant turns that asked for tools, the final wait state, and the errors
+the assistant turns that asked for tools, and the errors
 the run reported. Nothing here calls a model or touches the project.
 """
 
@@ -13,22 +13,12 @@ from typing import Any
 
 from evals.quality.cases import AssertionSpec
 
-#: The transcript entry that records each wait transition.
-_WAIT_ENTRY_STATUSES = {
-    "wait_proposed": "proposed",
-    "wait_entered": "entered",
-    "wait_completed": "completed",
-    "wait_cancelled": "cancelled",
-}
-
-
 @dataclass(frozen=True, slots=True)
 class Evidence:
     """What one finished run says about its own behaviour."""
 
     tools: tuple[str, ...] = ()
     tool_rounds: int = 0
-    wait_status: str | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -56,13 +46,11 @@ def evidence_from(
     *,
     entries: Iterable[Mapping[str, Any]] = (),
     trace: Iterable[Mapping[str, Any]] = (),
-    session: Mapping[str, Any] | None = None,
     events: Iterable[tuple[str, Mapping[str, Any]]] = (),
 ) -> Evidence:
     """Read the evidence a finished run left in its transcript and trace.
 
-    ``tools`` holds tool results. Control actions such as ``propose`` are not
-    tools: they appear as wait events, so a case asserts them with ``wait``.
+    ``tools`` holds tool results.
     """
     entry_list = list(entries)
     trace_list = list(trace)
@@ -82,31 +70,8 @@ def evidence_from(
     return Evidence(
         tools=tools,
         tool_rounds=rounds,
-        wait_status=_wait_status(entry_list, session),
         errors=_errors(trace_list, events),
     )
-
-
-def _wait_status(
-    entries: list[Mapping[str, Any]], session: Mapping[str, Any] | None
-) -> str | None:
-    if session is not None and "wait" in session:
-        wait = session.get("wait")
-        if isinstance(wait, Mapping):
-            status = wait.get("status")
-            return str(status) if isinstance(status, str) else None
-        return None
-    status: str | None = None
-    for entry in entries:
-        kind = entry.get("type")
-        if kind == "wait_completed":
-            candidate = entry.get("status")
-            status = (
-                str(candidate) if isinstance(candidate, str) else "completed"
-            )
-        elif isinstance(kind, str) and kind in _WAIT_ENTRY_STATUSES:
-            status = _WAIT_ENTRY_STATUSES[kind]
-    return status
 
 
 def _errors(
@@ -192,20 +157,6 @@ def evaluate(
                 expected,
                 list(actual_tools),
                 "" if not present else f"forbidden tools ran: {present}",
-            )
-        )
-
-    if spec.wait is not None:
-        actual = evidence.wait_status or "absent"
-        results.append(
-            AssertionResult(
-                "wait",
-                actual == spec.wait,
-                spec.wait,
-                actual,
-                ""
-                if actual == spec.wait
-                else f"expected wait {spec.wait!r}, got {actual!r}",
             )
         )
 

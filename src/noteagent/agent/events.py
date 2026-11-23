@@ -11,9 +11,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import ClassVar, TypeAlias
 
-from noteagent.agent.jobs import JobResult
-from noteagent.agent.wait import WaitState, wait_payload
-
 
 @dataclass(frozen=True, slots=True)
 class StatusEvent:
@@ -64,37 +61,6 @@ class ObservationEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class WaitEvent:
-    """A collaboration node the run has proposed or observed."""
-
-    wait: WaitState
-    kind: ClassVar[str] = "wait"
-
-    def payload(self) -> dict[str, object]:
-        return wait_payload(self.wait)
-
-
-@dataclass(frozen=True, slots=True)
-class JobResultEvent:
-    """What a job that was waited on came back with."""
-
-    wait_id: str
-    result: JobResult
-    kind: ClassVar[str] = "job_result"
-
-    def payload(self) -> dict[str, object]:
-        return {
-            "waitId": self.wait_id,
-            "status": self.result.status,
-            "summary": self.result.summary,
-            "artifacts": [
-                {"kind": artifact.kind, "id": artifact.id, "label": artifact.label}
-                for artifact in self.result.artifacts
-            ],
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class ErrorEvent:
     """Why the run stopped, in a shape a client can act on."""
 
@@ -136,8 +102,6 @@ RunEvent: TypeAlias = (
     StatusEvent
     | TokenEvent
     | ObservationEvent
-    | WaitEvent
-    | JobResultEvent
     | ErrorEvent
     | DoneEvent
 )

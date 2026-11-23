@@ -37,6 +37,101 @@
       "label": "浏览",
       "hint": "搜网页，并在内置浏览器里打开",
       "sidebar": "搜索"
+    },
+    "writing": {
+      "label": "写作",
+      "hint": "agent 的搜索、选页、框与草稿",
+      "sidebar": "写作状态"
+    }
+  },
+  "writing": {
+    "title": "写作状态",
+    "version": "状态版本 {{version}}",
+    "writer": "写入者：{{writer}}",
+    "noWriter": "无写入者",
+    "loading": "正在读取写作状态…",
+    "error": "写作状态读取失败。",
+    "retry": "重试",
+    "empty": "还没有内容。",
+    "noProject": "请先选择项目。",
+    "attention": "待处理",
+    "noAttention": "没有待处理项。",
+    "search": {
+      "query": "查询：{{query}}",
+      "failed": "搜索失败。",
+      "noHits": "没有命中。"
+    },
+    "pages": {
+      "fetching": "抓取中",
+      "ready": "就绪",
+      "failed": "失败",
+      "blockCount": "{{count}} 段"
+    },
+    "frames": {
+      "blockCount": "{{count}} 段"
+    },
+    "draft": {
+      "pageMeta": "v{{version}} · {{status}}",
+      "status": {
+        "draft": "草稿",
+        "written": "已发布"
+      }
+    },
+    "areas": {
+      "searches": "搜索结果",
+      "selectedPages": "选页",
+      "frames": "框",
+      "draft": "草稿"
+    },
+    "draftCount": "{{pages}} 页，{{sections}} 段",
+    "save": "保存",
+    "saving": "保存中…",
+    "dirty": "未保存",
+    "saveError": "写作状态保存失败。",
+    "discardUnsaved": "有未保存的修改，要丢弃吗？",
+    "reload": "重新加载",
+    "notice": {
+      "busy": "有运行正在占用写作状态，结束后再保存。",
+      "conflict": "写作状态在你加载后有变化。重新加载以对比；你的修改还在。",
+      "remote": "编辑期间服务端的写作状态有变化。"
+    },
+    "archive": "归档当前",
+    "archives": "已归档状态",
+    "archivesEmpty": "还没有归档。归档当前状态后可以开始新主题。",
+    "archiveError": "写作状态的归档操作失败。",
+    "archiveSummary": "v{{version}} · 搜索 {{searches}} · 选页 {{pages}} · 框 {{frames}} · 草稿 {{draft}}",
+    "activate": "切换",
+    "edited": "已人工修改",
+    "node": {
+      "autoFrame": "自动框选",
+      "framing": "正在框选…",
+      "done": "框选完成",
+      "failed": "自动框选失败。",
+      "activity": "自动框选 · {{page}}",
+      "step": "框选",
+      "unsaved": "自动框选只用已保存的写作状态；你有未保存的修改，仍要开始吗？",
+      "blocked": "自动框选没有完成。"
+    },
+    "stale": {
+      "badge": "可能已过期",
+      "missingBadge": "引用已失效",
+      "frame_changed": "「{{heading}}」写完后框改过。让 agent 重写这一段后重新发布。",
+      "page_changed": "「{{heading}}」写完后页面改过。让 agent 重写这一段后重新发布。",
+      "frame_missing": "「{{heading}}」引用的框已不存在。重新选材料并重写这一段。",
+      "page_missing": "「{{heading}}」引用的页面已不存在或未就绪。重新选材料并重写这一段。",
+      "blocks_missing": "「{{heading}}」钉住的段已不在页面里。重新选材料并重写这一段。"
+    },
+    "unsaved": "写作状态有未保存的修改。要 agent 看到的话请先保存；仍要发送吗？",
+    "unsavedBusy": "agent 正在运行，看不到你未保存的写作状态修改。",
+    "edit": {
+      "hitTitle": "命中标题",
+      "hitUrl": "命中链接",
+      "hitSnippet": "命中摘要",
+      "pageTitle": "页面标题",
+      "frameBlocks": "段 id，用逗号分隔",
+      "sectionHeading": "段落标题",
+      "sectionBody": "段落正文",
+      "remove": "删除"
     }
   },
   "nav": {
@@ -224,7 +319,6 @@
     },
     "storedHint": "尚未保存。需先将这一页的正文存入资料库，才能据此写页面。",
     "fromRound": "来自深搜",
-    "task": "写作任务",
     "scope": {
       "label": "看哪些选中的内容",
       "mine": "本次深搜",
@@ -267,14 +361,10 @@
     "saveFailed": "选中的内容保存失败"
   },
   "pipeline": {
-    "intentLabel": "这次流水线要写什么？",
-    "intentPlaceholder": "一句话就够",
-    "start": "启动",
-    "cancel": "停止",
-    "empty": "还没有运行。给它一个意图就能开始。",
-    "startFailed": "流水线没能启动。",
+    "retired": "旧流水线不再启动新运行，请从写作状态开始。",
+    "goWriting": "打开写作状态",
+    "empty": "还没有旧的流水线运行。",
     "loadFailed": "读不到流水线的状态。",
-    "cancelFailed": "没能停止这次运行。",
     "status": {
       "running": "运行中",
       "awaiting_confirmation": "等确认",
@@ -304,17 +394,6 @@
       "compiled": "已编译",
       "changed": "有变更",
       "dropped": "已丢弃"
-    },
-    "query": {
-      "label": "查询",
-      "precise": "精准关键词",
-      "model": "模型优化"
-    },
-    "materialMode": {
-      "label": "资料",
-      "auto": "自动收下",
-      "manual": "手动选卡",
-      "manualHint": "手动模式下请在资料面逐张选卡。"
     },
     "restore": {
       "open": "回滚这次运行",
@@ -625,9 +704,6 @@
     "aborted": "这条回答没有写完就停止了。",
     "incomplete": "模型流中断，这只是中断前写出的部分。",
     "busy": "这个会话正在另一个标签页里作答；结束后刷新即可看到。",
-    "resumedOp": "已续跑 {{kind}} 操作 · {{status}} · 修订 {{rev}}",
-    "resumedOpHint": "执行器完成了这个长操作，对话从这里接着继续。",
-    "reviewTask": "在任务面板中审阅",
     "compacted": "较早的轮次已压缩成摘要，以便放进模型窗口；原始记录仍保留在日志里。",
     "remark": {
       "save": "存为备注",
@@ -657,60 +733,7 @@
       "truncated": "已截断",
       "timeout": "超时",
       "omitted": "部分命中未显示",
-      "hits": "{{count}} 个命中",
-      "searching": "仍在搜索",
-      "picking": "仍在抓取",
-      "blocks": "{{count}} 段",
-      "needsApproval": "等待你批准",
-      "approved": "已批准",
-      "written": "已写入",
-      "writeSkipped": "已跳过",
-      "writeFailed": "写入失败",
-      "writing": "仍在写入"
-    },
-    "wait": {
-      "title": "等待你开始",
-      "job": {
-        "plan": "规划",
-        "compile": "编译"
-      },
-      "interface": {
-        "source": "资料页",
-        "plan_board": "计划板",
-        "compile_board": "编译板"
-      },
-      "where": "这一步在{{place}}进行。",
-      "completion": {
-        "start_plan": "在原界面按原按钮开始规划。",
-        "start_compile": "在原界面按原按钮开始编译。",
-        "start": "在原界面按原按钮开始。"
-      },
-      "open": {
-        "source": "去资料页",
-        "plan_board": "去计划板",
-        "compile_board": "去编译板",
-        "default": "去那里"
-      },
-      "status": {
-        "proposed": "还在等你开始。",
-        "entered": "作业已经开始。",
-        "completed": "作业已完成。",
-        "failed": "作业失败了。",
-        "cancelled": "已停下。"
-      },
-      "enteredHint": "作业现在归原界面管理；要停下请到那里操作。",
-      "result": "结果",
-      "resultCount": "{{count}} 页",
-      "artifact": {
-        "write": "写入",
-        "mention": "提及",
-        "skip": "跳过",
-        "written": "已写入"
-      },
-      "jobFailedHint": "作业失败了；可以在对话里让它重试。",
-      "stop": "停下等待",
-      "stopping": "正在停下…",
-      "stopFailed": "无法停下这次等待"
+      "hits": "{{count}} 个命中"
     }
   },
   "browse": {
@@ -1491,31 +1514,23 @@
     "openFolder": "无法打开这个文件夹",
     "deleteProject": "删除项目失败",
     "code": {
-      "conflict": "写作任务在你读到它之后有变化，请重新读取后再试。",
-      "not_found": "这张卡片或这份材料已经不在写作任务里了。",
-      "bad_spec": "画框里有些段落不属于这份材料。",
-      "needs_approval": "写页请求已变化或已不存在，请重新读取后再决定。",
-      "op_failed": "材料抓取或暂存失败，请先读取任务再决定是否重试。",
-      "task": {
-        "recordFailed": "页面已保存，但写作任务未能记录这次编辑；任务上的批准可能已与页面不符。",
-        "unreadable": "写作任务文件存在但无法读取。它没有被替换；请先修复再继续。"
-      },
       "model_error": "助手没有作答，请重试。",
       "cancelled": "已停止。",
       "busy": "这个会话正在作答，请等它结束。",
       "internal": "出了点问题，请重试。",
-      "wait": {
-        "notFound": "这条等待已经不是会话当前的那一条了。",
-        "notCancelable": "作业已经开始；请到原界面停止。",
-        "contextIncomplete": "从对话发起的作业需要同时带上会话和等待。",
-        "wrongJob": "这条等待属于另一个作业。",
-        "alreadyStarted": "这条等待已经启动过了。"
+      "state": {
+        "busy": "有运行正在占用写作状态，结束后再试。",
+        "conflict": "写作状态在你读取后有变化，请重新读取。",
+        "invalid": "这项写作状态修改不合法。",
+        "archiveNotFound": "找不到这个已归档的写作状态。"
       },
-      "job": {
-        "busy": "另一个作业正在运行，请等它结束。"
+      "node": {
+        "invalid": "这次自动框选的请求不合法。",
+        "notFound": "找不到这次自动框选。"
       },
       "pipeline": {
         "busy": "另一个流水线正在运行，请等它结束。",
+        "retired": "旧流水线不再启动新运行。",
         "projectBusy": "另一个进程正在写这个项目，请关掉它再试。",
         "notFound": "这次流水线运行已经不在了。",
         "invalid": "流水线的参数不完整。",
@@ -1577,7 +1592,6 @@
         "missing": "这一页已不在项目中，可能已被删除。",
         "notAPage": "这不是这个项目里的一篇笔记。",
         "changed": "这一页在你打开后又被写入过，请重新打开后再修改。",
-        "busy": "这一页正在被写入，等这次写入结束后再试。",
         "exists": "已经有同名的页面了，换一个名字。",
         "nameEmpty": "页面必须有名称。",
         "nameNotAllowed": "这个页面名不可用，请更换。",
@@ -1675,89 +1689,6 @@
         "modelsUnavailable": "这个服务没有返回模型列表，请手动填写模型名。",
         "toolCallingUnsupported": "模型服务没有完成工具调用：可能不支持工具，或拒绝了这次调用。聊天会退化为直接回答。"
       }
-    }
-  },
-  "task": {
-    "title": "写作任务",
-    "rev": "修订 {{rev}}",
-    "loading": "正在读取任务",
-    "empty": "还没有资料卡片",
-    "search": "搜索",
-    "searching": "搜索中…",
-    "searchPlaceholder": "搜索公开网页，收集资料卡片",
-    "searchDone": "找到 {{count}} 张卡片。",
-    "searchRunning": "搜索仍在进行，稍后重新读取任务。",
-    "searchFailed": "搜索没能执行",
-    "cards": "{{count}} 张卡片",
-    "materials": "{{count}} 份材料",
-    "blocks": "{{count}} 段",
-    "moreBlocks": "还有 {{count}} 段",
-    "pick": "选为材料",
-    "picking": "选择中…",
-    "pickFailed": "无法选择这张卡片",
-    "pickRunning": "选择仍在进行，稍后重新读取任务。",
-    "loadFailed": "无法读取写作任务",
-    "retry": "重试",
-    "frames": "{{count}} 个画框",
-    "framesEmpty": "还没有画框",
-    "frameSource": "由{{source}}画",
-    "frameHint": "勾选这份材料要用于写作的段落。",
-    "frameSave": "保存画框",
-    "framing": "正在保存画框…",
-    "frameMore": "框内还有 {{count}} 段",
-    "frameSaved": "画框已保存。",
-    "frameFailed": "画框没能保存",
-    "approved": "{{by}}已在修订 {{rev}} 批准",
-    "noApproval": "还没有批准",
-    "approvalInvalidated": "画框变了，之前的批准不再有效。",
-    "ops": "操作",
-    "opInterrupted": "因重启中断；可以续跑或取消",
-    "opCancel": "取消",
-    "opResume": "续跑",
-    "opWorking": "处理中…",
-    "opCancelledNotice": "操作 {{id}} 已取消，不会再运行。",
-    "opAlreadyFinished": "操作已经结束，没有取消任何东西。",
-    "opResumedNotice": "操作 {{id}} 已重新开始。",
-    "opActionFailed": "操作没能更新",
-    "opResumeFailed": "续跑失败：{{error}}",
-    "opCancelledLine": "已取消；不会再重试或续跑",
-    "writeRequest": "写页请求",
-    "approve": "批准",
-    "reject": "拒绝",
-    "approving": "正在批准…",
-    "rejecting": "正在拒绝…",
-    "approvedNotice": "已批准。助手现在可以写入这一页。",
-    "rejectedNotice": "已拒绝。助手可以修改请求后再提。",
-    "decisionFailed": "写页请求没能处理",
-    "writeResult": "页面写入",
-    "writeDiff": "差异（+{{added}} / -{{removed}}）",
-    "writeStatus": {
-      "written": "已写入",
-      "skipped": "已跳过",
-      "failed": "失败"
-    },
-    "action": {
-      "create": "新建页面",
-      "update": "更新页面"
-    },
-    "source": {
-      "agent": "助手",
-      "human": "你",
-      "model": "模型"
-    },
-    "status": {
-      "idle": "空闲",
-      "running": "进行中",
-      "needs_approval": "待批准",
-      "done": "完成",
-      "failed": "失败"
-    },
-    "opStatus": {
-      "requested": "已请求",
-      "running": "进行中",
-      "done": "完成",
-      "failed": "失败",
-      "cancelled": "已取消"
     }
   }
 }

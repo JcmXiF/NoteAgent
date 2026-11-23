@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_fakes import OLD_PIPELINE_RETIRED
+
 from noteagent.api.ingest import resolve_http_ingest_paths, run_ingest_job
 from noteagent.api.projects import use_project
 from noteagent.ingest.update_index import rebuild_wiki_index
@@ -255,7 +257,7 @@ class ProductApiTests(unittest.TestCase):
                 self.assertEqual(deleted.status_code, 200, deleted.text)
                 self.assertFalse((repo / "projects" / "vault").exists())
 
-    def test_clips_persist_and_topic_gate_http(self) -> None:
+    def test_clips_persist_http(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             beta = init_project(repo / "projects" / "beta")
@@ -387,137 +389,6 @@ class ProductApiTests(unittest.TestCase):
                 )
                 self.assertEqual(again.status_code, 200, again.text)
                 self.assertEqual(again.json()["choices"][0]["action"], "mention")
-
-                with (
-                    patch("noteagent.api.app.ensure_llm_configured"),
-                    patch(
-                        "noteagent.api.topic_gate.run_topic_map_job",
-                        return_value={
-                            "intent": "KL散度",
-                            "primary": {
-                                "name": "KL散度",
-                                "slug": "kl-divergence",
-                                "wikiPath": "wiki/concepts/kl-divergence.md",
-                                "relationToPrimary": "primary",
-                                "collectionIds": ["c1"],
-                                "blockIds": ["b1"],
-                                "evidence": "[b1]",
-                                "outline": [],
-                            },
-                            "alsoInSources": [],
-                            "notes": "",
-                        },
-                    ),
-                ):
-                    mapped = client.post(
-                        "/api/projects/beta/topic-map",
-                        json={"intent": "KL散度"},
-                    )
-                self.assertEqual(mapped.status_code, 200, mapped.text)
-                self.assertIn("event: done", mapped.text)
-
-                with (
-                    patch("noteagent.api.app.ensure_llm_configured"),
-                    patch(
-                        "noteagent.api.topic_gate.run_topic_map_job",
-                        return_value={
-                            "intent": "修订",
-                            "primary": {
-                                "name": "KL散度",
-                                "slug": "kl-divergence",
-                                "wikiPath": "wiki/concepts/kl-divergence.md",
-                                "relationToPrimary": "primary",
-                                "collectionIds": ["c1"],
-                                "blockIds": ["b1"],
-                                "evidence": "[b1]",
-                                "outline": [],
-                            },
-                            "alsoInSources": [],
-                            "notes": "",
-                        },
-                    ) as scoped_job,
-                    patch(
-                        "noteagent.api.topic_gate.run_ingest_confirmed_job"
-                    ) as ingest_job,
-                ):
-                    scoped = client.post(
-                        "/api/projects/beta/topic-map",
-                        json={
-                            "intent": "",
-                            "sourceIdentity": "raw/web/example.com/kl.html",
-                        },
-                    )
-                self.assertEqual(scoped.status_code, 200, scoped.text)
-                self.assertEqual(
-                    scoped_job.call_args.kwargs["source_identity"],
-                    "raw/web/example.com/kl.html",
-                )
-                ingest_job.assert_not_called()
-
-                with (
-                    patch("noteagent.api.app.ensure_llm_configured"),
-                    patch(
-                        "noteagent.api.topic_gate.run_ingest_confirmed_job",
-                        return_value={"results": [], "errors": []},
-                    ),
-                ):
-                    compiled = client.post(
-                        "/api/projects/beta/ingest-confirmed",
-                        json={
-                            "intent": "KL散度",
-                            "confirmed": [
-                                {
-                                    "name": "KL散度",
-                                    "slug": "kl-divergence",
-                                    "wikiPath": "wiki/concepts/kl-divergence.md",
-                                    "action": "write",
-                                    "sectionIds": [],
-                                }
-                            ],
-                        },
-                    )
-                self.assertEqual(compiled.status_code, 200, compiled.text)
-                self.assertIn("event: done", compiled.text)
-
-    def test_ingest_recovery_get_does_not_compile(self) -> None:
-        from noteagent.ingest.ingest_recovery import remember_confirmed_job
-
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp)
-            beta = init_project(repo / "projects" / "beta")
-            with patch.object(projects_mod, "REPO_ROOT", repo):
-                job_id = remember_confirmed_job(
-                    beta,
-                    intent="KL散度",
-                    confirmed=[
-                        {
-                            "name": "KL散度",
-                            "slug": "kl-divergence",
-                            "wikiPath": "wiki/concepts/kl-divergence.md",
-                            "action": "write",
-                            "sectionIds": ["s1"],
-                        }
-                    ],
-                    write_paths=["wiki/concepts/kl-divergence.md"],
-                )
-                client = TestClient(create_app())
-                with (
-                    patch("noteagent.ingest.confirmed.ingest_confirmed") as ingest,
-                    patch("noteagent.api.topic_gate.run_ingest_confirmed_job") as job,
-                ):
-                    listed = client.get("/api/projects/beta/ingest-recovery")
-                self.assertEqual(listed.status_code, 200, listed.text)
-                ingest.assert_not_called()
-                job.assert_not_called()
-                body = listed.json()
-                self.assertEqual(body["openCount"], 1)
-                self.assertEqual(body["items"][0]["id"], job_id)
-                dropped = client.post(
-                    "/api/projects/beta/ingest-recovery/discard",
-                    json={"id": job_id},
-                )
-                self.assertEqual(dropped.status_code, 200, dropped.text)
-                self.assertEqual(dropped.json()["openCount"], 0)
 
     def test_from_rendered_preview_then_save(self) -> None:
         article = (

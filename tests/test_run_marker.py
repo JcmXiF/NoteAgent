@@ -10,7 +10,6 @@ from noteagent.agent.run_marker import (
     FINISHED,
     INTERRUPTED,
     RUNNING,
-    WAITING,
     RunFingerprint,
     RunMarker,
     infer_terminal,
@@ -56,16 +55,6 @@ def _tool_result(entry_id: str = "e-t") -> dict[str, object]:
         "toolCallId": "c1",
         "name": "wiki_read",
         "content": "[[concepts/entropy]] — 熵",
-    }
-
-
-def _wait(entry_id: str = "e-w", kind: str = "wait_proposed") -> dict[str, object]:
-    return {
-        "type": kind,
-        "id": entry_id,
-        "waitId": "w1",
-        "job": "plan",
-        "interface": "source",
     }
 
 
@@ -158,12 +147,6 @@ class TerminalInferenceTests(unittest.TestCase):
 
         self.assertEqual(inferred.state, INTERRUPTED)
         self.assertEqual(inferred.last_entry_id, "e-t")
-
-    def test_a_wait_is_waiting(self) -> None:
-        inferred = infer_terminal([_user(), _wait()])
-
-        self.assertEqual(inferred.state, WAITING)
-        self.assertEqual(inferred.last_entry_id, "e-w")
 
     def test_an_aborted_answer_is_cancelled(self) -> None:
         inferred = infer_terminal([_user(), _assistant(stop_reason="aborted")])

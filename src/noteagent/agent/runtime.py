@@ -1,20 +1,19 @@
-"""What a caller asks a runtime to do, and the five calls it may make.
+"""What a caller asks a runtime to do, and the four calls it may make.
 
-A run is one user input or one resume, executed eagerly until it ends. The
-runtime is the kernel's external seam: the API, the job watcher and the tests
-all cross it the same way, with the same request and the same sink.
+A run is one user input (or a crash resume), executed eagerly until it ends on
+its final message. The runtime is the kernel's external seam: the API and the
+tests all cross it the same way, with the same request and the same sink.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import Event
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 from noteagent.agent.events import RunEvent
-from noteagent.agent.wait import WaitState
 
 
 class OnBusy(StrEnum):
@@ -48,6 +47,9 @@ class UserInput:
     session_id: str
     content: str
     on_busy: OnBusy = OnBusy.REJECT
+    #: A caller may name the run before the kernel starts it, so a wrapper can
+    #: release the writing lease it took; empty means the kernel generates one.
+    run_id: str = ""
     #: Set by the stream that owns this run when its reader disconnects. The
     #: kernel stops at the next committed boundary and leaves an interrupted
     #: marker; a stream that never owns the run never reads it.
@@ -55,66 +57,26 @@ class UserInput:
 
 
 @dataclass(frozen=True, slots=True)
-class Resume:
-    """A waited-on job came back, and the session continues from it."""
-
-    session_id: str
-    wait_id: str
-    on_busy: OnBusy = OnBusy.QUEUE
-    pause: Event | None = field(default=None, repr=False, compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class RunResume:
     """A crashed run continues from its last committed turn.
 
-    Not the wait's ``Resume``: there is no job to wait for, only a run marker
-    and a transcript whose unfinished tool calls become ``outcome unknown``.
+    There is no job to wait for, only a run marker and a transcript whose
+    unfinished tool calls become ``outcome unknown``.
     """
 
     session_id: str
     run_id: str
+    #: The continuation's own identity; empty means the kernel generates one.
+    new_run_id: str = ""
     pause: Event | None = field(default=None, repr=False, compare=False)
     #: A run slot the route already claimed; the kernel must not claim twice.
     claim: Event | None = field(default=None, repr=False, compare=False)
 
 
-@dataclass(frozen=True, slots=True)
-class TaskOpResume:
-    """A task executor finished an op, and the session continues from its delta.
-
-    Not the wait's ``Resume`` (there is no job to wait for) and not ``RunResume``
-    (nothing crashed): the op is the executor's work, and ``result`` is its
-    bounded answer — the op id, kind, status and the one view the model needs,
-    never the task. A resume is a server-side continuation on the same session
-    id, so it is visible on reconnect by that id.
-    """
-
-    session_id: str
-    op_id: str
-    kind: str
-    status: str
-    rev: int
-    result: Mapping[str, object] = field(default_factory=dict)
-    pause: Event | None = field(default=None, repr=False, compare=False)
-    #: A run slot the route already claimed; the kernel must not claim twice.
-    claim: Event | None = field(default=None, repr=False, compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class Retry:
-    """The last run failed and the caller is asking for it again."""
-
-    session_id: str
-    on_busy: OnBusy = OnBusy.REJECT
-    reason: str = ""
-    pause: Event | None = field(default=None, repr=False, compare=False)
-
-
-RunRequest: TypeAlias = UserInput | Resume | RunResume | TaskOpResume | Retry
+RunRequest: TypeAlias = UserInput | RunResume
 
 RunStatus: TypeAlias = Literal[
-    "completed", "waiting", "failed", "cancelled", "interrupted"
+    "completed", "failed", "cancelled", "interrupted"
 ]
 
 
@@ -125,7 +87,6 @@ class RunResult:
     session_id: str
     run_id: str
     status: RunStatus
-    wait_id: str = ""
     error: str = ""
 
 
@@ -161,7 +122,7 @@ class TraceSink(Protocol):
 
     The sink sees the same events as the interface, and the implementation
     decides what may be written down. It is a collaborator of the runtime, not
-    one of its five calls: it never changes what the run does, and a failure in
+    one of its four calls: it never changes what the run does, and a failure in
     it must not end the run.
     """
 
@@ -188,10 +149,6 @@ class AgentRuntime(Protocol):
 
     def cancel(self, session_id: str) -> None:
         """Stop the session's current run, if there is one."""
-        ...
-
-    def wait_state(self, session_id: str) -> WaitState | None:
-        """The session's current wait, or ``None`` when it has none."""
         ...
 
     def is_busy(self, session_id: str) -> bool:

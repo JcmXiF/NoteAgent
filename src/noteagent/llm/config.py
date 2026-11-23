@@ -31,6 +31,8 @@ class LlmConfig:
     temperature: float = 0.1
     max_tokens: int = 4096
     timeout_seconds: float = 120.0
+    #: The model's context window, for compaction; a conservative default.
+    context_window: int = 32_000
 
     @property
     def chat_completions_url(self) -> str:
@@ -79,6 +81,9 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
       NOTEAGENT_LLM_TEMPERATURE (optional, default 0.1)
       NOTEAGENT_LLM_MAX_TOKENS  (optional, default 4096)
       NOTEAGENT_LLM_TIMEOUT     (optional, seconds, default 120)
+      NOTEAGENT_LLM_CONTEXT_WINDOW (optional, default 32000; an advanced
+                                   environment override, not in the settings
+                                   document)
 
     The settings layer applies the saved document to these names; this function
     never reads a file of its own.
@@ -104,6 +109,7 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
     temperature = float(os.environ.get("NOTEAGENT_LLM_TEMPERATURE", "0.1"))
     max_tokens = int(os.environ.get("NOTEAGENT_LLM_MAX_TOKENS", "4096"))
     timeout_seconds = float(os.environ.get("NOTEAGENT_LLM_TIMEOUT", "120"))
+    context_window = _positive_int("NOTEAGENT_LLM_CONTEXT_WINDOW", 32_000)
 
     return LlmConfig(
         base_url=base_url,
@@ -112,7 +118,17 @@ def load_llm_config(*, require_api_key: bool = True) -> LlmConfig:
         temperature=temperature,
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
+        context_window=context_window,
     )
+
+
+def _positive_int(name: str, default: int) -> int:
+    """A positive whole number from the environment, or the default."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def snapshot_llm_config(

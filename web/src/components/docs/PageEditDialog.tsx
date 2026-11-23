@@ -19,7 +19,6 @@ import {
 } from "@/lib/api/pages";
 import { titleOfPath } from "@/lib/project-tree";
 import { useDocsStore } from "@/stores/docs-store";
-import { useTaskStore } from "@/stores/task-store";
 
 /**
  * Editing a page's prose, with the change shown before it is made.
@@ -117,13 +116,6 @@ export function PageEditDialog({
         baseRevision: view.revision,
       });
       await refresh();
-      // The page a later write would compose is no longer the one a standing
-      // approval covered; the core records the human edit on the one task. If
-      // the task panel is showing that task, read it again rather than leave a
-      // revision and approval on screen that no longer stand.
-      if (useTaskStore.getState().summary !== null) {
-        void useTaskStore.getState().load();
-      }
       onClose();
     } catch (err) {
       setError(errorMessage(err, t("docs.page.edit.failed")));

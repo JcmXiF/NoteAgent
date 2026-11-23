@@ -102,6 +102,66 @@ class OpenAIStreamTests(unittest.TestCase):
         self.assertIsInstance(events[-1], ModelDoneEvent)
         self.assertEqual(collect(events).content, "answer")
 
+    def test_deepseek_cache_tokens_are_mapped(self) -> None:
+        events = list(
+            _stream_events(
+                _response(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"content": "答案"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 1_000,
+                            "completion_tokens": 20,
+                            "prompt_cache_hit_tokens": 800,
+                            "prompt_cache_miss_tokens": 200,
+                        },
+                    },
+                ),
+                _request(),
+            )
+        )
+
+        usage = collect(events).usage
+        self.assertIsNotNone(usage)
+        self.assertEqual(usage.input_tokens, 1_000)
+        self.assertEqual(usage.cache_read_tokens, 800)
+
+    def test_deepseek_miss_only_derives_the_read_count(self) -> None:
+        events = list(
+            _stream_events(
+                _response(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"content": "答案"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 1_000,
+                            "completion_tokens": 20,
+                            "prompt_cache_miss_tokens": 300,
+                        },
+                    },
+                ),
+                _request(),
+            )
+        )
+
+        usage = collect(events).usage
+        self.assertIsNotNone(usage)
+        self.assertEqual(usage.cache_read_tokens, 700)
+
     def test_a_cut_stream_is_an_error_not_a_finished_answer(self) -> None:
         events = list(
             _stream_events(

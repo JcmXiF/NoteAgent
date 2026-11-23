@@ -94,8 +94,7 @@ class WikiToolTests(unittest.TestCase):
                 "web_fetch",
             }
         )
-        # ``propose`` travels as a function call but is a control action: the
-        # runtime intercepts it, and no handler can start the job it names.
+        # The old propose control action is gone; no handler can start a job.
         self.assertIsNone(self.registry.get("propose"))
 
     def test_traversal_spellings_are_not_pages(self) -> None:

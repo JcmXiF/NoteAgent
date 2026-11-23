@@ -1,11 +1,10 @@
-"""One chat + wait flow through the packaged core, with a scripted model.
+"""One chat flow through the packaged core, with a scripted model.
 
 ``scripts/smoke-packaged.mjs`` runs this with the interpreter and the source
 that travel in the installer. The model is a short script, so nothing here
 reaches a provider; what the flow proves is the part a packaged app cannot lose
-— a streamed answer, a proposed plan wait, the wait stopping from the chat, and
-the conversation continuing afterwards, all through the versioned HTTP API and
-the real JSONL store.
+— a streamed answer that ends the run, and the conversation continuing
+afterwards, all through the versioned HTTP API and the real JSONL store.
 
 The composition root is the same one production uses: ``create_app(deps)`` with
 a different ``ModelClient``. That is the test seam the harness was built around,
@@ -45,19 +44,13 @@ def parse_sse(text: str) -> list[tuple[str, dict[str, object]]]:
 
 
 def _model() -> "FauxModelClient":
-    """Two turns: a proposal and a plain answer, both scripted."""
+    """Two plain turns, both scripted."""
     from noteagent.agent.faux import FauxModelClient
 
-    proposal = FauxModelClient.tool_call(
-        "call-smoke",
-        "propose",
-        json.dumps(
-            {"job": "plan", "interface": "source", "reason": "packaged smoke"},
-            ensure_ascii=False,
-        ),
-        text=HELLO,
+    return FauxModelClient(
+        FauxModelClient.text(HELLO).script,
+        FauxModelClient.text(ACK).script,
     )
-    return FauxModelClient(proposal.script, FauxModelClient.text(ACK).script)
 
 
 def _prepare_home(root: Path) -> Path:
@@ -153,47 +146,32 @@ def _flow(client, project: Path) -> None:
     session_id = created.json()["id"]
     print(f"session {session_id}")
 
-    events = _ask(client, session_id, "请帮我计划一下这些材料。")
+    events = _ask(client, session_id, "请帮我梳理一下这些材料。")
     _expect(HELLO in _tokens(events), "streamed answer missing")
-    waits = [payload for kind, payload in events if kind == "wait"]
-    _expect(len(waits) == 1, f"expected one wait, saw {len(waits)}")
-    wait = waits[0]
-    _expect(wait.get("job") == "plan", f"not a plan wait: {wait}")
-    _expect(wait.get("interface") == "source", f"wrong interface: {wait}")
-    _expect(wait.get("status") == "proposed", f"wait not proposed: {wait}")
-    print(f"wait {wait['waitId']} plan/source proposed")
+    _expect(
+        "wait" not in [kind for kind, _payload in events],
+        "the run proposed a wait",
+    )
+    print("answer streamed")
 
     opened = client.get(f"/api/v1/sessions/{session_id}")
     _expect(opened.status_code == 200, f"session: {opened.text}")
     session = opened.json()
+    _expect("wait" not in session, f"the session still has a wait: {session}")
     _expect(
-        session.get("wait", {}).get("status") == "proposed",
-        f"the session does not show the wait: {session}",
+        [item["role"] for item in session["messages"]]
+        == ["user", "assistant"],
+        f"unexpected transcript: {session['messages']}",
     )
-    roles = [item["role"] for item in session["messages"]]
-    _expect(roles == ["user", "assistant"], f"unexpected transcript: {roles}")
     _expect(
-        session["messages"][1].get("stopReason") == "propose",
-        f"the proposal was not the end of the turn: {session['messages']}",
+        session["messages"][1].get("stopReason") == "stop",
+        f"the answer did not end the run: {session['messages']}",
     )
-
-    stopped = client.post(
-        f"/api/v1/sessions/{session_id}/wait/{wait['waitId']}/cancel"
-    )
-    _expect(stopped.status_code == 200, f"stop wait: {stopped.text}")
-    _expect(stopped.json().get("cancelled") is True, f"wait not stopped: {stopped.text}")
-    print("wait cancelled")
 
     second = _ask(client, session_id, "继续。")
-    second_kinds = [kind for kind, _payload in second]
-    _expect("wait" not in second_kinds, "the stopped wait came back")
     _expect(ACK in _tokens(second), "second answer missing")
 
     final = client.get(f"/api/v1/sessions/{session_id}").json()
-    _expect(
-        final.get("wait", {}).get("status") == "cancelled",
-        f"the stopped wait came back: {final.get('wait')}",
-    )
     _expect(
         [item["role"] for item in final["messages"]]
         == ["user", "assistant", "user", "assistant"],
@@ -205,7 +183,7 @@ def _flow(client, project: Path) -> None:
         (store / f"{session_id}.events.jsonl").is_file(),
         "the run trace was not written",
     )
-    print("chat + wait flow ok")
+    print("chat flow ok")
 
 
 def main(argv: list[str] | None = None) -> int:

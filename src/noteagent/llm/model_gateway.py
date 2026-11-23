@@ -392,21 +392,32 @@ def _stream_events(
 
 
 def _usage(raw: Mapping[str, Any]) -> Usage:
-    cache_read = 0
-    details = raw.get("prompt_tokens_details")
-    if isinstance(details, Mapping):
-        cached = details.get("cached_tokens")
-        if isinstance(cached, int):
-            cache_read = cached
-    if not cache_read:
-        cached = raw.get("cache_read_input_tokens")
-        if isinstance(cached, int):
-            cache_read = cached
     return Usage(
         input_tokens=_int(raw.get("prompt_tokens")),
         output_tokens=_int(raw.get("completion_tokens")),
-        cache_read_tokens=cache_read,
+        cache_read_tokens=_cache_read(raw),
     )
+
+
+def _cache_read(raw: Mapping[str, Any]) -> int:
+    """The cached prompt tokens, under the names providers use."""
+    details = raw.get("prompt_tokens_details")
+    if isinstance(details, Mapping):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int) and cached:
+            return cached
+    cached = raw.get("cache_read_input_tokens")
+    if isinstance(cached, int) and cached:
+        return cached
+    # DeepSeek reports the cached and uncached prompt tokens separately.
+    hit = raw.get("prompt_cache_hit_tokens")
+    if isinstance(hit, int):
+        return hit
+    miss = raw.get("prompt_cache_miss_tokens")
+    prompt_tokens = raw.get("prompt_tokens")
+    if isinstance(miss, int) and isinstance(prompt_tokens, int):
+        return max(0, prompt_tokens - miss)
+    return 0
 
 
 def _int(value: object) -> int:

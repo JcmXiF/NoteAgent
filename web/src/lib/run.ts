@@ -23,6 +23,8 @@ type RunOptions<T> = {
   module?: ModuleId;
   message?: string;
   steps?: ActivityStep[];
+  /** Small facts the view that started the job reads back (a page id, say). */
+  meta?: Record<string, string>;
   run: (ctx: RunContext) => Promise<T>;
   /** Files the job wrote, so the panel can link to them. */
   filesWritten?: (result: T) => string[];
@@ -49,6 +51,7 @@ export async function runAsActivity<T>(options: RunOptions<T>): Promise<T> {
     module: options.module,
     message: options.message,
     steps: options.steps,
+    meta: options.meta,
     cancel: () => controller.abort(),
     retry: options.retry,
   };

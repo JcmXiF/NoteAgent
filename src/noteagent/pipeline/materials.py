@@ -23,20 +23,17 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from noteagent.acquire.adapters.image_source import ImageSourceAdapter
-from noteagent.acquire.adapters.office_source import OfficeSourceAdapter
 from noteagent.acquire.adapters.pdf_source import (
-    PdfSourceAdapter,
     blocks_from_payload,
     save_derived_blocks,
 )
-from noteagent.acquire.derive import blocks_payload
+from noteagent.acquire.derive import blocks_for_capture
 from noteagent.acquire.quality import FIDELITY_FAILED
 from noteagent.acquire.types import Capture
 from noteagent.acquire.write_raw import (
     capture_kind,
+    capture_material_bytes,
     raw_relative_for_capture,
-    render_capture_source,
     resolve_raw_write_path,
 )
 from noteagent.agent.clock import Clock, iso_timestamp
@@ -46,7 +43,6 @@ from noteagent.pipeline.run import PipelineRun, is_run_id
 from noteagent.project.identity import source_identity
 from noteagent.project.layout import ProjectLayout
 from noteagent.project.raw_kinds import raw_kind
-from noteagent.task.store import TaskStore, TaskUnreadableError
 
 #: How many runs of un-promoted staging are kept. Older ones are removed.
 DEFAULT_KEEP_RUNS = 3
@@ -329,8 +325,8 @@ class StagingArea:
             raise ValueError("a capture that failed the quality gate is not material")
         kind = capture_kind(capture)
         material = raw_relative_for_capture(capture)
-        blocks = _blocks_for(capture, kind)
-        data = _source_bytes(capture, kind, captured_at)
+        blocks = blocks_for_capture(capture, kind)
+        data = capture_material_bytes(capture, kind, captured_at)
 
         directory = self._material_directory(material, run_id=run_id)
         suffix = Path(material).suffix or ".bin"
@@ -614,26 +610,10 @@ class Materials:
         )
         return self._log.state_for(material)
 
-    def clean(
-        self,
-        runs: Sequence[PipelineRun],
-        keep: int = DEFAULT_KEEP_RUNS,
-    ) -> int:
-        """Remove old staging, recording what was dropped with it.
-
-        Retention is about a pipeline run's staging, not about every folder
-        under ``staging/``: the active writing task stages its materials under
-        its own id, and a later pipeline run must not expire the material the
-        task and the agent are still reading. The active task is protected
-        here, so no pipeline caller has to know about the task to keep it safe.
-        """
+    def clean(self, runs: Sequence[PipelineRun], keep: int = DEFAULT_KEEP_RUNS) -> int:
+        """Remove old staging, recording what was dropped with it."""
         started = {run.id: run.started_at for run in runs}
-        protected = self._active_task_ids()
-        doomed = [
-            (run_id, path)
-            for run_id, path in self._staging.expired(keep, started)
-            if run_id not in protected
-        ]
+        doomed = self._staging.expired(keep, started)
         at = iso_timestamp(self._clock)
         for run_id, path in doomed:
             for state in self.for_run(run_id):
@@ -657,54 +637,6 @@ class Materials:
                 )
             self._staging.remove(path)
         return len(doomed)
-
-    def _active_task_ids(self) -> set[str]:
-        """The task whose staging this project must keep, if it has one.
-
-        An unreadable task file is not a reason to fail a pipeline clean: the
-        retention pass keeps the runs it knows and leaves the task alone. The
-        task surfaces its own error when something reads it.
-        """
-        try:
-            task = TaskStore(self._layout).load()
-        except TaskUnreadableError:
-            return set()
-        return {task.id} if task is not None else set()
-
-
-def _blocks_for(capture: Capture, kind: str) -> list[dict[str, str]]:
-    if kind == "pdf":
-        return [
-            block.to_dict()
-            for block in PdfSourceAdapter().derive_bytes(capture.pdf_bytes)
-        ]
-    if kind == "office":
-        return [
-            block.to_dict()
-            for block in OfficeSourceAdapter().derive_bytes(capture.office_bytes).blocks
-        ]
-    if kind == "image":
-        derived = ImageSourceAdapter().derive_bytes(capture.image_bytes)
-        return [block.to_dict() for block in derived.blocks]
-    return blocks_payload(capture.html)
-
-
-def _source_bytes(capture: Capture, kind: str, captured_at: str) -> bytes:
-    if kind == "pdf":
-        if not capture.pdf_bytes:
-            raise ValueError("a pdf capture has no original bytes")
-        return capture.pdf_bytes
-    if kind == "office":
-        if not capture.office_bytes:
-            raise ValueError("an office capture has no original bytes")
-        return capture.office_bytes
-    if kind == "image":
-        if not capture.image_bytes:
-            raise ValueError("an image capture has no original bytes")
-        return capture.image_bytes
-    if not (capture.html or "").strip():
-        raise ValueError("a page capture has no html original")
-    return render_capture_source(capture, captured_at=captured_at).encode("utf-8")
 
 
 def _row(transition: MaterialTransition) -> dict[str, object]:

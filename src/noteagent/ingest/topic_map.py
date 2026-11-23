@@ -4,20 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
 from noteagent.ingest.clips import (
     ClipCollection,
-    ClipStore,
     GateDecision,
     collection_headline,
-    collections_as_source_text,
-    format_collection_catalog,
-    load_clip_store,
-    require_durable_sources,
 )
 from noteagent.ingest.frontmatter import parse_page, unquote_scalar
 from noteagent.ingest.proposal import (
@@ -27,14 +21,7 @@ from noteagent.ingest.proposal import (
     proposal_to_wire,
 )
 from noteagent.ingest.source_citations import is_citing_wiki_page
-from noteagent.io.read_source import SourceDocument
-from noteagent.llm.client import LlmClient, language_name
-from noteagent.llm.config import LlmConfig, load_llm_config
 from noteagent.project.layout import ProjectLayout
-from noteagent.prompts.topic_map import build_topic_map_prompt
-from noteagent.util.cancel import check_cancelled
-from noteagent.util.refusal import Refusal
-from noteagent.util.run_log import RunLogger, emit_status
 from noteagent.wiki.link_syntax import WIKILINK_SOURCE
 from noteagent.wiki.links import normalize_wikilink_target, wiki_slug_for_path
 
@@ -460,87 +447,6 @@ def parse_topic_map(
             known_blocks=known_blocks,
         ),
     )
-
-
-def map_clips(
-    layout: ProjectLayout,
-    *,
-    intent: str | None = None,
-    llm_config: LlmConfig | None = None,
-    map_text: str | None = None,
-    store: ClipStore | None = None,
-    targets: Sequence[PlanTarget] | None = None,
-    language: str = "",
-    on_status: Callable[..., None] | None = None,
-    run_logger: RunLogger | None = None,
-    cancel: threading.Event | None = None,
-    verify_sources: bool = True,
-) -> TopicMap:
-    """
-    Build a topic map from persisted clips. ``map_text`` injects fake LLM JSON.
-
-    ``targets`` names the pages the pass is about, when the caller has them. They
-    are given to the model and the answer is bound to them — the constraint travels
-    with the request instead of being applied to the answer afterwards.
-
-    ``verify_sources`` is turned off by the pipeline, whose material is still in
-    staging: it has already read the blocks it is handing over, and the file is
-    not under ``raw/`` until the compile promotes it.
-    """
-    logger = run_logger or RunLogger.disabled()
-    check_cancelled(cancel)
-    clip_store = store if store is not None else load_clip_store(layout)
-    if not clip_store.collections:
-        raise Refusal("plan.noSelection", "no clip collections to map")
-    if verify_sources:
-        require_durable_sources(layout, clip_store.collections)
-    goal = clip_store.intent.strip() if intent is None else intent.strip()
-
-    def status(message: str, **kwargs) -> None:
-        logger.status(message, **kwargs)
-        emit_status(on_status, message, **kwargs)
-
-    catalog = format_collection_catalog(clip_store.collections)
-    doc = SourceDocument(
-        project_root=layout.root,
-        identity="raw/clip-session",
-        path=layout.meta / "clip-session.md",
-        content=collections_as_source_text(clip_store.collections),
-    )
-    status("mapping clipped passages", step_id="plan")
-    check_cancelled(cancel)
-    if map_text is not None:
-        raw = map_text
-    else:
-        prompt = build_topic_map_prompt(
-            doc,
-            layout,
-            intent=goal,
-            collection_catalog=catalog,
-            targets=tuple(targets or ()),
-            language=language_name(language),
-        )
-        client = LlmClient(llm_config or load_llm_config())
-        raw = client.chat(prompt.as_messages(), cancel=cancel)
-    check_cancelled(cancel)
-    if not str(raw).strip():
-        raise RuntimeError("topic map returned empty content")
-    topic_map = parse_topic_map(
-        raw,
-        intent=goal,
-        collections=clip_store.collections,
-        layout=layout,
-    )
-    if targets:
-        topic_map = resolve_map_to_targets(topic_map, targets)
-    logger.append(
-        "topic_map.end",
-        intent=goal,
-        also=len(topic_map.also_in_sources),
-        candidates=len(topic_map.nodes()),
-        unlisted=sum(1 for node in topic_map.nodes() if node.unlisted),
-    )
-    return topic_map
 
 
 def merge_plan_board(
@@ -1369,7 +1275,6 @@ __all__ = [
     "carry_over_choices",
     "extract_json_object",
     "hang_topic_map",
-    "map_clips",
     "merge_plan_board",
     "parse_topic_map",
     "resolve_topic_edges",
