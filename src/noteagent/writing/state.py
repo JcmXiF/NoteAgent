@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.ingest.parse_file_blocks import is_safe_ingest_path
@@ -46,6 +47,8 @@ _ARCHIVE_ID = re.compile(r"\A[0-9]{6,}\Z")
 #: The statuses and failure kinds a selected page may carry. The wire is JSON,
 #: so a hand-edited state is checked here rather than trusted.
 PAGE_STATUSES = frozenset({"fetching", "ready", "failed"})
+#: The statuses that mean a page row is the current one for its URL.
+ACTIVE_PAGE_STATUSES = frozenset({"fetching", "ready"})
 PAGE_ERROR_KINDS = frozenset({"fetch_failed", "login_wall"})
 FRAME_SOURCES = frozenset({"agent", "human"})
 DRAFT_STATUSES = frozenset({"draft", "written"})
@@ -445,6 +448,52 @@ class WritingStateStore:
                 )
             ),
         )
+
+    def select_page_row(
+        self,
+        url: str,
+        build: Callable[
+            [Mapping[str, object] | None],
+            Mapping[str, object] | None,
+        ],
+    ) -> tuple[WritingState, Mapping[str, object] | None, bool]:
+        """Find or write the one page row for *url*.
+
+        ``build`` receives the page already selected for this URL (an active
+        page first, else a failed one) and returns the row to write, or
+        ``None`` to keep the existing page. Two calls for one URL are resolved
+        by the state version check: the loser re-runs ``build`` against the
+        winner's row, so a duplicate is never appended; the callback must
+        therefore be safe to run twice. The last value says a row was written.
+        """
+        for attempt in range(2):
+            state = self.load()
+            existing = _page_for_url(state.selected_pages, url)
+            row = build(existing)
+            if row is None:
+                return state, existing, False
+            pages = [dict(item) for item in state.selected_pages]
+            index = next(
+                (
+                    position
+                    for position, page in enumerate(pages)
+                    if str(page.get("id")) == str(row.get("id"))
+                ),
+                None,
+            )
+            if index is None:
+                pages.append(dict(row))
+            else:
+                pages[index] = dict(row)
+            next_state = self.refresh_provenance(
+                replace(state, selected_pages=tuple(pages))
+            )
+            try:
+                return self.save(next_state), row, True
+            except WritingStateConflict:
+                if attempt:
+                    raise
+        raise AssertionError("unreachable")
 
     def refresh_provenance(self, state: WritingState) -> WritingState:
         """Re-derive every section's stale flag and reason from its sources."""
@@ -1399,6 +1448,47 @@ def row_version(row: Mapping[str, object]) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return max(0, value)
+
+
+def _url_key(url: str) -> str:
+    """A URL's identity for dedupe, ignoring cosmetic differences."""
+    text = str(url or "").strip()
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = host
+    if port and not (
+        (scheme == "http" and port == 80)
+        or (scheme == "https" and port == 443)
+    ):
+        netloc = f"{host}:{port}"
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((scheme, netloc, path, parts.query, ""))
+
+
+def _page_for_url(
+    pages: Sequence[Mapping[str, object]], url: str
+) -> Mapping[str, object] | None:
+    """The page already selected for a URL: an active one first, else failed."""
+    key = _url_key(url)
+    active: Mapping[str, object] | None = None
+    failed: Mapping[str, object] | None = None
+    for page in pages:
+        if _url_key(str(page.get("url") or "")) != key:
+            continue
+        status = str(page.get("status") or "")
+        if status in ACTIVE_PAGE_STATUSES:
+            active = page
+        elif status == "failed":
+            failed = page
+    return active if active is not None else failed
 
 
 def canonical_wiki_file(value: str) -> str:

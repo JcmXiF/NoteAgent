@@ -30,6 +30,7 @@ from noteagent.pipeline.captures import CaptureInbox
 from noteagent.project.layout import ProjectLayout
 from noteagent.writing.publish import publish_page
 from noteagent.writing.state import (
+    ACTIVE_PAGE_STATUSES,
     WRITING_ID,
     WritingState,
     WritingStateStore,
@@ -498,20 +499,38 @@ def select_page_tool(
             raise ValueError(f"the hit has no URL: {hit_id}")
         title = str(hit.get("title") or url)
 
-        existing = next(
-            (
-                page
-                for page in state.selected_pages
-                if str(page.get("url")) == url
-                and str(page.get("status") or "")
-                in {"fetching", "ready"}
-            ),
-            None,
-        )
-        if existing is not None and (
-            not refresh
-            or str(existing.get("status") or "") == "fetching"
-        ):
+        def choose(
+            existing: Mapping[str, object] | None,
+        ) -> Mapping[str, object] | None:
+            if existing is not None:
+                status = str(existing.get("status") or "")
+                if status in ACTIVE_PAGE_STATUSES and (
+                    not refresh or status == "fetching"
+                ):
+                    return None
+            page_id = (
+                str(existing.get("id") or "")
+                if existing is not None
+                else minted.new_id("page")
+            )
+            base_version = (
+                row_version(existing) if existing is not None else 0
+            )
+            return _page_row(
+                page_id=page_id,
+                hit_id=hit_id,
+                url=url,
+                title=title,
+                status="fetching",
+                block_count=0,
+                version=base_version + 1,
+            )
+
+        _state, page, wrote = store.select_page_row(url, choose)
+        if not wrote:
+            existing = page
+            if existing is None:  # pragma: no cover - a build always writes
+                raise ValueError(f"no page for {url}")
             return ToolResult(
                 content=json.dumps(
                     {
@@ -525,38 +544,9 @@ def select_page_tool(
                 ),
                 meta={"title": title, "url": url},
             )
-
-        failed = next(
-            (
-                page
-                for page in state.selected_pages
-                if str(page.get("url")) == url
-                and str(page.get("status") or "") == "failed"
-            ),
-            None,
-        )
-        previous = failed if failed is not None else existing
-        page_id = (
-            str(previous.get("id") or "")
-            if previous is not None
-            else minted.new_id("page")
-        )
-        base_version = (
-            row_version(previous) if previous is not None else 0
-        )
-        fetching = _page_row(
-            page_id=page_id,
-            hit_id=hit_id,
-            url=url,
-            title=title,
-            status="fetching",
-            block_count=0,
-            version=base_version + 1,
-        )
-        if previous is not None:
-            store.update_selected_page(page_id, fetching)
-        else:
-            store.append_selected_page(fetching)
+        page_id = str(page["id"])
+        base_version = row_version(page) - 1
+        fetching = page
 
         def fail(
             message: str,

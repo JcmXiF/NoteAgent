@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -64,7 +67,7 @@ class WritingSelectPageTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.layout = init_project(Path(self._tmp.name) / "demo")
 
-    def tools(self, fetch=lambda _url: _capture()):
+    def tools(self, fetch=lambda _url: _capture(), cards=_cards):
         with patch(
             "noteagent.api.session_access.rag_backend", return_value=None
         ):
@@ -72,7 +75,7 @@ class WritingSelectPageTests(unittest.TestCase):
                 AppDeps(
                     clock=FixedClock(),
                     ids=SequentialIds(),
-                    web_search=_cards,
+                    web_search=cards,
                     web_fetch=fetch,
                 ),
                 self.layout,
@@ -86,6 +89,15 @@ class WritingSelectPageTests(unittest.TestCase):
         )
         state = WritingStateStore(self.layout).load()
         return str(state.searches[0]["hits"][0]["id"])
+
+    def latest_hit(self, tools) -> str:
+        tools.dispatch(
+            "web_search",
+            json.dumps({"query": "信息熵"}),
+            ToolContext("s1"),
+        )
+        state = WritingStateStore(self.layout).load()
+        return str(state.searches[-1]["hits"][0]["id"])
 
     def select(self, tools, hit_id: str):
         return tools.dispatch(
@@ -152,6 +164,134 @@ class WritingSelectPageTests(unittest.TestCase):
         self.assertEqual(payload["status"], "already_selected")
         self.assertEqual(payload["pageId"], first["pageId"])
         self.assertEqual(len(WritingStateStore(self.layout).load().selected_pages), 1)
+
+    def test_two_hits_with_the_same_url_share_one_page(self) -> None:
+        tools = self.tools()
+        first_hit = self.hit(tools)
+        first = json.loads(self.select(tools, first_hit).content)
+        second_hit = self.latest_hit(tools)
+
+        second = self.select(tools, second_hit)
+
+        payload = json.loads(second.content)
+        self.assertEqual(payload["status"], "already_selected")
+        self.assertEqual(payload["pageId"], first["pageId"])
+        self.assertEqual(
+            len(WritingStateStore(self.layout).load().selected_pages), 1
+        )
+
+    def test_a_cosmetic_url_difference_is_the_same_page(self) -> None:
+        urls = iter(
+            [
+                "https://example.com/entropy",
+                "https://example.com/entropy/",
+                "https://example.com/entropy#definition",
+                "https://EXAMPLE.com/entropy",
+            ]
+        )
+
+        def cards(_query: str) -> list[CandidateCard]:
+            return [
+                CandidateCard(
+                    title="信息熵 - 维基百科",
+                    url=next(urls),
+                    site="example.com",
+                    snippet="熵是信息的平均量。",
+                    why="",
+                    via="test",
+                )
+            ]
+
+        tools = self.tools(cards=cards)
+        first_hit = self.hit(tools)
+        first = json.loads(self.select(tools, first_hit).content)
+
+        for _variant in range(3):
+            second_hit = self.latest_hit(tools)
+            payload = json.loads(self.select(tools, second_hit).content)
+            self.assertEqual(payload["status"], "already_selected")
+            self.assertEqual(payload["pageId"], first["pageId"])
+
+        self.assertEqual(
+            len(WritingStateStore(self.layout).load().selected_pages), 1
+        )
+
+    def test_two_store_writers_of_one_url_keep_one_row(self) -> None:
+        from noteagent.writing.tools import _page_row
+
+        store = WritingStateStore(self.layout, clock=FixedClock())
+        barrier = threading.Barrier(2)
+        outcomes: list[tuple[object, bool]] = []
+        errors: list[BaseException] = []
+
+        def build(existing):
+            if existing is not None:
+                return None
+            barrier.wait(2)
+            return _page_row(
+                page_id=f"page-{threading.get_ident()}",
+                hit_id="hit-1",
+                url="https://example.com/entropy",
+                title="信息熵",
+                status="fetching",
+                block_count=0,
+                version=1,
+            )
+
+        def run() -> None:
+            try:
+                _state, page, wrote = store.select_page_row(
+                    "https://example.com/entropy", build
+                )
+                outcomes.append((page, wrote))
+            except BaseException as err:  # noqa: BLE001 - reported below
+                errors.append(err)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(3)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            sorted(wrote for _page, wrote in outcomes), [False, True]
+        )
+        self.assertEqual(
+            len(WritingStateStore(self.layout).load().selected_pages), 1
+        )
+
+    def test_concurrent_selections_of_one_url_write_one_page(self) -> None:
+        calls: list[str] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def fetch(url: str) -> Capture:
+            calls.append(url)
+            started.set()
+            release.wait(2)
+            return _capture()
+
+        tools = self.tools(fetch)
+        first_hit = self.hit(tools)
+        second_hit = self.latest_hit(tools)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.select, tools, first_hit)
+            self.assertTrue(started.wait(2))
+            second = pool.submit(self.select, tools, second_hit)
+            time.sleep(0.1)
+            release.set()
+            results = [first.result(), second.result()]
+
+        statuses = sorted(
+            json.loads(result.content)["status"] for result in results
+        )
+        self.assertEqual(statuses, ["already_selected", "ok"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            len(WritingStateStore(self.layout).load().selected_pages), 1
+        )
 
     def test_a_failed_fetch_is_recorded_and_raised(self) -> None:
         def failing(_url: str):
