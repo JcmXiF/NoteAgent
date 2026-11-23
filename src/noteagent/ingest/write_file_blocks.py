@@ -203,6 +203,7 @@ def write_wiki_page(
     run_logger: RunLogger | None = None,
     source_identity: str = "",
     display_path: str = "",
+    reserved_effect_id: str = "",
 ) -> PageWriteResult:
     """Write one wiki page from final Markdown, with its history and effect.
 
@@ -218,7 +219,9 @@ def write_wiki_page(
     effect journal — the old write path's behaviour.
 
     ``display_path`` is the caller's name for the page in warnings; it defaults
-    to ``relative_path``.
+    to ``relative_path``. ``reserved_effect_id`` names the effect this write
+    appends when it changes the page, so a retried write can find the effect
+    it already committed; an unchanged write has no effect to name.
     """
 
     logger = run_logger or RunLogger.disabled()
@@ -237,6 +240,7 @@ def write_wiki_page(
     warnings: list[WriteWarning] = []
     replaced = ""
     after_ref = ""
+    reserved = reserved_effect_id
     effect_id = ""
     page_written = False
     try:
@@ -251,7 +255,7 @@ def write_wiki_page(
         )
         after_ref = blob_digest(text)
         effect_id = (
-            journal.new_id()
+            (reserved or journal.new_id())
             if journal is not None and replaced != after_ref
             else ""
         )

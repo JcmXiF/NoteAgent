@@ -8,6 +8,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
 from noteagent.agent.runtime import RunCancelled
 from noteagent.agent.tools import ToolContext
@@ -292,6 +293,43 @@ class WritingPublishTests(unittest.TestCase):
             )
 
         self.assertFalse(self.wiki_path().exists())
+
+    def test_a_retry_after_a_failed_mark_only_marks(self) -> None:
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = self.prepared(tools)
+        original = WritingStateStore.mark_draft_written
+        calls = {"count": 0}
+
+        def flaky(store, wiki_file, version, effect_ids, written_at):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise OSError("the mark failed")
+            return original(
+                store, wiki_file, version, effect_ids, written_at
+            )
+
+        with patch.object(
+            WritingStateStore, "mark_draft_written", flaky
+        ):
+            first = self.write(tools, draft_version)
+        self.assertTrue(first.meta.get("error"))
+
+        second = self.write(tools, draft_version)
+
+        self.assertFalse(second.meta.get("error"), second.content)
+        payload = json.loads(second.content)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(len(payload["effectIds"]), 1)
+        effects = EffectJournal(self.layout).query(
+            kind=WIKI_PAGE_WRITE
+        )
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0].ident, payload["effectIds"][0])
+        self.assertEqual(
+            len(page_snapshots(self.layout, WIKI_FILE)), 1
+        )
+        page = WritingStateStore(self.layout).load().draft["pages"][0]
+        self.assertEqual(page["status"], "written")
 
     def test_a_cancelled_write_leaves_no_page(self) -> None:
         tools = writing_tools(self.layout)

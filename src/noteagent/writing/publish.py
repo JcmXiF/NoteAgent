@@ -8,7 +8,8 @@ history). A draft version that is already published is not written twice.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,11 @@ from threading import Event
 from noteagent.acquire.write_raw import resolve_raw_write_path
 from noteagent.agent.clock import Clock, SystemClock, iso_timestamp
 from noteagent.agent.tools import check_cancelled
+from noteagent.effects.journal import (
+    COMMITTED,
+    WIKI_PAGE_WRITE,
+    EffectJournal,
+)
 from noteagent.ingest.frontmatter import (
     format_inline_list,
     format_scalar,
@@ -53,6 +59,14 @@ class PublishResult:
     warnings: tuple[dict[str, str], ...] = ()
 
 
+def _publish_effect_id(target_file: str, draft_version: int) -> str:
+    """The one effect id a draft version's publish can leave behind."""
+    digest = hashlib.sha256(
+        f"publish:{target_file}:{draft_version}".encode("utf-8")
+    ).hexdigest()
+    return f"eff-publish-{digest[:24]}"
+
+
 def publish_page(
     layout: ProjectLayout,
     wiki_file: str,
@@ -78,6 +92,24 @@ def publish_page(
             effect_ids=tuple(
                 str(item) for item in page.get("effectIds") or []
             ),
+        )
+
+    journal = EffectJournal(layout)
+    effect_id = _publish_effect_id(target_file, draft_version)
+    prior = journal.latest(
+        ident=effect_id,
+        kind=WIKI_PAGE_WRITE,
+        status=COMMITTED,
+    )
+    if prior is not None:
+        # The page write landed before a crash; only the draft mark was lost.
+        return _finish_publish(
+            store,
+            raw_file,
+            draft_version,
+            (effect_id,),
+            prior.at,
+            (),
         )
 
     sections = draft_sections(page)
@@ -202,8 +234,10 @@ def publish_page(
             session_id=session_id,
             actor="agent",
         ),
+        journal=journal,
         run_logger=RunLogger.for_layout(layout),
         source_identity=target_file,
+        reserved_effect_id=effect_id,
     )
     hard = [
         warning
@@ -213,16 +247,34 @@ def publish_page(
     if hard:
         raise ValueError(hard[0].message)
     effect_ids = (result.effect_id,) if result.effect_id else ()
-    written_at = iso_timestamp(moment)
+    return _finish_publish(
+        store,
+        raw_file,
+        draft_version,
+        effect_ids,
+        iso_timestamp(moment),
+        warnings,
+    )
+
+
+
+def _finish_publish(
+    store: WritingStateStore,
+    raw_file: str,
+    draft_version: int,
+    effect_ids: tuple[str, ...],
+    written_at: str,
+    warnings: Sequence[Mapping[str, str]],
+) -> PublishResult:
+    """Mark the draft version published and answer with what it left."""
     store.mark_draft_written(
         raw_file, draft_version, effect_ids, written_at
     )
     return PublishResult(
         written_at=written_at,
-        effect_ids=effect_ids,
+        effect_ids=tuple(effect_ids),
         warnings=tuple(warnings),
     )
-
 
 
 def _new_page(title: str, sources: list[str]) -> str:
