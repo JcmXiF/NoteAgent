@@ -173,6 +173,107 @@ class WikiToolTests(unittest.TestCase):
         self.assertTrue(result.meta["truncated"])
         self.assertEqual(result.diagnostics[0].code, "truncated")
 
+    def test_a_page_longer_than_the_old_budget_is_read_whole_by_default(
+        self,
+    ) -> None:
+        body = "长" * 12_000
+        _write(self.layout, "wiki/long.md", _page("Long", body))
+
+        result = self.dispatch("wiki_read", '{"slug": "long"}')
+
+        self.assertEqual(result.meta["totalChars"], 12_000)
+        self.assertNotIn("truncated", result.meta)
+        self.assertNotIn("nextOffset", result.meta)
+        self.assertEqual(result.content.count("长"), 12_000)
+
+    def test_a_long_page_can_be_read_in_slices_to_the_tail(self) -> None:
+        body = "甲" * 1_000 + "尾部标记"
+        _write(self.layout, "wiki/long.md", _page("Long", body))
+        registry = wiki_tools(
+            self.layout, limits=WikiToolLimits(max_page_chars=300)
+        )
+        offset = 0
+        seen = 0
+        tail_seen = False
+        for _ in range(20):
+            result = registry.dispatch(
+                "wiki_read",
+                json.dumps({"slug": "long", "offset": offset}),
+                ToolContext("s1"),
+            )
+            self.assertLessEqual(len(result.content), 300)
+            self.assertEqual(result.meta["totalChars"], 1_004)
+            self.assertEqual(result.meta["offset"], offset)
+            seen += result.content.count("甲")
+            tail_seen = tail_seen or "尾部标记" in result.content
+            if not result.meta.get("truncated"):
+                break
+            self.assertEqual(
+                result.meta["nextOffset"],
+                offset + result.content.count("甲"),
+            )
+            offset = result.meta["nextOffset"]
+        else:
+            self.fail("the page never finished")
+        self.assertTrue(tail_seen)
+        self.assertEqual(seen, 1_000)
+
+    def test_offset_and_limit_read_the_tail_in_one_call(self) -> None:
+        body = "0123456789" * 100
+        _write(self.layout, "wiki/digits.md", _page("Digits", body))
+
+        result = self.dispatch(
+            "wiki_read", '{"slug": "digits", "offset": 995, "limit": 100}'
+        )
+
+        self.assertIn("56789", result.content)
+        self.assertEqual(result.meta["totalChars"], 1_000)
+        self.assertEqual(result.meta["offset"], 995)
+        self.assertNotIn("truncated", result.meta)
+
+    def test_an_offset_past_the_end_says_where_the_page_ends(self) -> None:
+        body = "短页" * 100
+        _write(self.layout, "wiki/short.md", _page("Short", body))
+
+        result = self.dispatch(
+            "wiki_read", '{"slug": "short", "offset": 100000}'
+        )
+
+        self.assertEqual(result.meta["totalChars"], 200)
+        self.assertIn("no text at offset 100000", result.content)
+        self.assertIn("200 characters", result.content)
+        self.assertEqual(
+            result.diagnostics[0].code, "offset_past_end"
+        )
+        self.assertNotIn("truncated", result.meta)
+
+    def test_a_negative_offset_is_refused_by_the_schema(self) -> None:
+        result = self.dispatch(
+            "wiki_read", '{"slug": "entropy", "offset": -1}'
+        )
+
+        self.assertTrue(result.meta["error"])
+        self.assertIn("invalid arguments", result.content)
+
+    def test_a_zero_limit_is_refused_by_the_schema(self) -> None:
+        result = self.dispatch(
+            "wiki_read", '{"slug": "entropy", "limit": 0}'
+        )
+
+        self.assertTrue(result.meta["error"])
+        self.assertIn("invalid arguments", result.content)
+
+    def test_a_tiny_limit_still_advances_the_offset(self) -> None:
+        body = "0123456789" * 100
+        _write(self.layout, "wiki/digits.md", _page("Digits", body))
+
+        result = self.dispatch(
+            "wiki_read", '{"slug": "digits", "limit": 1}'
+        )
+
+        self.assertTrue(result.meta["truncated"])
+        self.assertGreater(result.meta["nextOffset"], 0)
+
     def test_search_finds_pages_by_slug_title_and_body(self) -> None:
         by_body = self.dispatch("search", '{"query": "不确定性"}')
 

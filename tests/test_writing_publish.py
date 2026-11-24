@@ -19,11 +19,14 @@ from noteagent.effects.journal import (
 )
 from noteagent.ingest.frontmatter import parse_inline_list, parse_page
 from noteagent.ingest.page_history import page_snapshots
+from noteagent.ingest.update_index import rebuild_wiki_index
 from noteagent.ingest.source_citations import (
     list_source_citations,
     parse_clip_sections,
 )
+from noteagent.project.doctor import DoctorFinding, DoctorReport
 from noteagent.project.init import init_project
+from noteagent.writing.maintenance import DOCTOR_FINDINGS_LIMIT
 from noteagent.writing.state import WritingStateStore, draft_pages
 from writing_fixtures import (
     prepare_draft,
@@ -381,6 +384,313 @@ class WritingPublishTests(unittest.TestCase):
         payload = json.loads(result.content)
         self.assertEqual(payload["wikiFile"], WIKI_FILE)
         self.assertTrue(self.wiki_path().is_file())
+
+
+class WritingMaintenanceTests(unittest.TestCase):
+    """A publish leaves index, log and doctor in step with the page."""
+
+    BODY = (
+        "熵是信息的平均量，衡量一个随机变量分布的平均不确定性；"
+        "交叉熵衡量两个分布的差异，KL 散度是它减去熵。"
+    )
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.layout = init_project(Path(self._tmp.name) / "demo")
+
+    def prepared(self, wiki_file: str = WIKI_FILE, body: str = ""):
+        tools = writing_tools(self.layout)
+        _page_id, _frame_id, draft_version = prepare_draft(
+            tools,
+            self.layout,
+            wiki_file=wiki_file,
+            body=body or self.BODY,
+        )
+        return tools, draft_version
+
+    def publish(self, tools, draft_version: int, wiki_file: str = WIKI_FILE):
+        return write_draft(
+            tools,
+            wiki_file=wiki_file,
+            draft_version=draft_version,
+        )
+
+    def test_a_new_page_appears_in_the_index(self) -> None:
+        tools, draft_version = self.prepared()
+
+        self.publish(tools, draft_version)
+
+        index = self.layout.wiki_index.read_text(encoding="utf-8")
+        self.assertIn("[[concepts/信息熵]]", index)
+
+    def test_a_publish_appends_one_write_log_entry(self) -> None:
+        tools, draft_version = self.prepared()
+
+        self.publish(tools, draft_version)
+
+        log = self.layout.wiki_log.read_text(encoding="utf-8")
+        self.assertIn("] write | 信息熵", log)
+        self.assertIn(
+            "- `wiki/concepts/信息熵.md` (draft 1)", log
+        )
+        self.assertEqual(log.count("] write |"), 1)
+
+    def test_publishing_the_same_version_twice_appends_one_log_entry(
+        self,
+    ) -> None:
+        tools, draft_version = self.prepared()
+        self.publish(tools, draft_version)
+        first = self.layout.wiki_log.read_text(encoding="utf-8")
+
+        self.publish(tools, draft_version)
+
+        self.assertEqual(
+            self.layout.wiki_log.read_text(encoding="utf-8"), first
+        )
+
+    def test_the_structure_doctor_runs_and_its_findings_are_reported(
+        self,
+    ) -> None:
+        tools, draft_version = self.prepared(
+            body=self.BODY + " 参见 [[不存在的页]]。"
+        )
+
+        result = self.publish(tools, draft_version)
+
+        payload = json.loads(result.content)
+        self.assertEqual(payload["status"], "ok")
+        codes = [item.get("code") for item in payload["warnings"]]
+        self.assertIn("link.broken", codes)
+
+    def test_existing_index_and_log_content_is_kept(self) -> None:
+        self.layout.wiki_index.parent.mkdir(parents=True, exist_ok=True)
+        self.layout.wiki_index.write_text(
+            "# Custom Index\n\n## Notes\n\n- [[旧页]] — 旧页\n",
+            encoding="utf-8",
+        )
+        self.layout.wiki_log.write_text(
+            "## [2020-01-01] ingest | 旧来源\n\n- 旧记录\n",
+            encoding="utf-8",
+        )
+        tools, draft_version = self.prepared()
+
+        self.publish(tools, draft_version)
+
+        index = self.layout.wiki_index.read_text(encoding="utf-8")
+        self.assertIn("[[旧页]]", index)
+        self.assertIn("[[concepts/信息熵]]", index)
+        log = self.layout.wiki_log.read_text(encoding="utf-8")
+        self.assertIn("旧记录", log)
+        self.assertIn("] write |", log)
+
+    def test_a_source_page_is_listed_under_sources(self) -> None:
+        wiki_file = "wiki/sources/信息熵.md"
+        tools, draft_version = self.prepared(wiki_file=wiki_file)
+
+        self.publish(tools, draft_version, wiki_file=wiki_file)
+
+        index = self.layout.wiki_index.read_text(encoding="utf-8")
+        sources_start = index.index("## Sources")
+        notes_start = index.index("## Notes")
+        self.assertIn(
+            "[[sources/信息熵]]",
+            index[sources_start:notes_start],
+        )
+
+    def test_a_retry_repairs_the_index_after_a_failed_maintenance(
+        self,
+    ) -> None:
+        tools, draft_version = self.prepared()
+        with patch(
+            "noteagent.writing.maintenance.update_wiki_index",
+            side_effect=OSError("disk full"),
+        ):
+            first = self.publish(tools, draft_version)
+
+        first_payload = json.loads(first.content)
+        self.assertIn(
+            "index_failed",
+            [item.get("code") for item in first_payload["warnings"]],
+        )
+        self.assertNotIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+
+        second = self.publish(tools, draft_version)
+
+        second_payload = json.loads(second.content)
+        self.assertEqual(
+            second_payload["effectIds"], first_payload["effectIds"]
+        )
+        self.assertEqual(
+            second_payload["writtenAt"], first_payload["writtenAt"]
+        )
+        self.assertNotIn(
+            "index_failed",
+            [item.get("code") for item in second_payload["warnings"]],
+        )
+        self.assertIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+        log = self.layout.wiki_log.read_text(encoding="utf-8")
+        self.assertEqual(log.count("(draft 1)"), 1)
+
+    def test_a_retry_after_a_lost_mark_finishes_the_side_files(self) -> None:
+        tools, draft_version = self.prepared()
+        original = WritingStateStore.mark_draft_written
+        calls = {"count": 0}
+
+        def flaky(store, wiki_file, version, effect_ids, written_at):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise OSError("the mark failed")
+            return original(
+                store, wiki_file, version, effect_ids, written_at
+            )
+
+        with patch.object(
+            WritingStateStore, "mark_draft_written", flaky
+        ):
+            first = self.publish(tools, draft_version)
+        self.assertTrue(first.meta.get("error"))
+        self.assertNotIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "] write |",
+            self.layout.wiki_log.read_text(encoding="utf-8"),
+        )
+
+        second = self.publish(tools, draft_version)
+
+        self.assertFalse(second.meta.get("error"), second.content)
+        self.assertIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+        log = self.layout.wiki_log.read_text(encoding="utf-8")
+        self.assertEqual(log.count("(draft 1)"), 1)
+
+    def test_a_failed_index_update_is_a_warning_not_a_rollback(
+        self,
+    ) -> None:
+        tools, draft_version = self.prepared()
+
+        with patch(
+            "noteagent.writing.maintenance.update_wiki_index",
+            side_effect=OSError("disk full"),
+        ):
+            result = self.publish(tools, draft_version)
+
+        payload = json.loads(result.content)
+        self.assertEqual(payload["status"], "ok")
+        codes = [item.get("code") for item in payload["warnings"]]
+        self.assertIn("index_failed", codes)
+        self.assertTrue(
+            self.layout.root.joinpath(*WIKI_FILE.split("/")).is_file()
+        )
+        self.assertEqual(
+            len(
+                EffectJournal(self.layout).query(
+                    kind=WIKI_PAGE_WRITE
+                )
+            ),
+            1,
+        )
+        page = draft_pages(
+            WritingStateStore(self.layout).load().draft
+        )[0]
+        self.assertEqual(page["status"], "written")
+        # The log step does not depend on the index step.
+        self.assertIn(
+            "(draft 1)",
+            self.layout.wiki_log.read_text(encoding="utf-8"),
+        )
+
+        rebuild_wiki_index(self.layout)
+
+        self.assertIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+
+    def test_a_failed_log_append_is_a_warning_not_a_rollback(
+        self,
+    ) -> None:
+        tools, draft_version = self.prepared()
+
+        with patch(
+            "noteagent.writing.maintenance._append_log",
+            side_effect=OSError("log locked"),
+        ):
+            result = self.publish(tools, draft_version)
+
+        payload = json.loads(result.content)
+        self.assertEqual(payload["status"], "ok")
+        codes = [item.get("code") for item in payload["warnings"]]
+        self.assertIn("log_failed", codes)
+        self.assertTrue(
+            self.layout.root.joinpath(*WIKI_FILE.split("/")).is_file()
+        )
+        self.assertIn(
+            "[[concepts/信息熵]]",
+            self.layout.wiki_index.read_text(encoding="utf-8"),
+        )
+
+    def test_a_failed_doctor_is_a_warning_not_a_rollback(self) -> None:
+        tools, draft_version = self.prepared()
+
+        with patch(
+            "noteagent.writing.maintenance.doctor_after_write",
+            side_effect=RuntimeError("doctor broke"),
+        ):
+            result = self.publish(tools, draft_version)
+
+        payload = json.loads(result.content)
+        self.assertEqual(payload["status"], "ok")
+        codes = [item.get("code") for item in payload["warnings"]]
+        self.assertIn("doctor_failed", codes)
+        self.assertTrue(
+            self.layout.root.joinpath(*WIKI_FILE.split("/")).is_file()
+        )
+        self.assertIn(
+            "] write |",
+            self.layout.wiki_log.read_text(encoding="utf-8"),
+        )
+
+    def test_doctor_findings_are_capped_so_the_answer_stays_parseable(
+        self,
+    ) -> None:
+        findings = tuple(
+            DoctorFinding(
+                "warning", f"test.{index}", f"finding {index}"
+            )
+            for index in range(DOCTOR_FINDINGS_LIMIT + 5)
+        )
+        report = DoctorReport(
+            findings=findings, content_pages=1, index_links=1
+        )
+        tools, draft_version = self.prepared()
+
+        with patch(
+            "noteagent.writing.maintenance.doctor_after_write",
+            return_value=report,
+        ):
+            result = self.publish(tools, draft_version)
+
+        payload = json.loads(result.content)
+        listed = [
+            item
+            for item in payload["warnings"]
+            if str(item.get("code", "")).startswith("test.")
+        ]
+        self.assertEqual(len(listed), DOCTOR_FINDINGS_LIMIT)
+        codes = [item.get("code") for item in payload["warnings"]]
+        self.assertIn("doctor_findings_omitted", codes)
 
 
 if __name__ == "__main__":

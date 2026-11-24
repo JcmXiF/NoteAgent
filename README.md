@@ -209,8 +209,9 @@ opening one — `unittest`, the behaviour evals, the Markdown checker,
 [`docs/development.md`](docs/development.md); CI runs the mechanical checks, while the behaviour
 and quality evals are local-only. The behaviour evals run with `python -m evals` from the
 repository root; every case uses a temporary project and a scripted model, so no key or network is
-needed. The quality eval is local-only and calls a real model: `python -m evals.quality.v3.run`
-(CI refuses).
+needed. The V4 quality eval is local-only: `python -m evals.quality.v4.run` runs the free local
+atoms, and `--live` adds the real web smoke; `python -m evals.quality.v4.quality_run` calibrates
+the judge, and `--live A,B,C,D,E` runs the live cases. CI refuses both quality commands.
 
 - One concern per change, and do not reformat code you are not changing.
 - Logic that can be reasoned about without a browser gets a test next to it.

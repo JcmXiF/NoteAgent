@@ -1,0 +1,6 @@
+D-defective:
+  correctness: fail
+  completeness: fail
+  source_legality: fail
+  task_compliance: pass
+  honesty: fail

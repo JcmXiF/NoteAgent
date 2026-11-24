@@ -1,0 +1,12 @@
+E-good:
+  correctness: pass
+  completeness: pass
+  source_legality: pass
+  task_compliance: pass
+  honesty: pass
+E-bad:
+  correctness: fail
+  completeness: fail
+  source_legality: fail
+  task_compliance: pass
+  honesty: fail

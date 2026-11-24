@@ -1027,8 +1027,10 @@ def write_wiki_tool(
         timeout_s=30.0,
         output_limits=OutputLimits(
             max_items=1,
-            max_chars_per_item=4_000,
-            max_chars_total=4_000,
+            # The answer now carries the doctor's findings with the page:
+            # enough room that the JSON stays whole, not just the fields.
+            max_chars_per_item=8_000,
+            max_chars_total=8_000,
         ),
         handler=write_wiki,
         argument_hint="wikiFile",

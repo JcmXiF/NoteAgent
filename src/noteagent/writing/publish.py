@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from threading import Event
@@ -40,6 +40,10 @@ from noteagent.ingest.wiki_paths import resolve_wiki_write_path
 from noteagent.io.atomic import write_bytes_atomic
 from noteagent.project.layout import ProjectLayout
 from noteagent.util.run_log import RunLogger
+from noteagent.writing.maintenance import (
+    PublishedPage,
+    maintain_published_page,
+)
 from noteagent.writing.state import (
     SECTION_STALE_REASONS,
     WritingStateStore,
@@ -55,7 +59,9 @@ class PublishResult:
 
     written_at: str
     effect_ids: tuple[str, ...]
-    #: Sections whose pinned source drifted but still had their blocks.
+    #: What the publish carried past: a section whose pinned source drifted,
+    #: and the derived files the maintenance step could not write or found
+    #: dirty. Each entry names its ``code`` and ``message``.
     warnings: tuple[dict[str, str], ...] = ()
 
 
@@ -86,11 +92,22 @@ def publish_page(
     # older spelling, so a draft composed before canonicalization still goes out.
     target_file = canonical_wiki_file(raw_file)
     state, page = store.checked_draft_page(raw_file, draft_version)
+    title = str(page.get("title") or Path(target_file).stem)
     if str(page.get("status") or "") == "written":
-        return PublishResult(
-            written_at=str(page.get("writtenAt") or ""),
-            effect_ids=tuple(
-                str(item) for item in page.get("effectIds") or []
+        return _with_maintenance(
+            layout,
+            PublishedPage(
+                target_file,
+                title,
+                draft_version,
+                _published_content(layout, target_file),
+            ),
+            moment,
+            PublishResult(
+                written_at=str(page.get("writtenAt") or ""),
+                effect_ids=tuple(
+                    str(item) for item in page.get("effectIds") or []
+                ),
             ),
         )
 
@@ -103,13 +120,24 @@ def publish_page(
     )
     if prior is not None:
         # The page write landed before a crash; only the draft mark was lost.
-        return _finish_publish(
-            store,
-            raw_file,
-            draft_version,
-            (effect_id,),
-            prior.at,
-            (),
+        # The side files may be missing too, so finish the whole publish.
+        return _with_maintenance(
+            layout,
+            PublishedPage(
+                target_file,
+                title,
+                draft_version,
+                _published_content(layout, target_file),
+            ),
+            moment,
+            _finish_publish(
+                store,
+                raw_file,
+                draft_version,
+                (effect_id,),
+                prior.at,
+                (),
+            ),
         )
 
     sections = draft_sections(page)
@@ -192,7 +220,6 @@ def publish_page(
             )
         rendered.append(f"{marker}## {heading}\n\n{body}\n")
 
-    title = str(page.get("title") or Path(target_file).stem)
     body = f"# {title}\n\n" + "\n".join(rendered)
     target = resolve_wiki_write_path(layout, target_file)
     if target.is_file():
@@ -247,7 +274,7 @@ def publish_page(
     if hard:
         raise ValueError(hard[0].message)
     effect_ids = (result.effect_id,) if result.effect_id else ()
-    return _finish_publish(
+    finished = _finish_publish(
         store,
         raw_file,
         draft_version,
@@ -255,7 +282,42 @@ def publish_page(
         iso_timestamp(moment),
         warnings,
     )
+    return _with_maintenance(
+        layout,
+        PublishedPage(target_file, title, draft_version, content),
+        moment,
+        finished,
+    )
 
+
+def _published_content(
+    layout: ProjectLayout, target_file: str
+) -> str:
+    """The page as it stands on disk, for a publish that has to finish twice."""
+    try:
+        return resolve_wiki_write_path(layout, target_file).read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return ""
+
+
+def _with_maintenance(
+    layout: ProjectLayout,
+    page: PublishedPage,
+    moment: Clock,
+    result: PublishResult,
+) -> PublishResult:
+    """Bring the wiki's derived files after the page, without failing it.
+
+    The page, its history and its effect are already committed: a derived file
+    that cannot be written is a warning the next rebuild repairs, never a
+    rollback.
+    """
+    warnings = maintain_published_page(layout, page, moment=moment)
+    if not warnings:
+        return result
+    return replace(result, warnings=tuple(result.warnings) + warnings)
 
 
 def _finish_publish(
