@@ -41,9 +41,13 @@ build/
 /docs/*
 # The agent conventions belong to the repository; the design notes do not.
 !/docs/agents/
+# README-facing docs are public; the design notes stay local.
+!/docs/public/
 .mcp.json
 .claude/settings.local.json
 .claude/worktrees/
 # Local agent state and the local issue tracker stay on this machine.
 .scratch/
 .agentsroom/
+# Backups of the local-only docs and issue tracker; never part of a checkout.
+/.backups/

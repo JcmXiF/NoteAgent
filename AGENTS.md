@@ -14,7 +14,7 @@ Single-context: `docs/GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/a
 
 ### Development
 
-One-command checks: `node scripts/check.mjs`; details in `docs/development.md`.
+One-command checks: `node scripts/check.mjs`; details in `docs/public/development.md`.
 Agent kernel: `src/noteagent/agent/`; harness map: `docs/agent-harness.md`; writing tools:
 `src/noteagent/writing/tools.py`; the assembled tool registry:
 `src/noteagent/api/session_access.py`. `docs/tool-contract.md` is the historical

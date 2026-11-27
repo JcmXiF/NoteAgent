@@ -4,6 +4,23 @@ Every release has one section. The release workflow copies the section matching
 the app version into the GitHub Release body, so a version without a section
 cannot be published.
 
+## v0.2.0
+
+- Writing is now an agent loop over one project-level writing state: the agent
+  searches, selects pages, frames passages, composes sections and publishes with
+  `write_wiki`; the old plan/confirm/compile pipeline is retired.
+- A publish now maintains `wiki/index.md` and `wiki/log.md`, and `wiki_read` can
+  page through long pages instead of stopping at 8,000 characters.
+- Retrieval is optional and configured in the app: a local hybrid index
+  (BM25 + vectors + RRF) behind `search`, with a settings screen that shows and
+  rebuilds the index.
+- Interrupted agent runs can be resumed or abandoned; page writes are recorded
+  in an effect journal with page history and restore.
+- Skills are discovered from project, user and bundled roots and loaded on
+  demand; the product prompt is versioned and migrated for older sessions.
+- The V4 quality eval replaces V3 and stays local-only; deterministic behaviour
+  evals still run with `python -m evals`.
+
 ## v0.1.2
 
 - The chat loop is replaced by a general agent harness: each session runs a

@@ -12,7 +12,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-NOTE = Path(__file__).resolve().parent.parent / "docs" / "provenance.md"
+NOTE = Path(__file__).resolve().parent.parent / "docs" / "public" / "provenance.md"
 
 #: Concepts the audit keeps rather than retires, so each needs a sentence here.
 #: A new row is welcome; a missing one means a shared idea went unrecorded.
@@ -64,8 +64,8 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_the_note_exists_where_the_readme_points(self) -> None:
         self.assertTrue(NOTE.is_file())
-        readme = (NOTE.parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("docs/provenance.md", readme)
+        readme = (NOTE.parents[2] / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docs/public/provenance.md", readme)
 
     def test_every_kept_concept_has_a_difference_sentence(self) -> None:
         missing = [name for name in KEPT_CONCEPTS if name not in self.rows]
